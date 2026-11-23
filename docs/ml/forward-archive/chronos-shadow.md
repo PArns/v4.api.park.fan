@@ -5,7 +5,7 @@ Does the zero-shot foundation model that won parts of the offline benchmark
 The owner's switch rule needs (1) an offline win, (2) a live confirmation in this archive — ≥ 14
 days and ≥ 10 parks per lead — and (3) a visible effect on a user surface. This page is (2): the
 shadow capture, its inputs, scoring and switches. Nothing here is served unless
-`SERVE_CHRONOS_INTRADAY` is on ([chronos-serving.md](chronos-serving.md)).
+the constant `SERVE_CHRONOS_INTRADAY` is on ([chronos-serving.md](chronos-serving.md)).
 
 ## Model and variants
 
@@ -35,7 +35,7 @@ the bench and worth < 0.12 min.
 | `ko_min`, `kc_min` | minutes since the published opening / until the published closing: park-wide `OPERATING` rows of `schedule_entries`, earliest opening and latest closing per service day (future days as published at the origin) |
 | `in_win` (grid only) | 1 inside such a window, else 0 |
 | `tod` | park-local hour + minute / 60 (`parks.timezone`) |
-| `is_weekend`, `dow_sin`, `dow_cos` | park-local date, pandas `dayofweek` (0 = Monday, not Postgres' 0 = Sunday) |
+| `is_weekend`, `dow_sin`, `dow_cos` | park-local date, pandas `dayofweek` (0 = Monday, not Postgres' 0 = Sunday); `is_weekend` is the park country's weekend from `weekend_rules.py` (vendored byte-identical from ml-service, PAR-1379), so a Gulf park's differs from the bench's Saturday + Sunday |
 | `is_holiday_primary`, `is_school_holiday_primary`, `holiday_count_total`, `school_holiday_count_total`, `is_school_holiday_any` | `holidays` via `holiday_features.park_day_holiday_features` — ml-service's implementation, vendored byte-identical into nf-service (`tests/test_chronos_shadow.py` compares the files) |
 | `is_bridge_day` | derived from neighbouring days' `is_holiday_primary` (Mon before a Tue holiday, Fri after a Thu holiday) — the bench's definition |
 

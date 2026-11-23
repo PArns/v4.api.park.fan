@@ -15,12 +15,15 @@ its `docs/architecture/caching-strategy.md`.
 | `attraction:history:{attractionId}:…` | 5 min with today in range, else 24 h | Attraction wait-time history |
 | `calendar:month:v2:{parkId}:{YYYY-MM}:{includeHourly}` | 15 min current month, 30 min other months; warmed months 13 h, warmed current month 2 h | Only full months are stored; any range is sliced from months, and on a partial hit only the missing months are built. Warmup re-`expire`s them (`CALENDAR_WARMUP_MONTH_TTL`, `CALENDAR_WARMUP_CURRENT_MONTH_TTL`) |
 | `best-days:v2:{parkId}` | 13 h (`CALENDAR_WARMUP_MONTH_TTL`, the warmed months it is built from) | `/best-days` snapshot ([frontend contract](../frontend/best-days-endpoint.md)) |
-| `trip-regions:calendar:v2:{region}:{from}:{to}`, `trip-regions:plan:v3:{region}:{query}` | 1 h (`TRIP_REGION_RESPONSE_TTL`) | Whole keyed answers of the [trip regions](../frontend/trip-regions.md); the plan by its normalized query, so parameters in another order hit the same entry. The query includes the ticket catalog's version, so an edited ticket rule never serves an old plan |
+| `trip-regions:calendar:v3:{region}:{today}:{YYYY-MM}` | 1 h (`TRIP_REGION_RESPONSE_TTL`) | The [trip regions](../frontend/trip-regions.md#caching-and-cost)' calendar by month from the region's today; every window of `/calendar`, `/best-days`, `/plan`, `/plan/ideas` and `/when` is cut from the months it touches, and the months a read misses are built together from one read |
+| `trip-regions:plan:v4:{region}:{query}`, `trip-regions:best-days:v1:{region}:{today}:{from}:{to}:{limit}` | 1 h (`TRIP_REGION_RESPONSE_TTL`) | Whole keyed answers of the [trip regions](../frontend/trip-regions.md); the plan by its normalized query, so parameters in another order hit the same entry. The query includes the ticket catalog's version, so an edited ticket rule never serves an old plan. No key holds the client's release `v` |
 | `trip-regions:tickets:v1:{region}` | 1 h (`TRIP_TICKETS_TTL`), plus 30 s in each instance's memory | The ticket catalog as loaded from `ticket_products`, with its version (`TicketCatalogService`). An admin write evicts it and revalidates `trip-tickets:{region}`, again after `CDN_SETTLE_MS`; the public `/tickets` route is five minutes at the edge plus ten stale ([editing the catalog](../frontend/trip-regions.md#editing-the-catalog)) |
 | `trip-regions:accuracy:v1:{region}:{date}` | 24 h (`TRIP_ACCURACY_TTL`) | A region's forecast accuracy ([`/accuracy`](../frontend/trip-regions.md#how-accurate-the-forecast-was-get-v1trip-regionsregionaccuracy)), under the region's park-local date, so a new day starts a new entry; the archive it reads is scored once a night |
 | `trip-regions:last-year:v1:{parkId}:{YYYY-MM}` | 7 days plus up to a day of spread (`TRIP_LAST_YEAR_TTL`) | A passed month's measured crowd level and headliner day peak per day, for the `last_year` days; written by the calendar warmup or on a miss, and not evicted by a schedule sync |
 | `trip-regions:forecast-until:v1:{parkId}` | 13 h | The last day a region park's warm months carry a forecast (`meta.forecastUntil`) |
-| `ml:park:{parkId}:{type}:{date}` | hourly 30 min, daily 13 h | Same single-flight guard as the park payload |
+| `ml:park:{parkId}:{type}:{date}` | hourly 30 min, daily and yearly 13 h | Same single-flight guard as the park payload. The calendar warmup evicts the daily and the yearly entry (and the yearly route's answer, `predictions-yearly:resp:v1:…`), which carry the season level |
+| `ml:season-level:v4:{parkId}` | 14 h (`SEASON_LEVEL_INPUTS_TTL`, an hour past the warmed months) | The [season level](../ml/season-level.md#reads-and-cache)'s inputs. No date in the key: the calendar warmup evicts them, so a level changes only with a run the forecast ring announces. A key that ran out after a failed warmup is recomputed on the next read, unrung |
+| `ml:season-level:v4:{parkId}:failed` | 5 min (`SEASON_LEVEL_FAILURE_TTL`) | Set when loading the inputs failed, so the reads in between serve without the level instead of each running the failed reads again; evicted by the calendar warmup with the inputs |
 | `ml:tft-daily:{parkId}:{days}:{today}` | 13 h | Evicted (`ml:tft-daily:*`) when `train-nf` completes (PAR-1053); caches built on it still run out on their own TTLs |
 | `ml:hourly-fresh:{attractionId}` | 30 min | Freshness marker of the diff-written hourly predictions ([schema](../database/schema.md#write-path-par-874)) |
 | `park:statistics:{parkId}`, `park:occupancy:{parkId}` | 5 min | Occupancy is ratio-vs-P50 ([crowd levels](../rules/crowd-levels.md)) |
@@ -34,6 +37,7 @@ its `docs/architecture/caching-strategy.md`.
 | `search:index:v1:*`, `search:fuzzy:v2:{type}:{limit}:{q}` | 2 h, 5 min | [Search](search.md) |
 | `weather:*` | per surface | [Weather](weather.md#call-cadence-per-surface) |
 | `popularity:parks`, `popularity:attractions` | sorted sets, decayed daily | `ZINCRBY` from `PopularityInterceptor` on successful GETs; feeds warmup priority |
+| `display-consistency:v1:park:{parkId}`, `display-consistency:v1:summary` | 2 days | State, not cache: the last [display-consistency](../analytics/display-consistency.md) run's result per park and its summary, which the admin and the data-quality report read |
 | `site-analytics:*` | buffers `buf:*` none (parked ones 7 days); a visit until the flush ends it, at most 40 min after its last hit, and its place in `visits:open` at most 2 h; caps to the end of the UTC day + 1 min; day visitors, also by country, device, browser, OS and channel, to its end + 1 h; guard sets and drop counts to the end of the next day; realtime and live view minutes 35 min | State, not cache, and never flushed: the [site statistic](../frontend/site-analytics.md#privacy)'s counts until the flusher writes them, its visits, caps, guards, HyperLogLogs and the live view's minutes. Keys standing for a reader are HMACs under the UTC day's key |
 
 Everything park-scoped is evicted together by `invalidateParkCaches(redis, parkId, attractionIds)`
@@ -81,14 +85,52 @@ to refresh), popular CLOSED parks (top 50 by `PopularityService`), then the rest
 | --- | --- |
 | `live-cache-warmup`, after every wait-times run | parks, top 1000 attractions (`warmupTopAttractions`: user traffic plus the rides with the most `queue_data` rows in 7 days), occupancy, geo discovery, global and park statistics ([job queues](job-queues.md#the-wait-times-run-and-its-warmup)) |
 | `generate-hourly` predictions | parks opening in the next 12 h (`warmupUpcomingParks`) |
-| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −12…−1 where missing ([below](#what-the-trip-regions-add)) |
+| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily and yearly ML caches, the month caches and the season level's inputs, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −13…−1 where missing ([below](#what-the-trip-regions-add)). Ends with [the forecast ring](#the-forecast-ring) |
+
+### The forecast ring
+
+The frontend shows one park-day on several surfaces: the calendar grid and its day dialog, a month
+page's summary, best-days with „Prognose heute", and Parky's day tip. Each is cached there for a
+day or more, so once a warmup moves the forecast they have to be told at the same moment, or the
+page contradicts itself. Nothing rings a change between two runs, so the
+[season level](../ml/season-level.md#reads-and-cache)'s inputs, which can move every day of a type
+at once, change only in the run. `CacheWarmupService.announceForecast` posts, for every park whose
+best-days snapshot the run rebuilt, both of its forecast tags (`forecastCacheTags` in
+`src/common/revalidation/park-status-transitions.ts`):
+
+- `best-days:<slug>`, the best-days snapshot's server read and its relay;
+- `park-calendar:<continent>/<country>/<city>/<slug>` (`parkCalendarCacheTag`), the `/calendar`
+  relay, a month page's summary and the tip relay. A tag of its own, because the park's own tag
+  (`parkCacheTag`) also drops the park's structure fetch that every park page reads.
+
+They go in one batched call (50 tags a POST, so some 400 tags for ~200 parks are eight POSTs) with
+`"expire": 0`, because the frontend keeps these relays an hour at Cloudflare, which no tag
+reaches: an old answer served once more at Vercel after the ring would stay at Cloudflare for that
+hour. The same tags go out again after `CDN_SETTLE_MS` through the `revalidate-tags` job
+([publish outside-in](../rules/publish-outside-in.md)).
+
+`sync-schedules-only` (and the schedule step of `sync-all-parks`) sends `park-calendar:` beside each
+park's own tag (`scheduleCacheTags`), since a schedule correction rewrites the same months. The
+best-days snapshot is built from those months but kept apart from them, so for each park where
+the run changed a day the snapshot covers (a day version written, `recordScheduleVersions`, for a
+day from the park's today to `BEST_DAYS_WINDOW` days on) the sync rebuilds the snapshot after the
+months are evicted and sends `best-days:<slug>` with the other tags; a park whose rebuild fails
+keeps its snapshot and is not rung for it. Rung without the rebuild, the frontend would fetch the
+same snapshot again, and „Prognose heute" kept forecasting a day the grid showed closed until the
+evening warmup. Each rebuild is a 90-day calendar build, so a change outside the window is left
+alone: the gap fill writes a version every day for the placeholder it adds half a year out, which
+sent nearly every park through a cold build, one after the other, at 03:00 and 15:00. Between two
+rebuilds the sync keeps the calendar warmup's pause between parks (`CALENDAR_WARMUP_PARK_PAUSE_MS`).
+
+What each frontend surface does with the ring, and what it costs there:
+park.fan's `docs/architecture/caching-strategy.md#one-park-day-on-several-surfaces`.
 
 ### What the trip regions add
 
 The [trip-region calendar](../frontend/trip-regions.md) serves a year ahead: the forecast within
-60 days, the same weekday a year back beside every day and ranked on past 60 days (PAR-1319). So
-its 16 parks (`regions.ts`, matched by their
-geographic path in `regionOfPark`) are warmed further than the rest. Estimated from the code paths,
+60 days, the matching day a year back beside every day and ranked on past 60 days (PAR-1319,
+PAR-1377). So its 16 parks (`regions.ts`, matched by their geographic path in `regionOfPark`) are
+warmed further than the rest. Estimated from the code paths,
 not measured; read the real figure off the warmup's own line (`✅ Calendar warmup complete: … in …s`)
 on the first runs after the deploy.
 
@@ -98,12 +140,14 @@ on the first runs after the deploy.
   predictions are cached by the run's first month) and no `queue_data` scan: about eight indexed
   reads (schedule, weather, measured-operation verdicts, maintenance windows, headliner names) and
   cached lookups, so some 400 light queries a run.
-- **Last-year snapshots −12…−1: 12 past-month builds per region park when all are missing**, which
+- **Last-year snapshots −13…−1: 13 past-month builds per region park when all are missing**, which
   is the first run after a deploy that finds none; the −6…−2 the release before kept are reused, so
-  the first run after PAR-1319 builds 7 a park. Each is about 31 `calculateCrowdLevelForDate` scans
+  the first run after PAR-1319 builds 7 a park. −13 is there because a day's matching day a year
+  back can sit three weeks before 52 weeks back (PAR-1377); the first run after it builds that one
+  month a park. Each is about 31 `calculateCrowdLevelForDate` scans
   over a day of `queue_data` (their own cache lives 6 h, so a warmup finds them cold) plus one
   `getHeadlinerDailyPeaks` over the month, built one after the other. After it a snapshot lives a
-  week, spread by up to a day, so about 12 ÷ 7 month builds a day per region park, plus one each
+  week, spread by up to a day, so about 13 ÷ 7 month builds a day per region park, plus one each
   when a month turns. A schedule sync does not evict them, unlike the month caches it evicts twice
   a day, which is why they are a key of their own.
 - **Redis:** a region calendar entry is about 300 bytes per park and day (16 parks × 31 days ≈

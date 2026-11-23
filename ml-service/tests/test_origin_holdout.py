@@ -111,6 +111,21 @@ def test_origin_rewrite_reads_origin_row_and_far_row_profiles():
     ).all()
 
 
+def test_far_profile_follows_is_weekend_not_saturday_and_sunday():
+    """PAR-1379: a Saudi park's weekend is Friday + Saturday; the far rows'
+    1-hour profile takes the weekend mean on its Fridays, as serving does."""
+    df = _frame()
+    df["is_weekend"] = df["day_of_week"].isin([4, 5]).astype(int)
+    df["rolling_avg_weekend"] = df["rolling_avg_weekday"] + 1000.0
+    target = df[df["timestamp"] >= df["timestamp"].max() - pd.Timedelta(days=7)]
+    far = train.as_known_at_origin(target, df, pd.Timedelta(days=61), _profile())
+    friday = far["day_of_week"] == 4
+    sunday = far["day_of_week"] == 6
+    assert friday.any() and sunday.any()
+    assert (far.loc[friday, "avg_wait_last_1h"] == far.loc[friday, "rolling_avg_weekend"]).all()
+    assert (far.loc[sunday, "avg_wait_last_1h"] == far.loc[sunday, "rolling_avg_weekday"]).all()
+
+
 def test_origin_rewrite_drops_rows_without_an_origin():
     df = _frame(days=10)
     profile = pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=["parkId", "day_of_week", "hour"]))

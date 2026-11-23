@@ -35,6 +35,16 @@ Entity `src/parks/entities/weather-data.entity.ts`, primary key `(parkId, date)`
 (°C), `precipitationSum`, `rainSum` (mm), `snowfallSum` (cm), `weatherCode` (WMO), `windSpeedMax`
 (km/h); live columns, nullable: `temperatureCurrent`, `apparentTemperature`, `humidity`, `isDay`.
 
+Since PAR-1393 the daily request also asks for `precipitation_probability_max`,
+`precipitation_hours`, `wind_gusts_10m_max`, `uv_index_max` and `sunshine_duration`, stored as
+`precipitationProbabilityMax` (%, the highest hourly chance of the day), `precipitationHours`,
+`windGustsMax` (km/h), `uvIndexMax` and `sunshineHours` (the seconds as hours). All five are
+nullable: rows written before stay empty until the next full sync reaches them, and the calendar
+leaves a missing one out rather than serving 0. Twelve daily and six current variables make each
+forecast call count as about two calls against Open-Meteo's free allowance, where it was about one
+and a half. The hourly request (`getHourlyForecast`, the ML service's weather and Parky's next
+hours) adds `precipitation_probability` and `wind_gusts_10m`; the ML service's model reads neither.
+
 **Dates are stored as noon UTC** (`new Date(`${day.date}T12:00:00Z`)`) and queried by plain
 date-string comparison (`weather.date >= :start`). Two bugs taught this
 ([park timezone](../rules/park-timezone.md)):
@@ -78,12 +88,59 @@ takes it for a forecast.
 | --- | --- |
 | Source | Open-Meteo archive (`archive-api.open-meteo.com/v1/archive`, ERA5), same provider and attribution |
 | Period | 2015–2024 (`CLIMATE_NORMAL_FIRST_YEAR` / `_LAST_YEAR`, `src/external-apis/weather/climate-normals.ts`) |
-| Shape | per park coordinate (0.01°), each `MM-DD` averages ±3 days over all years (`CLIMATE_NORMAL_WINDOW_DAYS`), 366 keys; max/min temperature, precipitation, rain, snowfall, wind, most frequent WMO code |
+| Shape | per park coordinate (0.01°), each `MM-DD` averages ±3 days over all years (`CLIMATE_NORMAL_WINDOW_DAYS`, 70 days over ten years), 366 keys; max/min temperature, precipitation, rain, snowfall, wind, most frequent WMO code; and the spread of those 70 days ([below](#the-spread-typically-1618-c)) |
 | Fetching | background, after a calendar window reaches past the forecast; at most `CLIMATE_WARM_BUDGET_PER_DAY` parks a day, a failed park not retried for an hour, own block key `ratelimit:openmeteo-archive:blocked`; ~180 units of the daily allowance per park. Cached 30 days; the calendar reads the cache only, so the first request after a miss has no normals |
 
 Every calendar weather block carries `basis: "forecast" | "climate_normal"`, a normal also
-`normalPeriod: "2015-2024"`. A normal never fills a day that has a forecast row, never feeds the day's
-`recommendation`, and `/plan/day` does not use it.
+`normalPeriod: "2015-2024"`. A forecast block adds, where the row has them, `precipitationProbability`
+(%), `precipitationHours`, `windGustsMax` (km/h), `uvIndexMax` and `sunshineHours` beside
+`precipitationMm`, `snowMm`, `windMax`, `humidity` and `apparentTemp`; a normal has none of the
+five. The legacy `rainChance` is the precipitation in mm, not a chance. What Parky and the admin MCP
+read is `weatherView` (`src/parks/utils/weather-summary.util.ts`): every figure named with its unit
+(`precipitationChancePercent`, `windGustsMaxKmh`, …) and `rainChance` left out. A normal never fills a day that has a forecast row, never feeds the day's
+`recommendation`, and `/plan/day` keeps it out of `weather` (it names it in `climateNormal` beside).
+
+### The spread: "typically 16–18 °C"
+
+A mean says what a date is like on average, not what a visitor should expect: Tokyo's mean high in
+late November is 16.7 °C, and a day there can be 13 °C or 20 °C. So beside each mean the same 70
+days give the spread (PAR-1411), the way climatologies such as WeatherSpark show it:
+
+| Field | What |
+| --- | --- |
+| `temperatureMaxP25`, `temperatureMaxP75` | the 25th and 75th percentile of the daily highs: half of the 70 days reached a high between the two. "Typically 15–19 °C" is that range rounded |
+| `temperatureMinP25`, `temperatureMinP75` | the same for the lows |
+| `wetDayShare` | the share of the 70 days with at least 1 mm of precipitation (`WET_DAY_MIN_MM`), 0…1 |
+
+Why these and not others:
+
+- **Quartiles, not the mean ± a standard deviation.** Daily highs are skewed (a cold front pulls a
+  winter day far down, a summer day has a ceiling), so a symmetric band around the mean misplaces
+  the typical day. The interquartile range needs no assumption about the shape and is robust with
+  70 samples; it is the inner band of WeatherSpark's temperature charts (25th–75th, beside
+  10th–90th). The 10th–90th band would be twice as wide and read as "anything goes".
+- **Percentiles of the days, not the range of the means.** Over a ten-day trip the mean high moves by
+  half a degree or less, so "16.4–16.9 °C" from the means would promise a precision no single day
+  has.
+- **Rain days from 1 mm.** It is the WMO's precipitation day and the threshold climatologies count
+  rain days by (WeatherSpark's wet day is 0.04 in, 1.02 mm). ERA5 has too many days with a few
+  tenths of a millimetre of drizzle; from 1 mm that excess stays out of the count. The mean
+  precipitation alone cannot say it: 3 mm a day is one wet day in five as easily as drizzle daily.
+- **ERA5 is a reanalysis** at about 25 km (Open-Meteo blends ERA5-Land at 9 km where it has it), so
+  a coastal park's cell can sit a degree off the nearest station; Tokyo Disneyland's August high
+  reads 30.3 °C against the Japan Meteorological Agency's 31.3 °C for central Tokyo. The figures are
+  a date's character, rounded to whole degrees where shown, never a station's record.
+
+Normals cached before PAR-1411 have the means only. `WeatherService.getClimateNormals` serves them as
+they are and fetches the park again in the background (`hasClimateSpread`; once an hour per park,
+`weather:climate-normals:refresh:<parkId>`, inside the same daily budget), so the spread arrives
+park by park, the most-read first. Every reader treats it as optional.
+
+The trip planner reads the spread through `src/trip-regions/trip-climate.ts`: a plan day's, a
+`/when` window's and a month's typical weather ([trip regions](../frontend/trip-regions.md#typical-weather)).
+The calendar's weather block of a normal carries it as `tempMaxP25`…`tempMinP75` and `wetDayPercent`;
+`weatherView` gives Parky `typicalHighC` ("15-19"), `typicalLowC`, `rainDayChancePercent` and a
+`note` that the figures are the date's historical average, not a forecast.
 
 **Walled off from the wait-time model**, which cannot tell "the mean of this date" from "what to expect
 on this day": a normal is never written to `weather_data` (what `ml-service/db.py` trains on), never

@@ -101,7 +101,7 @@ region route serves the parts a client needs:
 | `perkNames`, a perk rule's `share`     | (the codes)                      | a perk's code, its English name (Parky) and what it takes off a day's cost                                                                                 |
 | a group's `earlyKind`                  | (on the calendar's `early.kind`) | what the resort calls its before-opening slot                                                                                                               |
 | `weather.heat`, `.storm`, `.notes`     | `weather`                        | heat thresholds, the storm season and the seasons the answers name but do not price ([how a day is priced](#how-a-day-is-priced))                           |
-| `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
+| `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months and windows (`/when`) and a plan day with no park or base ([typical weather](#typical-weather)) |
 | `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
 | `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name, where each is sold; `home` is the operators' own shops ([tickets](#tickets))                                   |
 | `bases`, `baseLegs`, `stayRules`       | `bases`, `baseLegs`, `stayRules` | the cities a trip stays in, the moves between them and how both are priced (Japan, Paris; [bases](#bases-a-trip-across-several-cities))                     |
@@ -309,8 +309,8 @@ or a `hurricane` penalty.
   "weather": {
     "storm": {
       "kind": "hurricane", // hurricane | typhoon; absent where the region has none
-      "from": "06-01",
-      "to": "11-30",
+      "from": "08-01", // the first and last day a plan day says hurricane_season (by half month)
+      "to": "10-31",
       "peak": { "from": "08-15", "to": "10-15" },
     },
     // "notes": [{ "kind": "rainy_season", "from": "06-05", "to": "07-19" }] in Japan
@@ -442,8 +442,19 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
           "headlinerWait": 50, // minutes on the measured scale, see below; absent when unknown
           "basis": "forecast", // forecast | long_range | last_year | none
           "forecastWait": 45, // the served forecast, unscaled, as the park calendar shows it
-          "lastYearWait": 55, // the same weekday a year back, as measured
+          "lastYearWait": 55, // the matching day a year back, as measured
           "seasons": ["5b0c…"], // ids into `seasons`
+          "weather": {
+            // past the forecast's reach: the date's climate normal; see below
+            "tempMax": 26.1,
+            "tempMin": 14.8,
+            "precipitationMm": 2.3,
+            "icon": 3,
+            "basis": "climate_normal",
+            "tempMaxP25": 24.3,
+            "tempMaxP75": 28.0,
+            "wetDayPercent": 24,
+          },
         },
         "disneys-typhoon-lagoon-water-park": {
           "status": "CLOSED",
@@ -487,14 +498,14 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
     ([long-range forecasting §2](../ml/long-range-forecasting.md)): TFT reads low, more so further
     out. They are replaced by factors measured per region from `prediction_lead_snapshots` once its
     30- and 60-day buckets hold enough served rows;
-  - past it (`basis: "last_year"`) the same weekday a year back as measured, **not** the long-range
+  - past it (`basis: "last_year"`) the matching day a year back as measured, **not** the long-range
     forecast: on production's answers of 2026-11-14 that level read 42 % below the same dates of
     2026 in Orlando and was almost flat
     ([long-range forecasting §9](../ml/long-range-forecasting.md)), so a day ranked on it won on its
     basis, not its date (PAR-1319);
   - past it with nothing measured a year back (`basis: "long_range"`: the park was closed, or not
-    yet measured, that day a year back; USJ before 20 April 2026), the long-range forecast, unscaled,
-    as the one figure there is.
+    yet measured, on the matching day and on every day it may move to; USJ before 20 April 2026),
+    the long-range forecast, unscaled, as the one figure there is.
 
   Call it "the big rides' wait at their busiest"; it is not a total, not the wait at every hour and
   not the longest single queue. An hourly curve of the same day (`/plan/day`) runs lower for most
@@ -504,7 +515,7 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 - **`forecastWait`** is the served forecast for the day, unscaled and rounded, as the park's own
   calendar shows it: present wherever the calendar has a forecast (to about six months), so also on
   a `last_year` day past 60 days, where it is only shown, never ranked. **`lastYearWait`** is the
-  same weekday a year back as measured, wherever one exists, also on a `forecast` day. Both sit
+  matching day a year back as measured, wherever one exists, also on a `forecast` day. Both sit
   beside `headlinerWait` so a client can show either; neither ranks anything.
 - **`crowdLevel`** is the calendar's own level for that park (the day against that park's typical
   day), so two parks' levels say how each compares with itself, not with each other. Compare parks
@@ -514,18 +525,17 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
     `SERVING_TFT_DAYS`), its `headlinerWait` times the lead factor above, its `crowdLevel` the
     calendar's predicted level.
   - `last_year`: a day past 60 days, or one the forecast does not cover (past `forecastUntil`, or a
-    gap in it), that was not CLOSED a year back reads the same weekday a year earlier:
-    `lastYearDays(date).sameWeekday`, the day of that weekday nearest the same date a year back, at
-    most three days off. Its `crowdLevel` is the level the calendar measured that day (the
-    typical-day-peak rating of `calculateCrowdLevelForDate`), its `headlinerWait` the calendar's
-    recorded `headlinerForecast.avgWait` for it (`actual: true`): the mean over the park's headliners
-    of each ride's day-P90 standby wait, rounded to five. It is an estimate and must be labelled
-    "last year", never shown as a forecast. A moving holiday is not lined up: Easter 2026 was on
-    5 April, Easter 2027 is on 28 March.
+    gap in it), reads the matching day a year earlier
+    ([which day](#the-matching-day-a-year-back)), a day the park was open and measured on. Its `crowdLevel` is the level the calendar
+    measured that day (the typical-day-peak rating of `calculateCrowdLevelForDate`), its
+    `headlinerWait` the calendar's recorded `headlinerForecast.avgWait` for it (`actual: true`): the
+    mean over the park's headliners of each ride's day-P90 standby wait, rounded to five. It is an
+    estimate and must be labelled "last year", never shown as a forecast.
   - `long_range`: a day past 60 days with nothing measured a year back: the calendar's long-range
     forecast (CatBoost's long tail), unscaled; reads low and flat
     ([long-range forecasting §9](../ml/long-range-forecasting.md)).
-  - `none`: nothing to say. A day that was closed last year and has no forecast gives no figure.
+  - `none`: nothing to say. A day with no open, measured day a year back and no forecast gives no
+    figure.
 - **`meta.forecastUntil`** is the last day any of the region's parks carries a forecast, as the
   calendar warmup last read it off the warm months (not a constant; CatBoost reaches about six
   months, as far as a park's published schedule). Absent until the warmup has run once.
@@ -547,6 +557,14 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   either Early Entry or the party; it now keeps both
   ([schedule sync](../architecture/schedule-sync-and-calendar.md)), and the season stays the
   fallback for a party the feed does not list.
+- **`weather`** is the park's weather that day as its own calendar has it: within the forecast's
+  reach (about 16 days) the forecast (`tempMax`, `tempMin`, `precipitationMm`, the WMO `icon`,
+  `basis: "forecast"`); past it the date's climate normal (2015–2024, ERA5), `basis:
+  "climate_normal"`, with `tempMaxP25`…`tempMaxP75`, the range half of such days' highs fell in,
+  and `wetDayPercent`, the chance of a rain day ([the spread](../architecture/weather.md#the-spread-typically-1618-c)).
+  A client shows a normal as what the date is usually like and marks it so („Ø 15–19°“), never as
+  the day's forecast. The percentiles are absent while the park's cached normals predate them, the
+  whole block where its calendar has no weather (PAR-1411).
 - **`closesEarly: true`** with **`dayGuestCloseAt`** (park offset) marks a day whose day-guest close
   is at least two hours before the park's usual close: the median over its open days within 14
   days of that date that have no ticketed evening (whatever window was asked for), so a party season
@@ -558,7 +576,7 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   usual day (`usualHours`, else no hours factor), since its real hours are not known, and the day
   says **`bestHoursUnpublished: true`** so the client can add "hours not published yet". From
   January 2027 that is every Disney and Universal day. The resort's parks must read on one basis:
-  past 60 days that is `last_year`, so the pick is last year's on that weekday and is worded as an
+  past 60 days that is `last_year`, so the pick is last year's on the matching day and is worded as an
   estimate (the picked park's `basis` says so). Absent for a resort whose parks read on two bases
   that day and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
   `closes_early_elsewhere` when the park with the lowest raw wait lost because it closes early (Magic
@@ -582,6 +600,59 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 - **`holidays`** are the names of the day's local holidays and school breaks; the day's flags are
   the region's, read off its first park. `schoolVacationUnknown: true` past the last stored school
   calendar, as on the park calendar.
+
+### The matching day a year back
+
+52 weeks back keeps the weekday and lets every moving holiday slip: Easter Monday 2027 (29 March)
+read Monday 30 March 2026, an ordinary Monday, and Monday 5 April 2027 read Easter Monday 2026. The
+same went for Ascension, Whitsun, Memorial Day, a school break that moved and a season that starts
+on another date. So `last_year` and `lastYearWait` read the day picked by what the day is
+(`lastYearReferenceDay`, `src/trip-regions/last-year-reference.ts`, PAR-1377):
+
+1. **A public holiday** reads the same holiday last year, by the holiday row's English `name` in the
+   park's own region (any of the names when two share a day), the one nearest 52 weeks back and at
+   most 36 days from it (Easter moves by up to five weeks): Easter Monday 2027 reads 6 April 2026,
+   Christmas Day reads Christmas Day whatever the weekday.
+2. **A bridge day or a school-break day** reads the day of the same weekday nearest 52 weeks back,
+   at most three weeks off, that was a bridge day or a break day too.
+3. **Any other day**, and a holiday or a bridge or break day that found none, reads 52 weeks back
+   where that was neither a public holiday, a bridge day nor a school-break day; otherwise the
+   nearest day of the same weekday at most three weeks off that was none of them; otherwise 52 weeks
+   back. Monday 5 April 2027 reads 30 March 2026.
+
+**A day the park was closed, or on which nothing was measured**, is never the reference day: each
+step passes over it and takes the next day it allows, in the same order and within the same reach
+(PAR-1386). The test is the one a trip day reads last year by (`lastYearMeasured`: not `closed`,
+and a level or the headliners' wait recorded), on the last-year snapshots, so the calendar reads
+every past month a reference day can sit in (`lastYearReferenceMonths`), not only the month of
+the day it picks. Phantasialand's Wednesday 23 December 2026, a break day it is open on, read Wednesday
+24 December 2025, a break day it was shut on (its winter opened on the 26th), and now reads
+Wednesday 31 December 2025; with no open break Wednesday within three weeks it would read the
+nearest open plain one. Only when the park was open on none of the days does the day read 52 weeks
+back, and then nothing (`long_range` or `none`). Parky's `get_park_history` applies the same test
+to the calendar days it reads ([assistant](assistant.md)), one candidate at a time
+(`lastYearReferenceDayReading`), mostly the first.
+
+The flags are the calendar's own (`dayHolidayFlags`, the park's region only, from
+`HolidaysService.getHolidays`, whose years are cached); parks at one location share one read per
+calendar build. **A day past the park's stored school calendar** (`schoolVacationUnknown`) may be a
+break day nobody has published yet ([absent facts](../rules/absent-facts.md)), so it does not move
+off last year's break days, and a reference day is never one that has not been measured yet (today
+or later). **A park without a country, or whose holidays cannot be read**, reads 52 weeks back.
+
+**Inside a park season** that is `confirmed` or `announced` and has an edition a year earlier (the
+same `kind` and `name`, ended before this one began), a day inside that edition goes first among the
+days step 2 or 3 found: a party night reads a party night where one was within three weeks. The
+holiday state comes first, the season second. Nights are compared with nights only when both
+editions list their `dates`; a season without its list says every day of its range, and matching
+that to last year's nights would put every day on an event night, so it is compared by last year's
+range. An `expected` season counts for nothing: it is last year's pattern, not a statement. Only a
+day inside a season looks for its edition: a day off this year's nights does not move off last
+year's nights. Orlando's curated editions begin with Halloween 2026 (and Christmas 2025), and most
+2027 editions on 2026-11-17 were `expected` or listed no nights, so for now the step moves few days.
+
+The reference day can sit up to three weeks before 52 weeks back, and a holiday further, so the
+warmup keeps 13 past months; a month it has not written is built on read.
 
 ## How a day is priced
 
@@ -624,21 +695,39 @@ region's own figures (`regions.ts`, `weather`):
   `hurricane_season` and `hurricane_peak` in Orlando, `typhoon_season` and `typhoon_peak` in Japan,
   and `penalties` names it by its kind. We chose a code per kind over a generic `storm_*` with a
   `kind`: the client translates each code into one sentence, the two seasons differ in months and
-  in wording, and Orlando's codes stay as they were. **Orlando's hurricane season**
-  (`ATLANTIC_HURRICANES`), 1 June to 30 November, adds **8 minutes × the date's weight** to every
-  park's day: weight 1 at the peak, by half month 0.05 / 0.1 in June,
-  0.15 / 0.2 in July, 0.4 / 0.8 in August (the peak starting on the 15th), 1 / 1 in September,
-  0.8 / 0.4 in October, 0.15 / 0.05 in November. The shape follows the National Hurricane
-  Center's climatology (nhc.noaa.gov/climo, 1991–2020: first named storm mid to late June, first
-  hurricane early to mid August, peak 10 September, most activity mid-August to mid-October); the
-  weights are curated relative to that peak, not NHC figures, and never a forecast. Eight minutes
-  at the peak is about a fifth of a typical headliner figure, enough to rank a September window
-  behind an equal May one without hiding a genuinely quieter one. Within one date every park
-  carries the same minutes, so the calendar's `best` is unchanged; across dates (`/best-days`,
-  the plan's days, `/when`'s windows) it counts. A plan day says `hurricane_season`, or
-  `hurricane_peak` from 15 August to 15 October. **Japan's typhoons** are set the same way from
-  the Japan Meteorological Agency's climatology (most landfalls August to October, the peak in
-  September) with the region's data.
+  in wording, and Orlando's codes stay as they were.
+
+  **Which months are the season: one rule for every region** (PAR-1411). The season is the months
+  in which storms reach the region at least half as often as in its peak month; it is named and
+  priced alike (a day outside it carries no weight, so no `penalties` without a warning). Until
+  PAR-1411 every month with any storm counted, so Orlando and Japan read "storm season" half the
+  year, and in November every Japan trip did:
+
+  | Region | Storms by month (Jun · Jul · Aug · Sep · Oct · Nov) | Season | Peak |
+  | --- | --- | --- | --- |
+  | Orlando | 3 · 3 · 8 · 13 · 9 · 3 tropical storms or hurricanes within 150 km of Magic Kingdom, 1950–2025 (NHC best track, HURDAT2); within 100 km since 1851: 4 · 2 · 17 · 18 · 13 · 2 | 1 August – 31 October | 15 August – 15 October |
+  | Japan | typhoon approaches (centre within 300 km) a month, JMA normals 1991–2020: Kanto-Koshin 0.2 · 0.4 · 0.8 · 1.2 · 0.7 · none; Kinki 0.3 · 0.6 · 0.7 · 1.1 · 0.7 · none; their mean 0.25 · 0.5 · 0.75 · 1.15 · 0.7 · 0 | 1 August – 31 October | 1 September – 15 October |
+
+  The official Atlantic season (1 June – 30 November) is a fact a client may still say in prose;
+  the planner's warning, calendar mark and price follow the rule. Southern California and Paris
+  have no storm season.
+
+  **Orlando's hurricane season** (`ATLANTIC_HURRICANES`) adds **8 minutes × the date's weight** to
+  every park's day: weight 1 at the peak, by half month 0.4 / 0.8 in August (the peak starting on
+  the 15th), 1 / 1 in September, 0.8 / 0.4 in October. The shape follows the National Hurricane
+  Center's climatology (nhc.noaa.gov/climo, 1991–2020: first hurricane early to mid August, peak
+  10 September, most activity mid-August to mid-October); the weights are curated relative to that
+  peak, not NHC figures, and never a forecast. Eight minutes at the peak is about a fifth of a
+  typical headliner figure, enough to rank a September window behind an equal May one without
+  hiding a genuinely quieter one. Within one date every park carries the same minutes, so the
+  calendar's `best` is unchanged; across dates (`/best-days`, the plan's days, `/when`'s windows)
+  it counts. A plan day says `hurricane_season`, or `hurricane_peak` from 15 August to 15 October.
+  **Japan's typhoons** are set the same way from the Japan Meteorological Agency's normals: 0.6 / 0.7
+  in August, 1 / 1 in September, 0.8 / 0.45 in October (monthly data, the halves curated).
+
+  The region route's `weather.storm.from` and `to` are the first and last day with a weight, by
+  half month (`stormSeasonSpan`), so a calendar that marks them marks exactly the days a plan
+  warns of.
 - **The storm peak in `/when`** (`weather.storm.peakWindowMinutes`, ranking only): a window that
   touches the peak on any day, travel days included, adds **10 minutes per visit** to its score
   ([when to go](./trip-regions-when.md#how-the-storm-peak-ranks)). No plan, no day and no shown
@@ -851,6 +940,19 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
       "crowdLevel": "low",
       "basis": "forecast",
       "weather": { "tempMax": 27.4, "basis": "forecast" }, // the park's high; on a hop day per park
+      "climate": {
+        // the date's typical weather at the day's park, every kind of day; see Typical weather
+        "tempMax": 26.8,
+        "tempMin": 15.1,
+        "tempMaxP25": 25.2,
+        "tempMaxP75": 28.6,
+        "tempMinP25": 12.9,
+        "tempMinP75": 17.6,
+        "precipitationMm": 1.9,
+        "wetDayPercent": 22,
+        "basis": "climate_normal",
+        "period": "2015-2024",
+      },
       "travel": {
         "from": "hotel:disney",
         "to": "universal-epic-universe",
@@ -1096,6 +1198,34 @@ served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so
 the two can be read side by side; absent where nothing is measured at those distances (a `last_year`
 visit never counts). `parkDays` counts days with a park, `visits` the visits placed.
+
+### Typical weather
+
+Every plan day carries **`climate`**, the date's typical weather: the climate normals (2015–2024,
+ERA5, [the spread](../architecture/weather.md#the-spread-typically-1618-c)), never a forecast, beside
+`weather`, which within the forecast's 16 days is the forecast. A client shows it as what such a day
+is usually like ("meist 25–29 °C, nachts 13–18 °C, Regen an 2 von 10 Tagen") and says once that it
+is the long-run average, not the day's forecast. The same block is each `/when` window's `climate`
+(over all its days) and each month's ([when to go](./trip-regions-when.md)).
+
+| Field | What |
+| --- | --- |
+| `tempMax`, `tempMin` | the mean daily high and low, °C, one decimal |
+| `tempMaxP25`, `tempMaxP75` | the range half of such days' highs fell in (25th to 75th percentile), meaned over the span's days. Show it rounded, "25–29 °C"; where both round alike, one figure |
+| `tempMinP25`, `tempMinP75` | the same for the lows |
+| `precipitationMm` | a day's mean precipitation (one decimal); a window's or month's total (whole mm) |
+| `wetDayPercent` | the chance a day of the span is a rain day (at least 1 mm), %. "2 of 10 days" is the friendlier wording |
+| `basis`, `period` | always `climate_normal` and `2015-2024` |
+
+- **Where it is read:** a park or hop day at its (first) park; a day without a park at the nearest
+  park of the base it sleeps in (a region with bases: an Osaka travel day reads Universal Studios
+  Japan, not Tokyo Disneyland); else at the region's `weather.climatePark` (`climateParkOfDay`,
+  `src/trip-regions/trip-climate.ts`).
+- **Absent** while that park's normals are not cached (they are warmed in the background, so the
+  next build has them). The percentiles and `wetDayPercent` are absent while a park's cached
+  normals predate them (fetched again in the background); `tempMax`, `tempMin` and
+  `precipitationMm` are there either way.
+- It prices nothing: the heat term reads `weather` ([how a day is priced](#how-a-day-is-priced)).
 
 ## Ideas (`GET /v1/trip-regions/orlando/plan/ideas`)
 
@@ -2058,9 +2188,18 @@ each region reads the archive once a day. For the hub's line on how far to trust
 ## Caching and cost
 
 The days are assembled from the calendar's month caches (`calendar:month:v2:{parkId}:{YYYY-MM}:none`),
-the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`, the plan's ideas
-`trip-regions:plan-ideas:v1:*`), the plan by its normalized query, so the same trip asked with its parameters in another order is one entry. A plan reads the
+the schedule rows and `park_seasons`; no ML call happens per request. The region calendar is kept an
+hour in Redis by month from the region's today (`trip-regions:calendar:v3:{region}:{today}:{YYYY-MM}`),
+and every window is cut from the months it touches: the hub's 30 days, a month page, `/best-days`,
+a plan's trip and `/when`'s year read the same months, so whichever route comes first builds them
+for the others. Each day is priced from its own reference span, so a day reads the same in every
+window (`calendarMonths`, `joinCalendarMonths`). The months a read misses are built together from
+one read of the parks over all of them; a month another request is building is waited for. Until
+PAR-1402 each window was an entry of its own, and the hourly refetch of every hub window rebuilt it.
+The answers are kept an hour too (`trip-regions:plan:v4:*`, the plan's ideas
+`trip-regions:plan-ideas:v1:*`, `/best-days` by its window and `limit`
+`trip-regions:best-days:v1:*`), the plan by its normalized query, so the same trip asked with its
+parameters in another order is one entry. No key holds the client's release `v`. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
 
@@ -2076,8 +2215,8 @@ their starts searched 0.22–0.25 s; two UK 14-day tickets with dates 0.21–0.2
 The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
 of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the
 month caches), records the last forecast day the months returned (`trip-regions:forecast-until:v1:{parkId}`)
-and keeps the past months the days read last year from (−12 … −1: every day from today on carries
-the same weekday a year back, ranked on it past 60 days; the running month is built on read) as
+and keeps the past months the days read last year from (−13 … −1: every day from today on carries
+the matching day a year back, ranked on it past 60 days; the running month is built on read) as
 week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a
 day, which is pointless for a month that has passed. What it adds:
@@ -2109,8 +2248,8 @@ which would count one trip once per question.
 | `caller`                                               | `site`, the route itself, or `parky`, his trip tools (`TRIP_METRIC_CALLERS`); `site` on the rows from before the column                                    |
 | `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
 | `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |
-| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` has none: the calendar's |
-| `calendar_cache`                                       | the region calendar a built answer read, the same three states                                                                                             |
+| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` rows before PAR-1402 hold the calendar's here |
+| `calendar_cache`                                       | the region calendar a built answer read, the same three states; of its months, the costliest                                                               |
 | `exact`                                                | `meta.exact` (`/plan`) or `meta.search.exact` (`/when`): the search was proven, not stopped by its time budget                                            |
 | `relaxed`                                              | the codes of `meta.relaxed`, sorted; `/when`: `ticket_window_relaxed` when a window answered carries that warning                                         |
 | `unplaced_reasons`                                     | one entry per `unplaced[]`, its reason; `/when` names none, so one `unknown` per park its best window left out                                            |

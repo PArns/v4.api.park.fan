@@ -45,10 +45,11 @@ Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.
 | `openHour`, `closeHour`                | the operator's wall-clock pair; `closeHour < openHour` on a day past midnight — see [midnight](./midnight.md)                                                |
 | `hoursSource`                          | `schedule` (published) or `observed` (measured window past the publishing horizon) — see [tiers](./tiers.md#opening-hours-can-come-from-the-data)           |
 | `crowdLevel`                           | the calendar's level for the day                                                                                                                            |
-| `weather`                              | absent past the forecast's reach (~14 days); no climate normal is substituted                                                                               |
+| `weather`                              | absent past the forecast's reach (~14 days); no climate normal is substituted, so nothing on the day moves by one                                          |
+| `climateNormal`                        | past the forecast's reach, the date's climate normal: the calendar's weather block with `basis: "climate_normal"`, `normalPeriod` and, where cached, the range half of such days fell in (`tempMaxP25`…`tempMaxP75`, `tempMinP25`…`tempMinP75`) and `wetDayPercent` ([the spread](../../architecture/weather.md#the-spread-typically-1618-c)). Shown as what the date is usually like ("meist 15–19 °C"), never as its forecast; absent while `weather` is set or the normals are not cached (PAR-1411) |
 | `isHoliday`, `isBridgeDay`, `isSchoolVacation` | as on the calendar                                                                                                                                  |
 | `schoolVacationUnknown`                | `true` when the park's school-holiday data ends before this day, so `isSchoolVacation: false` means unknown; absent otherwise                                |
-| `isWeekend`                            | Saturday or Sunday in the park's timezone                                                                                                                   |
+| `isWeekend`                            | the park country's weekend (`isCountryWeekendDate`): Friday and Saturday in Saudi Arabia or Israel, Saturday and Sunday elsewhere and without a country     |
 | `neighborHolidays`                     | holidays in neighbouring regions whose day-trippers raise local crowds                                                                                      |
 | `liveWaitTimes`                        | the curated readability flag, repeated here because a planner never fetches the park payload — see [live-wait-times-availability](../live-wait-times-availability.md) |
 | `hasEarlyEntry`                        | only ever `true`: a human confirmed hotel guests get in early. Absent means "no" and "nobody checked" alike. It covers the park's headliners                  |
@@ -66,7 +67,7 @@ Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.
 ## Parts
 
 - [tiers.md](./tiers.md) — `tier`, `climatology`, the per-hour `source`, `dayPeak`, observed opening hours
-- [slots-and-h5.md](./slots-and-h5.md) — 15-minute `slots[]` and the H5 composer behind `PLAN_DAY_H5_COMPOSER`
+- [slots-and-h5.md](./slots-and-h5.md) — 15-minute `slots[]`, the H5 composer behind `PLAN_DAY_H5_COMPOSER` and the TFT or season level that scales it
 - [midnight.md](./midnight.md) — a day that runs past midnight
 - [rides.md](./rides.md) — the ride object, which rides a day carries, `minimumHeight`/`mayGetWet`
 - [availability.md](./availability.md) — rides out of season or in a works period, and `ridesUnavailable`

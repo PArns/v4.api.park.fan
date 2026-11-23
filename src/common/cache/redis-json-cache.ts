@@ -6,6 +6,22 @@ import { SingleFlight } from "../utils/single-flight.util";
 const flights = new SingleFlight();
 
 /**
+ * What `key` holds, or null on a miss, an entry that does not parse or a
+ * Redis failure: for a reader that must never compute the value itself.
+ */
+export async function readCachedJson<T>(
+  redis: Redis,
+  key: string,
+): Promise<T | null> {
+  // Wrapped so a client that throws instead of rejecting is a miss too.
+  return safeJsonParse<T>(
+    await Promise.resolve()
+      .then(() => redis.get(key))
+      .catch(() => null),
+  );
+}
+
+/**
  * Answers from Redis when `key` holds a value, otherwise computes it and keeps
  * it for `ttlSeconds`. `keep` decides whether a computed value may be stored;
  * an answer that says "try again shortly" must not be.
@@ -23,12 +39,7 @@ export async function cachedJson<T>(
   compute: () => Promise<T>,
   keep: (value: T) => boolean = () => true,
 ): Promise<T> {
-  // Wrapped so a client that throws instead of rejecting is a miss too.
-  const hit = safeJsonParse<T>(
-    await Promise.resolve()
-      .then(() => redis.get(key))
-      .catch(() => null),
-  );
+  const hit = await readCachedJson<T>(redis, key);
   if (hit !== null) return hit;
   return flights.run(key, async () => {
     const value = await compute();

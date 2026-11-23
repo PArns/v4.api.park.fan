@@ -29,6 +29,53 @@ describe("DataQualityMonitorService", () => {
       } as never,
     );
 
+  describe("report", () => {
+    const quiet = (service: DataQualityMonitorService) => {
+      for (const detector of [
+        "findSilencedClusters",
+        "findFailingJobs",
+        "findAbsenceRetiredUnreviewed",
+        "findReissueCandidates",
+      ] as const) {
+        jest.spyOn(service, detector).mockResolvedValue([]);
+      }
+      return service;
+    };
+
+    it("carries the last display-consistency run beside the detectors", async () => {
+      const summary = {
+        checkedAt: "2026-11-17T09:40:00.000Z",
+        days: 9,
+        mismatches: 1,
+        parks: [{ id: "p", name: "Phantasialand", mismatches: 1, failures: 0 }],
+      };
+      const service = quiet(
+        new DataQualityMonitorService(
+          { query: jest.fn() } as never,
+          { client: {} } as never,
+          { latestSummary: jest.fn().mockResolvedValue(summary) } as never,
+        ),
+      );
+      expect((await service.report(14)).displayConsistency).toEqual(summary);
+    });
+
+    it("reads null when no run is kept or it cannot be read", async () => {
+      const service = quiet(
+        new DataQualityMonitorService(
+          { query: jest.fn() } as never,
+          { client: {} } as never,
+          {
+            latestSummary: jest.fn().mockRejectedValue(new Error("down")),
+          } as never,
+        ),
+      );
+      expect((await service.report(14)).displayConsistency).toBeNull();
+      expect(
+        (await quiet(build(jest.fn())).report(14)).displayConsistency,
+      ).toBeNull();
+    });
+  });
+
   describe("findSilencedClusters", () => {
     it("passes the window, silence floor and cluster size through", async () => {
       const query = jest.fn().mockResolvedValue([]);

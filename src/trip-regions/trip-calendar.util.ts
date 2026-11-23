@@ -2,7 +2,7 @@
  * How one park's day in the region calendar is read from what the API already
  * has: the calendar day (status, crowd level, headliner forecast, weather), the
  * park's schedule rows for that date (the before-opening and evening slots), the
- * curated seasons, and the same weekday a year back.
+ * curated seasons, and the matching day a year back.
  *
  * Pure: the service gathers the inputs, these functions decide. Every rule here
  * is a rule of the contract (docs/frontend/trip-regions.md), and the specs pin
@@ -49,7 +49,7 @@ export interface TripParkDay {
    * The figure every trip surface ranks and shows, on the measured scale
    * (`basis` says which): within the TFT horizon (`SERVING_TFT_DAYS`, 60
    * days) the forecast times its lead factor ({@link forecastLeadFactor}),
-   * past it the same weekday a year back as measured.
+   * past it the matching day a year back as measured.
    */
   headlinerWait?: number;
   basis: TripBasis;
@@ -58,7 +58,7 @@ export interface TripParkDay {
    * there is one. It differs from `headlinerWait` on every forecast day.
    */
   forecastWait?: number;
-  /** The same weekday a year back as measured, where there is one, from today on. */
+  /** The matching day a year back as measured, where there is one, from today on. */
   lastYearWait?: number;
   seasons?: string[];
   /** The curated closure season that makes the day CLOSED. */
@@ -74,6 +74,8 @@ export interface TripParkDay {
    * normal) passes the plan's heat threshold (`HeatModel` in the optimizer).
    */
   warnings?: Array<"extreme_heat">;
+  /** The park's weather that day: the forecast, past it the date's climate normal. */
+  weather?: TripDayWeather;
 }
 
 /** What the plan reads beside the public fields; never sent. */
@@ -91,13 +93,30 @@ export interface TripParkDayInternal extends TripParkDay {
    * against. Never sent.
    */
   usualHours?: number;
-  weather?: {
-    tempMax?: number;
-    precipitationMm?: number;
-    icon?: number;
-    /** `climate_normal` past the forecast's reach (the calendar's own marker). */
-    basis?: "forecast" | "climate_normal";
-  };
+}
+
+/**
+ * A park's weather on a region calendar day (`parks[slug].weather`): the
+ * forecast within its reach (about 16 days), past it the date's climate
+ * normal, marked `basis: "climate_normal"`, with the range half of such days'
+ * highs fell in and the chance of a rain day. Served as the park's calendar
+ * has it; absent where it has none.
+ */
+export interface TripDayWeather {
+  /** The day's high, °C: the forecast's, or the date's mean high. */
+  tempMax?: number;
+  /** The day's low, °C. */
+  tempMin?: number;
+  precipitationMm?: number;
+  /** The WMO code: the forecast's; a normal's most frequent one. */
+  icon?: number;
+  /** `climate_normal` past the forecast's reach (the calendar's own marker). */
+  basis?: "forecast" | "climate_normal";
+  /** A normal only: the 25th and 75th percentile of the daily high. */
+  tempMaxP25?: number;
+  tempMaxP75?: number;
+  /** A normal only: the chance of a day with at least 1 mm, in percent. */
+  wetDayPercent?: number;
 }
 
 /** A schedule row as `ParksService.getSchedule` returns it. */
@@ -131,10 +150,14 @@ export interface CalendarDayLike {
   headlinerForecast?: { avgWait: number; exactWait?: number; actual?: boolean };
   weather?: {
     tempMax: number;
+    tempMin?: number;
     rainChance: number;
     precipitationMm?: number;
     icon: number;
     basis?: "forecast" | "climate_normal";
+    tempMaxP25?: number;
+    tempMaxP75?: number;
+    wetDayPercent?: number;
   };
 }
 
@@ -204,7 +227,10 @@ const asDate = (value: Date | string | null): Date | null =>
   value == null ? null : typeof value === "string" ? new Date(value) : value;
 
 /** Whether a curated season runs on a date: its `dates` when listed, else the range. */
-export function seasonCovers(season: SeasonLike, date: string): boolean {
+export function seasonCovers(
+  season: Pick<SeasonLike, "startDate" | "endDate" | "dates">,
+  date: string,
+): boolean {
   if (season.dates && season.dates.length > 0) {
     return season.dates.includes(date);
   }
@@ -225,7 +251,7 @@ export function seasonsOn<T extends SeasonLike>(
 }
 
 /** A season that states something: not last year's pattern, not called off. */
-const isStatement = (season: SeasonLike): boolean =>
+export const isStatement = (season: Pick<SeasonLike, "status">): boolean =>
   season.status === "confirmed" || season.status === "announced";
 
 /**
@@ -401,6 +427,22 @@ export function closesEarly(
   return closeMinute(date, closesAt) <= usual - CLOSES_EARLY_MINUTES;
 }
 
+/**
+ * Whether a day a year back says anything: the park was open and the day was
+ * measured, a level or the headliners' wait. A trip day reads nothing from any
+ * other (`buildParkDay`), and the year-back lookup passes over it
+ * (`lastYearReferenceDay`'s `measuredOpen`).
+ */
+export function lastYearMeasured(
+  entry: LastYearEntry | undefined,
+): entry is LastYearEntry {
+  return (
+    !!entry &&
+    entry.c !== "closed" &&
+    (entry.w != null || entry.c !== "unknown")
+  );
+}
+
 /** A past calendar day reduced to what `last_year` needs. */
 export function toLastYearEntry(day: CalendarDayLike): LastYearEntry {
   if (day.status === "CLOSED" || day.crowdLevel === "closed") {
@@ -431,13 +473,20 @@ export interface ParkDayInput {
   earlyKind: EarlyKind;
   /** Days ahead past which the forecast is the long-range model's. */
   longRangeAfterDays: number;
-  /** The same weekday a year back, from the last-year snapshot. */
+  /** The reference day a year back (`lastYearDateFor`), from the last-year snapshot. */
   lastYear?: LastYearEntry;
 }
 
-/** The day a year back that `last_year` reads for a date (lastYearDays' weekday). */
-export function lastYearDateFor(date: string): string {
-  return lastYearDays(date).sameWeekday;
+/**
+ * The day a year back that `last_year` reads for a date: the park's reference
+ * day where the caller resolved one (`lastYearReferenceDays`), else 52 weeks
+ * back.
+ */
+export function lastYearDateFor(
+  date: string,
+  references?: ReadonlyMap<string, string>,
+): string {
+  return references?.get(date) ?? lastYearDays(date).sameWeekday;
 }
 
 /** One park's day for the region calendar. */
@@ -507,7 +556,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
 
   // Both figures sit side by side; one of them is the day's, on the measured
   // scale. Within TFT's reach that is the forecast times its lead factor; past
-  // it, the same weekday a year back as measured, because the long-range level
+  // it, the matching day a year back as measured, because the long-range level
   // reads about 40 % low and nearly flat against it (PAR-1319); the long-range
   // forecast stands in only where nothing was measured a year back.
   const forecast =
@@ -516,12 +565,9 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
       : undefined;
   const level = day?.crowdLevel;
   const rated = !!level && level !== "unknown" && level !== "closed";
-  const lastYear =
-    input.lastYear &&
-    input.lastYear.c !== "closed" &&
-    (input.lastYear.w != null || input.lastYear.c !== "unknown")
-      ? input.lastYear
-      : undefined;
+  const lastYear = lastYearMeasured(input.lastYear)
+    ? input.lastYear
+    : undefined;
   const future = date >= today;
   if (future && forecast) {
     out.forecastWait = round5(forecast.avgWait);
@@ -557,21 +603,28 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
   }
 
   if (day?.weather) {
+    const w = day.weather;
     out.weather = {
-      tempMax: day.weather.tempMax,
-      precipitationMm: day.weather.precipitationMm ?? day.weather.rainChance,
-      icon: day.weather.icon,
-      ...(day.weather.basis && { basis: day.weather.basis }),
+      tempMax: w.tempMax,
+      ...(w.tempMin != null && { tempMin: w.tempMin }),
+      precipitationMm: w.precipitationMm ?? w.rainChance,
+      icon: w.icon,
+      ...(w.basis && { basis: w.basis }),
+      ...(w.tempMaxP25 != null &&
+        w.tempMaxP75 != null && {
+          tempMaxP25: w.tempMaxP25,
+          tempMaxP75: w.tempMaxP75,
+        }),
+      ...(w.wetDayPercent != null && { wetDayPercent: w.wetDayPercent }),
     };
   }
   return out;
 }
 
-/** The public shape: the plan's internal fields stay home. */
+/** The public shape: the plan's internal fields stay home, the weather goes out. */
 export function toPublicParkDay(day: TripParkDayInternal): TripParkDay {
   const {
     dayHours: _dayHours,
-    weather: _weather,
     waitExact: _waitExact,
     forecastExact: _forecastExact,
     lastYearExact: _lastYearExact,

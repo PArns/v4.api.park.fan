@@ -24,7 +24,10 @@ covariates are shared, so the group attention looks across the rides.
                         OPERATING rows; NaN off-window in ``grid``)
 ``tod``                 park-local time of day in hours
 ``in_win``              ``grid`` only: 1 inside a published window, else 0
-``is_weekend``          pandas ``dayofweek`` ∈ {5, 6} (0 = Monday)
+``is_weekend``          the park country's weekend (``weekend_rules``, the
+                        API's table; vendored byte-identical): Friday +
+                        Saturday in the Gulf states and Israel, else
+                        Saturday + Sunday
 ``dow_sin/cos``         2π · dayofweek / 7
 holiday flags           ``holiday_features.park_day_holiday_features`` — THE
                         shared ml-service implementation (OR semantics,
@@ -67,6 +70,7 @@ from holiday_features import (
     park_day_holiday_features,
 )
 from holiday_utils import normalize_region_code
+from weekend_rules import is_weekend
 
 logger = logging.getLogger("nf.chronos")
 
@@ -220,7 +224,7 @@ def day_covariates(meta: ParkMeta, dates: list[dt.date], holidays: pd.DataFrame)
             for day in days]
     d = pd.DataFrame(recs, index=pd.Index(days, name="date"))
     dow = pd.Series([day.weekday() for day in days], index=d.index)  # 0 = Monday
-    d["is_weekend"] = dow.isin([5, 6]).astype(float)
+    d["is_weekend"] = is_weekend(dow, meta.country).astype(float)
     d["dow_sin"] = np.sin(2 * np.pi * dow / 7)
     d["dow_cos"] = np.cos(2 * np.pi * dow / 7)
     hol = d["is_holiday_primary"].astype(float)

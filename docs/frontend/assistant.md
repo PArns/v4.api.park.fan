@@ -41,13 +41,34 @@ the model made-up earlier answers; a failed answer (empty text) is left out with
 The history carries text only, not the earlier tool results, so the "This chat" block after the
 cache breakpoint lists the parks and rides earlier answers looked up, newest first, at most eight,
 each with its name and id (`lookedUpIds` reads the ids off the stored tool inputs — `park`,
-`parkId`, `parks`, `rideId`, `rideIds`, failed calls and slugs skipped — and two primary-key reads
+`parkId`, `parks`, `rideId`, `rideIds`, the ids among `plan_add_rides`' `rides`, failed calls and
+slugs skipped — and two primary-key reads
 name them). Parky reuses the id instead of calling `search_parks` again on every turn.
+Below them it lists the tools behind each earlier answer, counted oldest first as the history
+counts its answers (`earlierLookups`, off the stored tool calls; failed calls, the reply chips and
+the interview left out). Without that list Parky found no source for his own figures in a later
+turn and took them back: the QUICK Pass Ultimate's 80 € for F.L.Y. once Taron's 12 € came in, a
+weekend's waits he called given "without looking" after `get_days` (PAR-1392).
 `location` is sent only after the visitor pressed „Standort teilen" in the chat and is rounded to
 two decimals here; it is never stored or logged. `opener` is the greeting the window opened with,
 sent with a chat's first question only: a greeting can name the visitor's next planned day or ask
 how yesterday's went, and a bare „ja" may answer it. One line, at most 300 characters, quoted in
 "This chat" as the page's line (data, not instructions), and only while the chat has no history.
+`dayTip` is the day tip the visitor tapped to open the chat (`park` as
+`continent/country/city/slug`, `date`, and `text`, the sentence the dialog showed), sent with that
+first question only. The API resolves the park and reads both the sentence and the day's facts
+itself (`ParkyTipService.dayTip`): the tip kept in the cache of the route below for the chat's
+`locale` and the days as they stand now, and the lines that tip is written from, the day and up to
+three on each side, from the park's today. The chat only reads that cache: it never writes a tip,
+so the question waits for no model call and spends no budget on one, and Parky is never handed a
+sentence written for the question instead of the one the visitor was shown. "This chat" gives
+Parky the kept sentence as his own words, quoted as data, and the facts; if the question quotes a
+different sentence, his forecast has moved since and he says what changed. `text` is accepted
+because park.fan sends it, and never used: a sentence the browser made up would otherwise be one
+Parky defends as his. Where no tip is kept (its key moved since the visitor saw it, none was
+written yet, Parky off), he gets the facts and is told that he cannot see the tip the visitor was
+shown, so he neither stands by nor takes back the sentence the question quotes and answers from
+the facts. A park or day it cannot read drops the context, never the question.
 
 The stream sends `start` (the chat id), `status` (a lookup is running: `parks`, `wait-times`,
 `rides`, `forecast`, `posts`, `planner`, `location`, `weather`), `action` (something for the widget
@@ -105,8 +126,10 @@ those not over yet (`bookableHours`). The cards carry their times with the park'
 ## The answer loop
 
 `AssistantChatService.answer` streams Claude Haiku 5.5 (`ASSISTANT_MODEL`) with effort `low`, at
-most 2,048 tokens per round and four rounds; the last round may not call a tool, so it has to
-answer. The system prompt (`system-prompt.ts`, versioned) is cached together with the tool list;
+most `ASSISTANT_MAX_TOKENS` (8,192) per round and four rounds; the last round may not call a tool,
+so it has to answer. The thinking counts against that ceiling: at 2,048 it took most of a round with
+several lookups and cut the visible answer off mid-sentence. A round that still reaches it logs
+`Answer cut at …`. The system prompt (`system-prompt.ts`, versioned) is cached together with the tool list;
 date, page and language follow after the cache breakpoint. A second breakpoint moves with the
 conversation (`moveCacheBreakpoint`): each round marks its last block, the question or the newest
 tool results, so the next round reads the history and every earlier result from the cache at a
@@ -240,6 +263,16 @@ Version 56 renames "# Replies" to "# Calling suggest_replies" and says the chips
 call, never as a line, heading or list in the text; the interview line hands its ideas to the call
 instead of listing them after "Replies:", and a request to plan step by step starts the interview
 unless "This chat" shows one running ([reply chips](#reply-chips)).
+Version 61 (PAR-1392) says the figures of his earlier answers stand: he never takes one back or
+says he gave it without a lookup, and only a new lookup of the very same fact is worth a word, as
+news. A reply chip never only announces an answer to come ("I'll name the park"), and the
+park-day interview's chip is a real park by its name.
+Version 62 (PAR-1393) reads the whole weather: a day's from `get_days` or `get_park_day`, both through
+`weatherView` (condition, °C, feels-like today, precipitation in mm with its highest hourly chance in
+% and its hours, snow, wind and gusts, UV, sunshine; never the legacy `rainChance`, which is mm and
+which he once read as "12,6 %"), the hours ahead and the warnings from `get_park_weather`. He never
+says the amount as the chance or the other way round, and stormy gusts, a thunderstorm or a storm
+warning "can" stop tall rides and outdoor shows, never "will": the park decides.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -249,8 +282,8 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 101 short chats (`assistant-eval.fixtures.ts`: page, planner,
-trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
+`src/assistant/assistant-eval.ts` sends 113 short chats (`assistant-eval.fixtures.ts`: page, planner,
+trips and their plan, the live regions, interview, alerts and favourites snapshots, the day tip, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
 the prompt's tokens alone and with the tools, then a pass/fail table:
@@ -261,7 +294,10 @@ ANTHROPIC_API_KEY=sk-ant-… pnpm assistant:eval --prompt-ref origin/main   # an
 ```
 
 It reads the key from the environment only and costs a few cents a run. `--only <case id>` runs one
-case. The model answers differently from run to run, so a single failure is worth a second run
+case. `--render <dir>` calls no model and needs no key: it writes each case as the model gets it
+(`<id>.system.md` with the case's "This chat", `<id>.chat.json` with the turns, the canned results
+in `results/`, the checks in `checks/`) and `tools.json`, so a stand-in such as a local agent can
+answer the cases and be scored by hand; with `--prompt-ref` it renders another commit's prompt. The model answers differently from run to run, so a single failure is worth a second run
 before it is worth a rule.
 
 ## Language and feedback from the chat
@@ -295,7 +331,9 @@ server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`
 `closedForMaintenance` with the window), `get_park_day` (one day as the planner builds it: hours,
 crowd, weather, holidays, early entry, each ride's opening, peak and shortest hour, the shows, and
 `ridesInMaintenance`: the rides a window shuts that day, which the plan leaves out of `rides`,
-from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
+from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now with wind, gusts and humidity; rain,
+thunderstorm, hail and storm times; the official warnings in force from `WeatherWarningsService`;
+the next 12 hours with each hour's chance of rain and gusts), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`, each term
 with the canonical page the route names, `/de/glossar/…`; a route without `url` gets the
 `/glossary/` path, which redirects),
@@ -338,12 +376,17 @@ visitor's clock), and season. `status` and `durationMinutes` come only from the 
 reading today (`findCurrentStatusByPark`); without one they are null, never a guessed "closed".
 
 `get_park_history` answers "how busy was it on this date last year": the same date a year back
-(29 February becomes the 28th) and the nearest day of the same weekday, at most three days off
-(`lastYearDays`, `src/common/utils/date.util.ts`). Both come from the calendar's own history path
-(`CalendarService.buildCalendarResponse` over at most four past days, each crowd level cached for a
-day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
-headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
-events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
+(29 February becomes the 28th, `lastYearDays`) and `comparableDayLastYear`, the day the trip
+surfaces read for it ([the matching day a year back](trip-regions.md#the-matching-day-a-year-back)):
+the same holiday last year, else the nearest day of the same weekday in the same holiday or
+school-break situation, on which the park was open and measured, 52 weeks back for a park without
+a country or readable holidays. The tool learns whether the park was open by reading the day it
+picks and picks again when it was not (`lastYearReferenceDayReading`): Phantasialand's 23 December
+2026 reads 31 December 2025, as 24 December 2025 was shut. Every day comes from the calendar's own
+history path (`CalendarService.buildCalendarResponse`, one read per day, each read once, each crowd
+level cached for a day): hours, the calendar's typical-day-peak level (`unknown` when nothing was
+measured), the headliners' recorded day peak (only where `headlinerForecast.actual`), holidays,
+school breaks and events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
 instead of `date` it reads that one past day itself ("last Saturday"), up to a year back
 (`HISTORY_DAYS`), by the same path and with the same rule: a level counts only where it was
 measured.
@@ -440,7 +483,11 @@ counted apart as `shelterUnknown`, never as outdoor, and under half known
 (`SHELTER_MIN_KNOWN_SHARE`, the frontend's gate) the result says `shelterIncomplete`.
 `get_ride`, `get_ride_forecast` and `set_ride_alert` take a ride by `rideId` or by its name
 (`ride`) with its park (`rideIdOf`): the site's ride search, the only match or the one whose name
-is the reference, the candidates otherwise. In a test run of 41 questions through Haiku with this
+is the reference, the candidates otherwise. `plan_add_rides` takes its `rides` the same way, each an
+id or a name at the park (`planRideIds`); a name it cannot place comes back in `notAdded` with
+reason `not_found`, or `ambiguous` with the candidates and their ids, and the rest still go in.
+Before (PAR-1406), it took ids only, and the history keeps no tool results: "Ja, alle Tipps
+einplanen" after a day plan cost one `find_rides` per ride the plan had named, five in one answer. In a test run of 41 questions through Haiku with this
 prompt, every ride named by the visitor cost a `find_rides` round first, and in the chats of 3 to 9
 November `get_ride` followed `find_rides` in 2 of 3 answers. `compare_rides` without `by` lists
 every ride of its filters by name, the ones not ridden yet first and counted as `notRidden`, the
@@ -764,6 +811,15 @@ forecast" (`LAST_YEAR_PHRASE`), and the prompt has him say "estimated from last 
 forecast. In a hurricane or typhoon region the prompt keeps him from calling the storm peak the
 quietest time to go, whatever its queues: the date tools rank it lower (`rankedLowerBy`).
 
+**The weather past the forecast is the historical average** (PAR-1411). Where no forecast reaches
+(about 14 days), `get_days`, `get_park_day` and `compare_parks` give the date's climate normal as
+its `weather`, `basis: "climate_normal"`, with `note` ("historical average for this calendar date
+(2015-2024), not a forecast for the day"), `typicalHighC` and `typicalLowC` (the range half of
+such days fell in, "15-19") and `rainDayChancePercent` (`weatherView`). `plan_vacation`'s days carry
+`typicalWeather` ("high 15-19 °C, low 7-11 °C, rain on 27% of such days"), said once in
+`typicalWeatherMeans`, and `find_trip_dates`' windows the same. The prompt has him say it as what
+such a day is usually like ("usually 15-19 °C"), never as the day's forecast.
+
 ### The trip regions: the vacation planner in the chat
 
 Four lookups read the [trip regions](trip-regions.md) through `TripRegionService` and
@@ -842,8 +898,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   season, not a forecast"), `events`, and `hubUrl`, the hub with that window's plan under the plan
   route's own parameter names (`hubUrl` above). Then `within` (the breaks and how far the data
   reaches), `noWindow` when none fits, and the year strip as `months` (`headlinerWait`,
-  `lastYear`, `climate` as "high/low °C, mm", the count of US school-break days, `partyNights`,
-  `hurricaneSeason`), with `monthsMean` saying what the numbers are. A window the season ranked
+  `lastYear`, `climate` as "high 15-19 °C, low 7-11 °C, rain on 27% of such days; 72 mm in the
+  month", the count of US school-break days, `partyNights`, `hurricaneSeason`), with `monthsMean`
+  saying what the numbers are. Each window carries its `typicalWeather` in the same words. A window the season ranked
   lower carries `rankedLowerBy` ("hurricane season, 6.4 min a park day"); with tickets a window
   lists them in short (`tickets`), with `suggest` the tickets to buy (`ticketsToBuy`); `extreme_heat` and
   `hurricane_peak` read as short phrases in `watch`. Four eval cases (German and
@@ -1134,28 +1191,81 @@ says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` 
 
 ## Parky's tip for a calendar day
 
-`GET /v1/parks/:continent/:country/:city/:parkSlug/parky-tip?date=YYYY-MM-DD&locale=de`, behind a
-data key like `/calendar`, answers the calendar's day dialog:
+`GET /v1/parks/:continent/:country/:city/:parkSlug/parky-tip?date=YYYY-MM-DD&locale=de&today=YYYY-MM-DD`,
+behind a data key like `/calendar`, answers the calendar's day dialog:
 
 ```json
-{ "date": "2026-12-05", "verdict": "good", "text": "…", "promptVersion": 1 }
+{
+  "date": "2026-12-05",
+  "verdict": "good",
+  "crowdLevel": "low",
+  "text": "…",
+  "promptVersion": 4
+}
 ```
 
 - **`verdict`** is a rule, not the model's: the day's `crowdLevel`, `very_low`/`low` → `good`,
   `moderate` → `meh`, `high`/`very_high`/`extreme` → `bad` (`parkyVerdict`).
+- **`crowdLevel`** is that level, as `/calendar` has it for the day when the tip is asked for: the
+  sentence was written for it, and park.fan's dialog shows the tip only where this is the level its
+  own crowd panel shows. Never `closed` or `unknown`, which get a 204.
+- **`todayCrowdLevel`** (optional) is on the tip for today only (`date` is the park's today): the
+  level so far the sentence was written from, kept with it in the cache. park.fan's dialog shows
+  the tip only where this is also the „bisher heute" beside it; the field is absent on any other
+  day and on today before the day has a level so far, never `null`.
 - **`text`** is one sentence of at most 160 characters in Parky's voice, in `locale` (one of
   `ASSISTANT_LOCALES`), written by `ASSISTANT_MODEL` from the calendar's entries for the day and up
   to three days on each side (crowd level, hours in park time, holidays, school holidays, events,
-  forecast weather). A sentence with a line break, a link or Markdown, or over the cap is not
-  served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
+  forecast weather). The input opens with the park's today, and the sentence names days the way a
+  friend would, counted from it: today, tomorrow, the weekday within six days, "next weekend",
+  further out the weekday with day and month. On the tip for today, today's line also carries the
+  level measured so far (`todayCrowdLevel`, "so far today: very low"), the „bisher" the dialog
+  shows under the forecast; where the two differ, the sentence says both instead of the forecast
+  alone. The tips of the days around today leave it out (`soFarToday`, prompt version 4): it moves
+  during the day, and in their input and key it would have up to four dates written again in six
+  languages with every move. The weather line gives the day's precipitation as
+  `… mm precipitation over the day` from `precipitationMm`, and nothing where none was measured;
+  the prompt says to put it in words, never as a number or a percentage (version 5, PAR-1392).
+  Version 6 (PAR-1393) adds the chance of rain in %, the hours with precipitation and the gusts
+  where the forecast has them; the chance may be said as given, millimetres never as a percentage,
+  and wind only when the gusts are stormy (60 km/h and more).
+  Before, it wrote the legacy `rainChance`, which is millimetres too, with `% rain` behind it, and
+  the tips read 47.5 mm as "47,5 % Regenchance". A sentence with a line break, a link or Markdown,
+  or over the cap is not served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
+- **`today`** (optional) is the park's today as the caller counts it, for a caller that keys its
+  own cache by it, as park.fan's relay does. One that is not the park's today answers 204 with
+  `no-store`, before the calendar or the cache is read: a browser clock past the park's midnight
+  would otherwise store today's "tomorrow" under the next day's URL. A malformed one is a 400.
 - **204** when there is nothing to say: a closed day or one without a forecast (`unknown`), a date
   before today or more than 90 days ahead in park time, Parky switched off, no key, the day's token
-  budget spent, a refused sentence or a failed call. A bad `date` or `locale` is a 400.
-- **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{date}:{locale}` for 12 hours, a refused
-  sentence and a closed day included (as nothing), so one model call per day and language;
-  concurrent misses share one call. The answer leaves with
-  `public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600`, private like every
-  forecast route unless `FORECAST_SHARED_CACHE=vary`. Its tokens count into the daily budget; no chat row is stored.
+  budget spent, a refused sentence or a failed call. It leaves with
+  `public, max-age=300, s-maxage=300` (`TIP_NONE_CACHE_CONTROL`), since most of these pass within
+  the day. A bad `date`, `today` or `locale` is a 400.
+- **Tapped:** the dialog opens the chat with the park and the day (`dayTip` on the chat request,
+  above), and the chat reads the kept sentence and the day's facts through
+  `ParkyTipService.dayTip`, so Parky argues from the tip he wrote and what it was written from.
+  It never writes one: no model call, no budget.
+- **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{today}:{date}:{days}:{locale}` for
+  12 hours, `today` being the park's: a tip that says "tomorrow" is written again once that day has
+  come. `{days}` is a digest of every day the prompt reads: its date, status and crowd level, and on
+  the tip for today the level so far (`daysDigest`). The sentence names a quieter neighbour ("go on Friday"),
+  so once the forecast moves the chosen day or any day around it, it is written again for what the
+  calendar shows now. Weather is left out of the digest: it changes with every forecast run and
+  would have the sentence written again for a cloud. A refused sentence is kept too (as nothing),
+  so one model call per day, set of levels and language; concurrent misses share one call. The days
+  are read before the cache, as the whole month or two that hold the window the prompt sees (the
+  date ± 3 days, from today on), cut to that window after the read (`daysAround`). Whole months,
+  because the calendar keeps only whole months (`calendar:month:v2`, warmed for −1…+3 months):
+  a tip already written costs one `MGET` of one or two months and one `GET`, and a month not
+  cached (the current month past its two warm hours, a month past +3) is built once and kept for
+  the next tip and the grid, the build any calendar read pays then. A week asked for on its own
+  would be built from the database on every request and kept nowhere. How often that build runs
+  is also how often today's level so far can move the key of today's tip. A closed or unrated day
+  answers 204 from that read, without a cache entry. The answer leaves
+  with `public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600`, cut to the seconds
+  left until park-local midnight and then without a stale window (`tipCacheControl`), private like
+  every forecast route unless `FORECAST_SHARED_CACHE=vary`. Its tokens count into the daily budget;
+  no chat row is stored.
 
 ## Limits and cost
 

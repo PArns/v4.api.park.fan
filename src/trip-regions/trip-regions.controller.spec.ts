@@ -433,13 +433,19 @@ describe("TripRegionsController", () => {
         to: day(5),
       });
       expect(res.body.days).toHaveLength(5);
-      // Read with fourteen days either side, so each day is priced against
-      // the park's usual day, not against the window asked for. The other
-      // reads are the last-year months the days sit beside.
+      // Read by whole months from today on, with fourteen days either side,
+      // so each day is priced against the park's usual day, not against the
+      // window asked for. The other reads are the last-year months the days
+      // sit beside.
+      const first =
+        day(1).slice(0, 7) === today.slice(0, 7)
+          ? today
+          : `${day(1).slice(0, 7)}-01`;
       const calls = buildCalendarResponse.mock.calls;
       const window = calls.find(
         ([, readFrom]) =>
-          (readFrom as Date).toISOString().slice(0, 10) === day(1 - 14),
+          (readFrom as Date).toISOString().slice(0, 10) ===
+          addIsoDays(first, -14),
       );
       expect(window).toBeDefined();
       expect((window![2] as Date).getTime()).toBeGreaterThan(
@@ -935,7 +941,7 @@ describe("TripRegionsController", () => {
       });
     });
 
-    it("records the best days with the window's length and the calendar's cache as its own", async () => {
+    it("records the best days with the window's length and their own cache", async () => {
       await get(
         `/v1/trip-regions/orlando/best-days?from=${day(1)}&to=${day(10)}&limit=3`,
       ).expect(200);

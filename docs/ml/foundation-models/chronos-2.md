@@ -28,8 +28,8 @@ figure or changing the Chronos-2 adapter. Shared adapter, licences and GPU rules
 ## Production status
 
 Chronos-2 runs as a shadow in the forward archive (`chronos_live` from `chronos2`, `chronos_grid`
-from `chronos2_grid` — [chronos-shadow.md](../forward-archive/chronos-shadow.md)); serving on the
-45–120 min slots is prepared behind `SERVE_CHRONOS_INTRADAY`
+from `chronos2_grid` — [chronos-shadow.md](../forward-archive/chronos-shadow.md)); it serves the
+45–240 min slots on since 2026-11-22 (PAR-1409)
 ([chronos-serving.md](../forward-archive/chronos-serving.md)). The ML overview's decisions
 `live_chronos` and `planner_chronos` are judged on 2026-11-09. Offline verdicts in
 `offline-model-verdicts.json`: `live_h1_2` better and `plan_d0_1` better (both against a

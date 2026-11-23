@@ -92,3 +92,20 @@ def test_school_holiday_known_flags_days_past_the_regions_coverage():
     assert out["days_since_school_holiday"].tolist() == [30.0, 0.0, 30.0]
     assert "school_holiday_known" in db.FUTR_EXOG_GRID
     assert "school_holiday_known" not in db.FUTR_EXOG  # the default model's inputs are unchanged
+
+
+def test_is_weekend_is_the_park_countrys():
+    """PAR-1379: Friday + Saturday for a Saudi park, Saturday + Sunday for a
+    German one and for a series whose park has no country."""
+    days = pd.to_datetime(["2026-07-16", "2026-07-17", "2026-07-18", "2026-07-19"])  # Thu-Sun
+    frame = pd.DataFrame({"unique_id": ["sa"] * 4 + ["de"] * 4 + ["xx"] * 4, "ds": list(days) * 3})
+    meta = pd.DataFrame(
+        [
+            {"unique_id": "sa", "park_id": "p-sa", "country": "SA", "region": None, "influencing": []},
+            {"unique_id": "de", "park_id": "p-de", "country": "DE", "region": "RP", "influencing": []},
+            {"unique_id": "xx", "park_id": "p-xx", "country": None, "region": None, "influencing": []},
+        ]
+    )
+    out = db.add_calendar_covariates(frame, meta, pd.DataFrame())
+    weekend = out.groupby("unique_id")["is_weekend"].apply(list).to_dict()
+    assert weekend == {"sa": [0, 1, 1, 0], "de": [0, 0, 1, 1], "xx": [0, 0, 1, 1]}

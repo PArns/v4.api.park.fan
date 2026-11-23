@@ -9,14 +9,15 @@ import {
   hubPathOf,
   seasonPhrases,
   slotName,
+  typicalWeatherPhrase,
 } from "./assistant-trip";
 
 /** Parky's region-dependent words: each region's storm and rainy seasons, its hub. */
 describe("Parky's words per trip region", () => {
-  it("says Orlando's hurricane season as it always has", () => {
+  it("says Orlando's hurricane season, August to October since PAR-1411", () => {
     expect(seasonPhrases(ORLANDO)).toEqual({
       hurricane_season:
-        "hurricane season (June to November), a fact about the season, not a forecast",
+        "hurricane season (August to October), a fact about the season, not a forecast",
       hurricane_peak:
         "peak of the hurricane season (mid-August to mid-October), a fact about the season, not a forecast",
     });
@@ -31,6 +32,9 @@ describe("Parky's words per trip region", () => {
       rainy_season:
         "rainy season (early June to mid-July): showers likely, a note about the season, not a forecast",
     });
+    expect(seasonPhrases(JAPAN).typhoon_season).toBe(
+      "typhoon season (August to October), a fact about the season, not a forecast",
+    );
     expect(seasonPhrases(TEST_PARIS)).toEqual({});
     expect(
       heatAndStormWatch(TEST_TOKYO, "2027-09-12", { tempMax: 30 }, true),
@@ -76,6 +80,35 @@ describe("change_trip's gateways", () => {
     expect(gatewayBase(PARIS, "ORY")).toBe("paris");
     expect(() => gatewayBase(JAPAN, "LAX")).toThrow(
       /^LAX is not a way into Japan: HND \(Haneda Airport\)/,
+    );
+  });
+});
+
+describe("Parky's typical weather", () => {
+  const base = {
+    tempMax: 16.7,
+    tempMin: 9.2,
+    precipitationMm: 3.3,
+    basis: "climate_normal" as const,
+    period: "2015-2024",
+  };
+
+  it("says the range half of such days fell in and the chance of rain", () => {
+    expect(
+      typicalWeatherPhrase({
+        ...base,
+        tempMaxP25: 14.6,
+        tempMaxP75: 18.9,
+        tempMinP25: 7.1,
+        tempMinP75: 11.4,
+        wetDayPercent: 27,
+      }),
+    ).toBe("high 15-19 °C, low 7-11 °C, rain on 27% of such days");
+  });
+
+  it("falls back to the means where the normals carry no spread yet", () => {
+    expect(typicalWeatherPhrase(base)).toBe(
+      "high 17 °C, low 9 °C, 3.3 mm rain",
     );
   });
 });

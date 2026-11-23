@@ -302,13 +302,7 @@ services:
       # (CatBoost fallback where PCN has none). Default off — flip to "true" once the
       # PCN-vs-CatBoost board win is confirmed over a few days.
       - SERVE_PCN_INTRADAY=${SERVE_PCN_INTRADAY:-false}
-      # Chronos-2 SERVED on the 45–120 min intraday slots (PAR-911), read from the
-      # serving cache the forward-archive capture writes; also turns on the hourly
-      # refresh at the odd park-local hours 11–17. Default off — flip once the
-      # Chronos live A/B
-      # (docs/ml/forward-archive/chronos-shadow.md#paired-scoring-and-the-board) is
-      # confirmed; see docs/ml/forward-archive/chronos-serving.md#switch-on-checklist.
-      - SERVE_CHRONOS_INTRADAY=${SERVE_CHRONOS_INTRADAY:-false}
+      # Chronos-2 serving (45–240 min) is on in code, not here: src/ml/chronos-serving.ts (PAR-1410).
       # Chronos-2 SHADOW capture into the forward archive (PAR-852). Never served to
       # users; "false" stops the API calling nf-service /chronos/forecast at all.
       - CHRONOS_SHADOW_ENABLED=${CHRONOS_SHADOW_ENABLED:-true}
@@ -323,11 +317,14 @@ services:
       # 30-minute Redis answer again (PAR-1330). A run that took 10 minutes or more
       # makes the next one read the cache, so the job cannot fall behind its cadence.
       - GENERATE_HOURLY_FRESH=${GENERATE_HOURLY_FRESH:-true}
-      # Season level (PAR-1343): on a day of a running, published park season the
-      # served daily level of a ride is the median of what it measured on that
-      # season's days so far (3 days needed), not the model's number — no model
-      # reads park_seasons. Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
+      # Season level (PAR-1343): on a day of a running, published park season a
+      # ride's served daily level follows what it measured on that season's latest
+      # days of the same day type (3 needed) — no model reads park_seasons.
+      # SEASON_LEVEL_MODE=level serves the measured median; ratio scales TFT's
+      # number by measured ÷ forecast, bounded and unmeasured (PAR-1383).
+      # Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
       - SEASON_LEVEL=${SEASON_LEVEL:-true}
+      - SEASON_LEVEL_MODE=${SEASON_LEVEL_MODE:-level}
       # Calendar and yearly view: leave a headliner out of the days its season
       # rules out (PAR-1326) — River Quest, paused for Wintertraum, counted in
       # every Wintertraum day with a forecast of ~10 minutes.

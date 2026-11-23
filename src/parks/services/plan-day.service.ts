@@ -33,6 +33,17 @@ import {
 } from "../../common/utils/h5-profile.util";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { H5ProfileService } from "./h5-profile.service";
+import { ParkSeasonService } from "./park-season.service";
+import {
+  PARK_SEASON_BINDING_KINDS,
+  type ParkSeason,
+} from "../entities/park-season.entity";
+import { seasonsOn } from "../../trip-regions/trip-calendar.util";
+import {
+  isSeasonRatioRow,
+  servedLevelSource,
+} from "../../ml/utils/season-level.util";
+import { isCountryWeekendDate } from "../../date-features/constants/weekend-rules.constant";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { RideOpening } from "../../common/types/ride-opening.type";
 import {
@@ -40,7 +51,6 @@ import {
   formatInParkTimezone,
   isoDateWeekday,
   isoDaysBetween,
-  isWeekendDate,
 } from "../../common/utils/date.util";
 import { logInfrastructureError } from "../../common/utils/file-logger.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
@@ -285,6 +295,8 @@ export class PlanDayService {
     // Optional so a module graph without it (the specs, a partial E2E module)
     // serves exactly what it served before: no H5, no slots.
     @Optional() private readonly h5ProfileService?: H5ProfileService,
+    // Optional for the same reason: without it no projection is held back at a season's edge.
+    @Optional() private readonly parkSeasonService?: ParkSeasonService,
   ) {}
 
   /**
@@ -477,13 +489,19 @@ export class PlanDayService {
         theDay?.weather && theDay.weather.basis !== "climate_normal"
           ? (theDay.weather as unknown as Record<string, unknown>)
           : null,
+      // The date's historical average where no forecast reaches (PAR-1411):
+      // its own field, read by nothing that moves a bar, so a client can say
+      // "usually 15-19 °C" and nothing on the day changes by it.
+      ...(theDay?.weather?.basis === "climate_normal" && {
+        climateNormal: theDay.weather as unknown as Record<string, unknown>,
+      }),
       isHoliday: Boolean(theDay?.isHoliday),
       isBridgeDay: Boolean(theDay?.isBridgeDay),
       isSchoolVacation: Boolean(theDay?.isSchoolVacation),
       ...(theDay?.schoolVacationUnknown ? { schoolVacationUnknown: true } : {}),
       // Derived here rather than read: the calendar carries no isWeekend, and
       // every surface that wanted one was deriving it from the date separately.
-      isWeekend: isWeekendDate(dateStr),
+      isWeekend: isCountryWeekendDate(dateStr, park.countryCode),
       neighborHolidays: (theDay?.neighborHolidays ?? []) as unknown as Array<
         Record<string, unknown>
       >,
@@ -864,13 +882,15 @@ export class PlanDayService {
     // the pattern column is written by the former and read here by the latter.
     const weekday = isoDateWeekday(dateStr);
 
-    const [scheduled, patterns] = await Promise.all([
+    const today = this.today(park);
+    const [scheduled, patterns, seasons] = await Promise.all([
       this.showsService
         .getShowtimesOnDate(park.id, park.timezone, dateStr)
         .catch(() => new Map<string, string[]>()),
       this.showsService
         .getSchedulePatterns(park.id, weekday)
         .catch(() => new Map<string, ShowSchedulePattern>()),
+      this.programmeSeasons(park, today, dateStr),
     ]);
 
     const out: PlanDayShowDto[] = [];
@@ -897,8 +917,14 @@ export class PlanDayService {
       // about is far away. Measuring against the target would reject every
       // date more than four weeks out — which is most of what a planner asks.
       if (
-        isoDaysBetween(pattern.lastObservedOn, this.today(park)) >
+        isoDaysBetween(pattern.lastObservedOn, today) >
         PlanDayService.MAX_PATTERN_AGE_DAYS
+      ) {
+        continue;
+      }
+      if (
+        PlanDayService.programmeOn(seasons, pattern.lastObservedOn) !==
+        PlanDayService.programmeOn(seasons, dateStr)
       ) {
         continue;
       }
@@ -929,6 +955,57 @@ export class PlanDayService {
     return out.sort(
       (a, b) => key(a) - key(b) || a.showName.localeCompare(b.showName),
     );
+  }
+
+  /**
+   * The park's curated programme seasons (Halloween, Christmas, winter, summer
+   * nights, a special event) from the oldest pattern a projection may still
+   * use to the day asked about. A failed read holds nothing back, as before.
+   */
+  private async programmeSeasons(
+    park: Park,
+    today: string,
+    dateStr: string,
+  ): Promise<ParkSeason[]> {
+    if (!this.parkSeasonService) return [];
+    const days = [
+      addIsoDays(today, -PlanDayService.MAX_PATTERN_AGE_DAYS),
+      today,
+      dateStr,
+    ].sort();
+    try {
+      const seasons = await this.parkSeasonService.forParkInRange(
+        park.id,
+        days[0],
+        days[days.length - 1],
+      );
+      return seasons.filter((season) =>
+        (PARK_SEASON_BINDING_KINDS as readonly string[]).includes(season.kind),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Plan day: seasons unavailable for ${park.slug}: ${(err as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Which programme seasons run on a day, as one comparable key.
+   *
+   * A show's pattern is its last same weekday, and a season can end in
+   * between: the parade of the last Halloween Sunday must not be promised for
+   * the first Sunday of the winter season. A projection carries over only
+   * when the day it was seen on and the day asked about run the same seasons.
+   */
+  private static programmeOn(
+    seasons: readonly ParkSeason[],
+    date: string,
+  ): string {
+    return seasonsOn(seasons, date)
+      .map((season) => season.id)
+      .sort()
+      .join(",");
   }
 
   /**
@@ -1199,16 +1276,17 @@ export class PlanDayService {
     // the old composer's and stays: a ride the model said nothing about for
     // this date is not composed by either, so the tier ladder below is
     // unchanged. Whether a level scales the profile is `h5LevelFor`'s routing
-    // (TFT only, busy rides only, d0–d2 only — the benchmark's horizon table);
-    // everywhere else the plain profile is served. A ride without an H5
-    // profile keeps the old composer's hours.
+    // by the served level's source: TFT and a season ratio row on busy rides
+    // at d0–d2 (the benchmark's horizon table), a measured season level on
+    // every ride and lead, CatBoost never. Everywhere else the plain profile
+    // is served. A ride without an H5 profile keeps the old composer's hours.
     const h5Slots = new Map<string, Map<number, number>>();
     const composerOf = new Map<string, PlanDayComposer>();
     const h5Days = new Map<string, number>();
     // The plain profile per ride, for the shadow archive only.
     const h5Plain = new Map<string, Map<number, number>>();
     if (h5Profiles) {
-      const weekend = isWeekendDate(dateStr);
+      const weekend = isCountryWeekendDate(dateStr, park.countryCode);
       for (const attraction of plannable) {
         const level = dayLevels.get(attraction.id);
         const profileOfRide: H5RideProfile | undefined = h5Profiles.get(
@@ -1222,20 +1300,31 @@ export class PlanDayService {
           alignToSchedule: window.published,
           weekend,
         };
+        // By the served row's source, not its model: a season row is
+        // `tft+season`, `catboost+season` or `tft+season-ratio`, and its level
+        // is the one the calendar shows for the day.
+        const routed = h5LevelFor(profileOfRide, leadDays, {
+          level: level.predictedWaitTime,
+          source: servedLevelSource(level.modelVersion),
+          seasonRatio: isSeasonRatioRow(level.modelVersion),
+        });
         const { slots, levelApplied } = composeH5Day({
           ...day,
-          level: h5LevelFor(
-            profileOfRide,
-            leadDays,
-            level.modelVersion === "tft" ? level.predictedWaitTime : null,
-          ),
+          level: routed?.level ?? null,
         });
         if (slots.length === 0) continue;
         h5Slots.set(
           attraction.id,
           new Map(slots.map((s) => [s.minute, s.wait])),
         );
-        composerOf.set(attraction.id, levelApplied ? "h5_tft" : "h5");
+        composerOf.set(
+          attraction.id,
+          !levelApplied
+            ? "h5"
+            : routed?.source === "season"
+              ? "h5_season"
+              : "h5_tft",
+        );
         h5Days.set(attraction.id, profileOfRide.days);
         if (shadow) {
           h5Plain.set(
@@ -1336,14 +1425,17 @@ export class PlanDayService {
       // the ride's own opening — so the board compares like with like. The
       // old composer's hour is repeated across its four quarters, which is
       // what a visitor reading it at 15 minutes gets. Measured hours play no
-      // part: this compares composers, not the hourly model.
+      // part: this compares composers, not the hourly model. "Routed" is
+      // TFT's routing only, the `tfth5` column the `planner_h5_slots`
+      // decision is judged on: a season-scaled ride writes no routed row, so
+      // that column measures TFT's routing and nothing else.
       if (shadow) {
         const old = composed.get(attractionId);
         const plain = h5Plain.get(attractionId);
-        const routed = h5Slots.get(attractionId);
+        const tftRouted = composerOf.get(attractionId) === "h5_tft";
+        const routed = tftRouted ? h5Slots.get(attractionId) : plain;
         if (old && plain && routed) {
-          const routedCode =
-            composerOf.get(attractionId) === "h5_tft" ? "t" : "h";
+          const routedCode = tftRouted ? "t" : "h";
           const curves: Record<
             PlanDayShadowCurve["composer"],
             PlanDaySlotShadow[]
@@ -1497,7 +1589,7 @@ export class PlanDayService {
         // known", and the H5 window's day count would quietly switch it off.
         sampleDays: sampleDays.get(attractionId) ?? 0,
         // The H5 window days behind an H5 curve, in a field of its own.
-        ...(composer === "h5" || composer === "h5_tft"
+        ...(composer !== undefined && composer !== "peak_scaled"
           ? { profileDays: h5Days.get(attractionId) }
           : {}),
         ...(cell ? { expectedError: cell.mae } : {}),

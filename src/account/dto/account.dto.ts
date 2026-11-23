@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   MinLength,
   ValidateNested,
@@ -39,6 +40,32 @@ export class AccountFavoritesDto {
   restaurants: string[];
 }
 
+/** A trip region's or a park's slug, as the site's URLs write it. */
+export const ACCOUNT_SLUG = /^[a-z0-9-]{1,80}$/;
+/** A calendar date, `YYYY-MM-DD`. */
+export const ACCOUNT_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A park ticked off as visited in a trip region's hub. */
+export class AccountVisitedParkDto {
+  @ApiProperty({ example: "orlando" })
+  @IsString()
+  @Matches(ACCOUNT_SLUG)
+  region: string;
+
+  @ApiProperty({ example: "epcot" })
+  @IsString()
+  @Matches(ACCOUNT_SLUG)
+  park: string;
+
+  @ApiProperty({
+    example: "2026-11-20",
+    description: "The region's date it was ticked.",
+  })
+  @IsString()
+  @Matches(ACCOUNT_DATE)
+  date: string;
+}
+
 /** The body of `PUT /v1/account/data`: any field left out stays as it is. */
 export class UpdateAccountDataDto {
   @ApiPropertyOptional({ type: AccountFavoritesDto })
@@ -53,6 +80,14 @@ export class UpdateAccountDataDto {
   @ArrayMaxSize(MAX_ACCOUNT_IDS)
   @IsUUID("all", { each: true })
   riddenRides?: string[];
+
+  @ApiPropertyOptional({ type: [AccountVisitedParkDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_ACCOUNT_IDS)
+  @ValidateNested({ each: true })
+  @Type(() => AccountVisitedParkDto)
+  visitedParks?: AccountVisitedParkDto[];
 
   @ApiPropertyOptional({
     enum: ["C", "F"],

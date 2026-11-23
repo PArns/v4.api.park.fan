@@ -18,7 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Depth 2: the commit and its parents, so a step can see what the change touched
+      # (`HEAD^1` is the base of a pull request's merge commit, or the commit before a push).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       # Reads the pnpm version from "packageManager" in package.json.
       - uses: pnpm/action-setup@v4
@@ -31,5 +35,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint:check
+      # `build` compiles src/ only; this also covers test/ and scripts/.
+      - run: pnpm typecheck
       - run: pnpm test
+      # The day optimizer's eight-ride enumeration (every order, about a minute) runs where the
+      # change touches the optimizer: docs/frontend/plan-day/optimize.md#checks.
+      - name: Day optimizer, every order of eight rides
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q '^src/planner/day-optimizer/'; then
+            pnpm test:planner-exhaustive
+          else
+            echo "src/planner/day-optimizer/ unchanged: the eight-ride enumeration is skipped"
+          fi
       - run: pnpm build

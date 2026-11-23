@@ -86,7 +86,9 @@ hours were simply missing — tomorrow's Disneyland Paris plan stopped at 17:00 
 
 `dayPeak` is the **day's peak wait**: the day-level prediction on a forecast day,
 the realised day-P90 on an observed one — the pair the calendar scores against
-each other. It is deliberately **not** the maximum of `hours`, which are
+each other. The prediction is the served row the calendar reads, so on a day of a
+running park season it is the [season level](../../ml/season-level.md), as on
+the calendar. It is deliberately **not** the maximum of `hours`, which are
 typical-hour numbers; taking their maximum made one ride read 20 min today and 42
 five days out with the whole difference being the statistic. Past and future days
 carry the same statistic where they share a field

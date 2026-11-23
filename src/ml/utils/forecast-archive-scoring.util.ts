@@ -386,7 +386,12 @@ export const CHRONOS_SOURCES: Partial<Record<ArchiveSurface, string>> = {
 export const INCUMBENT_SOURCE = "incumbent";
 
 // `composed_h5` is not here: the plain H5 profile uses no day level at all.
-const LEVEL_DERIVED = new Set(["composed", "composed_h5_tft", "climatology"]);
+const LEVEL_DERIVED = new Set([
+  "composed",
+  "composed_h5_tft",
+  "composed_h5_season",
+  "climatology",
+]);
 
 export interface Compared {
   slot: number;

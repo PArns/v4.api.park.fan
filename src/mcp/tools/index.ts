@@ -15,11 +15,13 @@ import {
 } from "./model-comparison.tool";
 import { parkForecastTool } from "./park-forecast.tool";
 import { dataQualityTool } from "./data-quality.tool";
+import { displayConsistencyTool } from "./display-consistency.tool";
 import { duplicatesTool } from "./duplicates.tool";
 import { retirementCandidatesTool } from "./retirement-candidates.tool";
 import { auditLogTool } from "./audit-log.tool";
 import { assistantConversationsTool } from "./assistant-conversations.tool";
 import { assistantConversationTool } from "./assistant-conversation.tool";
+import { assistantTranscriptsTool } from "./assistant-transcripts.tool";
 import { siteFeedbackTool } from "./site-feedback.tool";
 import {
   assistantKnowledgeTool,
@@ -92,6 +94,13 @@ import {
   updateApiKeyTool,
 } from "./api-keys.tools";
 import {
+  apiKeyRequestsTool,
+  approveApiKeyRequestTool,
+  deleteApiKeyRequestTool,
+  rejectApiKeyRequestTool,
+  reopenApiKeyRequestTool,
+} from "./api-key-requests.tools";
+import {
   adminUsersTool,
   blockEventTool,
   deleteAssistantConversationTool,
@@ -120,11 +129,13 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   modelComparisonTool,
   modelComparisonDayTool,
   dataQualityTool,
+  displayConsistencyTool,
   duplicatesTool,
   retirementCandidatesTool,
   auditLogTool,
   assistantConversationsTool,
   assistantConversationTool,
+  assistantTranscriptsTool,
   siteFeedbackTool,
   assistantKnowledgeTool,
   assistantToolsReportTool,
@@ -194,5 +205,10 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   rotateApiKeyTool,
   revokeApiKeyTool,
   deleteApiKeyTool,
+  apiKeyRequestsTool,
+  approveApiKeyRequestTool,
+  rejectApiKeyRequestTool,
+  reopenApiKeyRequestTool,
+  deleteApiKeyRequestTool,
   adminUsersTool,
 ];

@@ -25,6 +25,9 @@ import { repeatsLastQuestion, sameText } from "./assistant-junk";
 import { RepliesTextGuard } from "./assistant-replies-text";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
+import type { AssistantLocale } from "./assistant-locales";
+import { ParkyTipService } from "./parky-tip.service";
+import { ParksService } from "../parks/parks.service";
 import {
   ASSISTANT_TOOL_PARAMS,
   runAssistantTool,
@@ -49,8 +52,12 @@ export const ASSISTANT_MODEL = "claude-haiku-5-5";
 const MAX_ROUNDS = 4;
 /** Earlier messages sent along: five questions and their answers. */
 const HISTORY_MESSAGES = 10;
-/** Thinking counts against it too; an answer is meant to be a few sentences. */
-const MAX_TOKENS = 2048;
+/**
+ * An answer's ceiling, thinking included. The answer itself is a few sentences, but the thinking
+ * of a day with several lookups can fill most of a tight cap, and a cap it reaches cuts the
+ * visible answer off mid-sentence. The eval asks with the same ceiling.
+ */
+export const ASSISTANT_MAX_TOKENS = 8192;
 /** Parks and rides of earlier answers named in "This chat", newest first. */
 const MAX_LOOKED_UP = 8;
 /**
@@ -109,6 +116,8 @@ export interface PreparedChat {
   history: Anthropic.MessageParam[];
   /** Park and ride ids earlier answers of this chat used, newest first. */
   lookedUp?: LookedUpId[];
+  /** The lookups behind each earlier answer the history holds, oldest first ({@link earlierLookups}). */
+  earlierLookups?: string[][];
   request: ChatRequest;
   /** The session's id, which the feedback limits are counted under. */
   session: string;
@@ -171,6 +180,7 @@ export class AssistantChatService {
     let conversation: AssistantConversation | null;
     let history: Anthropic.MessageParam[] = [];
     let lookedUp: LookedUpId[] = [];
+    let lookups: string[][] = [];
     let offered = false;
     if (request.conversationId) {
       conversation = await this.conversations.findOneBy({
@@ -191,6 +201,7 @@ export class AssistantChatService {
         return "junk";
       }
       history = historyOf(earlier);
+      lookups = earlierLookups(earlier);
       lookedUp = lookedUpIds(earlier);
       offered = answersOffer(request.message, earlier);
     } else {
@@ -208,6 +219,7 @@ export class AssistantChatService {
       conversation,
       history,
       lookedUp,
+      earlierLookups: lookups,
       request,
       session,
       sessionHash,
@@ -269,10 +281,14 @@ export class AssistantChatService {
       },
       answer,
     };
-    const [pageSubject, digest, knowledgeIndex] = await Promise.all([
+    const [pageSubject, digest, knowledgeIndex, dayTip] = await Promise.all([
       this.pages.subject(request.pagePath, request.locale),
       this.tripDigestOf(toolContext, pickTrip(trips)),
       this.knowledge.promptIndex(),
+      // Like the greeting, the tapped tip speaks to the chat's first question only.
+      chat.history.length === 0 && request.dayTip
+        ? this.dayTipContext(request.dayTip, request.locale)
+        : null,
     ]);
     const system: Anthropic.TextBlockParam[] = [
       {
@@ -293,12 +309,14 @@ export class AssistantChatService {
           tripDigest: digest,
           // Only the first question of a chat answers the greeting.
           opener: chat.history.length === 0 ? (request.opener ?? null) : null,
+          dayTip,
           liveRegions: request.liveRegions ?? null,
           interview: request.interview ?? null,
           alerts: request.alerts,
           favorites: request.favorites,
           riddenCount: request.ridden?.length ?? 0,
           lookedUp: await this.namesOf(chat.lookedUp ?? []),
+          earlierLookups: chat.earlierLookups,
         }),
       },
     ];
@@ -345,7 +363,7 @@ export class AssistantChatService {
         const stream = client.messages.stream(
           {
             model: ASSISTANT_MODEL,
-            max_tokens: MAX_TOKENS,
+            max_tokens: ASSISTANT_MAX_TOKENS,
             output_config: { effort: "low" },
             system,
             tools: ASSISTANT_TOOL_PARAMS,
@@ -377,6 +395,11 @@ export class AssistantChatService {
         const reply = await stream.finalMessage();
         partial = null;
         addUsage(usage, reply.usage);
+        if (reply.stop_reason === "max_tokens") {
+          this.logger.warn(
+            `Answer cut at ${ASSISTANT_MAX_TOKENS} tokens in round ${round}`,
+          );
+        }
 
         const calls = reply.content.filter(
           (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
@@ -452,6 +475,36 @@ export class AssistantChatService {
       conversationId: conversation.id,
       messageId: message.id,
     });
+  }
+
+  /**
+   * What Parky needs about the day tip the chat was opened from: the park's name, his sentence for
+   * the day in the chat's language as the cache keeps it, and the day's facts as the tip reads them
+   * (`ParkyTipService.dayTip`, which never writes a tip, so the answer waits for no model call).
+   * Both are read here: the browser names the park and the day, and the text it sends is never
+   * handed to Parky as his own words, which he would defend. Null when the park or the day cannot
+   * be read; the chat goes on without it.
+   */
+  private async dayTipContext(
+    tip: NonNullable<ChatRequest["dayTip"]>,
+    locale: AssistantLocale,
+  ): Promise<{ park: string; text: string | null; facts: string } | null> {
+    try {
+      const [continent, country, city, slug] = tip.park.split("/");
+      const park = await this.moduleRef
+        .get(ParksService, { strict: false })
+        .findByGeographicPath(continent, country, city, slug);
+      if (!park) return null;
+      const day = await this.moduleRef
+        .get(ParkyTipService, { strict: false })
+        .dayTip(park, tip.date, locale);
+      return day ? { park: park.name, ...day } : null;
+    } catch (error) {
+      this.logger.warn(
+        `Day tip context skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -597,23 +650,55 @@ export function moveCacheBreakpoint(
 }
 
 /**
- * Stored messages as the API takes them: an answer that failed (empty text) is dropped with the
+ * The stored messages the history keeps: an answer that failed (empty text) is dropped with the
  * question before it, since an empty assistant turn would be refused and break the chat; the
  * history starts with a question.
  */
+function keptMessages<T extends Pick<AssistantMessage, "role" | "text">>(
+  messages: readonly T[],
+): T[] {
+  const kept: T[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && !message.text.trim()) {
+      if (kept[kept.length - 1]?.role === "user") kept.pop();
+      continue;
+    }
+    kept.push(message);
+  }
+  while (kept[0]?.role === "assistant") kept.shift();
+  return kept;
+}
+
+/** Stored messages as the API takes them ({@link keptMessages}). */
 export function historyOf(
   messages: Array<Pick<AssistantMessage, "role" | "text">>,
 ): Anthropic.MessageParam[] {
-  const history: Anthropic.MessageParam[] = [];
-  for (const message of messages) {
-    if (message.role === "assistant" && !message.text.trim()) {
-      if (history[history.length - 1]?.role === "user") history.pop();
-      continue;
-    }
-    history.push({ role: message.role, content: message.text });
-  }
-  while (history[0]?.role === "assistant") history.shift();
-  return history;
+  return keptMessages(messages).map((message) => ({
+    role: message.role,
+    content: message.text,
+  }));
+}
+
+/** Calls that look nothing up: the reply chips and the interview's bookkeeping. */
+const NOT_LOOKUPS = new Set([REPLIES_TOOL, "interview"]);
+
+/**
+ * The tools each earlier answer in the history called, one list per answer, oldest first, failed
+ * calls left out. The history carries the answers' text only, so without these Parky finds no
+ * source for his own figures and takes them back.
+ */
+export function earlierLookups(
+  messages: Array<Pick<AssistantMessage, "role" | "text" | "toolCalls">>,
+): string[][] {
+  return keptMessages(messages)
+    .filter((message) => message.role === "assistant")
+    .map((message) => [
+      ...new Set(
+        (message.toolCalls ?? [])
+          .filter((call) => !call.error && !NOT_LOOKUPS.has(call.name))
+          .map((call) => call.name),
+      ),
+    ]);
 }
 
 /** A park or ride id an earlier answer used. */
@@ -647,6 +732,8 @@ export function lookedUpIds(
       const input = call.input as Record<string, unknown>;
       add("ride", input.rideId);
       list(input.rideIds).forEach((id) => add("ride", id));
+      // plan_add_rides' rides: an id or a name each; add keeps the ids only.
+      list(input.rides).forEach((id) => add("ride", id));
       add("park", input.park);
       add("park", input.parkId);
       list(input.parks).forEach((id) => add("park", id));

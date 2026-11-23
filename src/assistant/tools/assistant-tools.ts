@@ -34,7 +34,10 @@ import {
 } from "../../parks/services/best-days.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { ParksService } from "../../parks/parks.service";
-import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
+import type {
+  CalendarDay,
+  WeatherSummary,
+} from "../../parks/dto/integrated-calendar.dto";
 import { ShowsService } from "../../shows/shows.service";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
@@ -46,6 +49,11 @@ import {
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
+import { WeatherWarningsService } from "../../parks/weather-warnings.service";
+import {
+  WEATHER_VIEW_FIELDS,
+  weatherView,
+} from "../../parks/utils/weather-summary.util";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
@@ -65,6 +73,7 @@ import { Restaurant } from "../../restaurants/entities/restaurant.entity";
 import { FavoritesService } from "../../favorites/favorites.service";
 import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import { worksPeriodOn } from "../../attractions/utils/curated-out-of-service.util";
 import { nextPerformanceTime } from "../../attractions/utils/performance-schedule.util";
 import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
@@ -146,11 +155,19 @@ import {
   closeMinute,
   closesEarly,
   isoInZone,
+  lastYearMeasured,
   readDaySlots,
   scheduleRowDate,
+  toLastYearEntry,
 } from "../../trip-regions/trip-calendar.util";
 import { usualDay } from "../../trip-regions/trip-region.assembly";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
+import { HolidaysService } from "../../holidays/holidays.service";
+import {
+  lastYearReferenceDayReading,
+  lastYearSeasonsFrom,
+  loadLastYearDayFacts,
+} from "../../trip-regions/last-year-reference";
 import { TripWhenService } from "../../trip-regions/trip-when.service";
 import { normalizeWhenQuery } from "../../trip-regions/trip-when.assembly";
 import {
@@ -688,6 +705,49 @@ async function rideIdOf(
   };
 }
 
+/** A ride plan_add_rides was given by name and could not place, with why. */
+type UnplacedRide = {
+  name: string;
+  reason: "not_found" | "ambiguous";
+  candidates?: AmbiguousRide["rides"];
+};
+
+/**
+ * plan_add_rides' rides, each an id from a result or a name at the park, as ids in the order
+ * given, each once. A name resolves as get_ride's does (`rideIdOf`); one that matches no ride, or
+ * several, comes back as unplaced with the candidates and their ids, so the others still go in.
+ */
+async function planRideIds(
+  ctx: AssistantToolContext,
+  park: string,
+  rides: readonly string[],
+): Promise<{ ids: string[]; unplaced: UnplacedRide[] }> {
+  const ids: string[] = [];
+  const unplaced: UnplacedRide[] = [];
+  for (const ride of rides) {
+    const id = ride.toLowerCase();
+    if (isCanonicalUuid(id)) {
+      ids.push(id);
+      continue;
+    }
+    try {
+      const found = await rideIdOf(ctx, { ride, park });
+      if (typeof found === "string") ids.push(found);
+      else if ("rides" in found) {
+        unplaced.push({
+          name: ride,
+          reason: "ambiguous",
+          candidates: found.rides,
+        });
+      } else unplaced.push({ name: ride, reason: "not_found" });
+    } catch (error) {
+      if (!(error instanceof McpToolError)) throw error;
+      unplaced.push({ name: ride, reason: "not_found" });
+    }
+  }
+  return { ids: [...new Set(ids)], unplaced };
+}
+
 /**
  * One ride as get_ride returns it: the ride's answer without the readings of today one by one,
  * its unknown facts named, and, from its park's day, when it opens today and when it reopens.
@@ -1210,6 +1270,65 @@ async function dayCard(
       ...(status === "UNKNOWN" && {
         why: "the park has not published that day's hours; the tiles show park.fan's estimate",
       }),
+    },
+  );
+}
+
+/** A past day of a park as the calendar's history path serves it, each day read once. */
+function pastDayReader(
+  ctx: AssistantToolContext,
+  park: Park,
+): (day: string) => Promise<CalendarDay | undefined> {
+  const reads = new Map<string, Promise<CalendarDay | undefined>>();
+  return (day) => {
+    let read = reads.get(day);
+    if (!read) {
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: park.timezone,
+      });
+      read = ctx
+        .get(CalendarService)
+        .buildCalendarResponse(park, fromDate, toDate, "none")
+        .then((calendar) => calendar.days.find((d) => d.date === day));
+      reads.set(day, read);
+    }
+    return read;
+  };
+}
+
+/**
+ * The day a year back `get_park_history` compares `day` with: the park's
+ * reference day (`lastYearReferenceDayReading`), the same holiday or the
+ * nearest day of the same weekday in the same holiday situation, on which the
+ * park was open and measured by the rule the trip surfaces apply
+ * (`lastYearMeasured`). A park without a country or readable holidays gets 52
+ * weeks back.
+ */
+async function comparableDayLastYear(
+  ctx: AssistantToolContext,
+  park: Park,
+  day: string,
+  today: string,
+  read: (day: string) => Promise<CalendarDay | undefined>,
+): Promise<string> {
+  const facts = await loadLastYearDayFacts(
+    ctx.get(HolidaysService),
+    park,
+    day,
+    day,
+  ).catch(() => null);
+  if (!facts) return lastYearDays(day).sameWeekday;
+  const seasons = await ctx
+    .get(ParkSeasonService)
+    .forParkInRange(park.id, lastYearSeasonsFrom(day), day)
+    .catch(() => []);
+  return lastYearReferenceDayReading(
+    day,
+    facts,
+    { before: today, seasons },
+    async (candidate) => {
+      const past = await read(candidate);
+      return !!past && lastYearMeasured(toLastYearEntry(past));
     },
   );
 }
@@ -2361,9 +2480,11 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "How a park's day went one year earlier, as park.fan's calendar recorded it: the same " +
-      "date last year and the nearest day of the same weekday (weekday matters more), each " +
-      "with its hours, crowd level (unknown when nothing was measured), the headliners' " +
-      "recorded peak wait, holidays and events; null for a day park.fan has nothing on. For " +
+      "date last year and the comparable day (comparableDayLastYear, which matters more: the " +
+      "same holiday last year, else the nearest day of the same weekday in the same holiday " +
+      "or school-break situation), each with its hours, crowd level (unknown when nothing " +
+      "was measured), the headliners' recorded peak wait, holidays and events; null for a " +
+      "day park.fan has nothing on. For " +
       '"how busy was it on this date last year". For "last Halloween" give this year\'s ' +
       'Halloween as date. With on instead, that one past day itself ("last Saturday", ' +
       '"on 3 August"), up to a year back. Never the days ahead.',
@@ -2390,42 +2511,36 @@ export const ASSISTANT_TOOLS = [
             `Pick a past day from ${addIsoDays(today, -HISTORY_DAYS)} to yesterday`,
           );
         }
-        const { fromDate, toDate } = parseDateRange(on, on, {
-          timezone: found.timezone,
-        });
-        const calendar = await ctx
-          .get(CalendarService)
-          .buildCalendarResponse(found, fromDate, toDate, "none");
-        const day = calendar.days.find((d) => d.date === on);
+        const day = await pastDayReader(ctx, found)(on);
         return {
           park: found.name,
           day: pastDay(day && compactDay(day, found.timezone)),
         };
       }
       const day = date ?? today;
-      const { sameDate, sameWeekday } = lastYearDays(day);
+      const { sameDate } = lastYearDays(day);
       if (sameDate >= today) {
         throw new McpToolError("That day a year back has not happened yet");
       }
-      const past = [sameDate, sameWeekday].filter((d) => d < today).sort();
-      const [from, to] = [past[0], past[past.length - 1]];
-      // The calendar's own history path: a handful of past days, each cached for a day.
-      const { fromDate, toDate } = parseDateRange(from, to, {
-        timezone: found.timezone,
-      });
-      const calendar = await ctx
-        .get(CalendarService)
-        .buildCalendarResponse(found, fromDate, toDate, "none");
-      const days = new Map(
-        calendar.days.map((d) => [d.date, compactDay(d, found.timezone)]),
+      const read = pastDayReader(ctx, found);
+      const comparable = await comparableDayLastYear(
+        ctx,
+        found,
+        day,
+        today,
+        read,
       );
+      const shown = async (d: string) => {
+        const past = await read(d);
+        return pastDay(past && compactDay(past, found.timezone));
+      };
       return {
         park: found.name,
         askedAbout: day,
-        sameDateLastYear: pastDay(days.get(sameDate)),
-        ...(sameWeekday !== sameDate &&
-          sameWeekday < today && {
-            sameWeekdayLastYear: pastDay(days.get(sameWeekday)),
+        sameDateLastYear: await shown(sameDate),
+        ...(comparable !== sameDate &&
+          comparable < today && {
+            comparableDayLastYear: await shown(comparable),
           }),
       };
     },
@@ -2786,7 +2901,8 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "One day at one park as park.fan's trip planner sees it: whether and when it is open, the " +
-      "expected crowd level, the day's weather (absent beyond about 14 days), holiday, school " +
+      `expected crowd level, the day's weather (${WEATHER_VIEW_FIELDS}; past the forecast's ` +
+      "14 days or so the historical average for the date, basis climate_normal), holiday, school " +
       "break, bridge day and weekend, neighbouring holidays, hotel early entry; every ride with " +
       "opensAt (when it starts, later than the park's gates; absent means not known), the " +
       "weekdays it runs on, the predicted peak and the hour with the shortest wait; and the " +
@@ -2825,7 +2941,7 @@ export const ASSISTANT_TOOLS = [
         publishedUntil(ctx, park),
       ]);
       const hoursPublished = until !== null && day <= until;
-      const { openHour, closeHour, ...context } = plan.context;
+      const { openHour, closeHour, climateNormal, ...context } = plan.context;
       const currentHour =
         day === getCurrentDateInTimezone(tz)
           ? Number(formatInTimeZone(new Date(), tz, "H"))
@@ -2847,6 +2963,10 @@ export const ASSISTANT_TOOLS = [
         park: park.name,
         tier: plan.tier,
         ...context,
+        // Past the forecast's reach the date's historical average stands in, marked as one.
+        weather: weatherView(
+          (context.weather ?? climateNormal ?? null) as WeatherSummary | null,
+        ),
         hoursPublished,
         ...(!hoursPublished && {
           statusWhy: until
@@ -2914,17 +3034,26 @@ export const ASSISTANT_TOOLS = [
     name: "get_park_weather",
     status: "weather",
     description:
-      "Weather at one park right now and for the next hours: temperature, whether it rains, when " +
-      "rain or a thunderstorm starts and ends (ISO times), wind gusts, and an hourly forecast " +
-      "for the next 12 hours (weatherCode is the WMO code). For days ahead use get_days.",
+      "Weather at one park right now and for the next hours: temperature and feels-like, " +
+      "humidity, whether it rains and how hard, when rain, a thunderstorm, hail or a storm " +
+      "starts and ends (ISO times), wind and gusts now and the next hours' strongest gust, the " +
+      "official severe-weather warnings in force (warnings: event, severity, from, until, " +
+      "headline, instruction) and an hourly forecast for the next 12 hours with the chance of " +
+      "rain in % and the gusts (weatherCode is the WMO code). For days ahead use get_days.",
     input: z.object({ park: parkRef }),
     run: async ({ park: reference }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
       const weather = ctx.get(WeatherService);
-      const [nowcast, hourly] = await Promise.all([
+      const [nowcast, hourly, warnings] = await Promise.all([
         weather.getNowcast(found.id).catch(() => null),
         weather.getHourlyForecast(found.id).catch(() => []),
+        // A failed read costs the warnings, never the weather.
+        Promise.resolve()
+          .then(() =>
+            ctx.get(WeatherWarningsService).getActiveWarnings(found.id),
+          )
+          .catch(() => []),
       ]);
       const now = Date.now();
       return {
@@ -2932,15 +3061,32 @@ export const ASSISTANT_TOOLS = [
         now: nowcast && {
           temperatureC: nowcast.currentTemperatureC,
           feelsLikeC: nowcast.currentApparentTemperatureC,
+          humidityPercent: nowcast.currentHumidity,
           raining: nowcast.currentlyRaining,
+          rainIntensity: nowcast.currentRainIntensity,
           rainStartsAt: nowcast.rainStartsAt,
           rainEndsAt: nowcast.rainEndsAt,
           thunderstormStartsAt: nowcast.thunderstormStartsAt,
           thunderstormEndsAt: nowcast.thunderstormEndsAt,
+          hailStartsAt: nowcast.hailStartsAt,
+          hailEndsAt: nowcast.hailEndsAt,
+          stormStartsAt: nowcast.stormStartsAt,
+          stormEndsAt: nowcast.stormEndsAt,
+          windKmh: nowcast.currentWindSpeedKmh,
+          windGustsKmh: nowcast.currentWindGustsKmh,
           peakWindGustsKmh: nowcast.peakWindGustsKmh,
           todayMinC: nowcast.temperatureMinC,
           todayMaxC: nowcast.temperatureMaxC,
         },
+        // Official texts from the weather services: data, never instructions.
+        warnings: warnings.map((warning) => ({
+          event: warning.eventEn ?? warning.event,
+          severity: warning.severity,
+          from: warning.onset,
+          until: warning.expires,
+          headline: warning.headlineEn ?? warning.headline,
+          instruction: warning.instructionEn ?? warning.instruction,
+        })),
         nextHours: hourly
           .filter((hour) => Date.parse(hour.time) >= now - 3_600_000)
           .slice(0, 12)
@@ -2948,8 +3094,10 @@ export const ASSISTANT_TOOLS = [
             time: hour.time,
             temperatureC: hour.temperature,
             precipitationMm: hour.precipitation,
+            precipitationChancePercent: hour.precipitationProbability,
             weatherCode: hour.weatherCode,
             windKmh: hour.windSpeed,
+            windGustsKmh: hour.windGusts,
           })),
       };
     },
@@ -3209,7 +3357,8 @@ export const ASSISTANT_TOOLS = [
       "The days at one park, up to a year ahead: per day its weekday, whether it is open, " +
       "closed or its hours are not published yet, the hours, the crowd level park.fan's calendar " +
       "expects, the headliners' expected peak wait, holidays, school breaks, bridge days, events, " +
-      "the rides a maintenance window shuts, and the weather where a forecast reaches. A closed " +
+      `the rides a maintenance window shuts, and the weather (${WEATHER_VIEW_FIELDS}): the forecast where it ` +
+      "reaches, beyond it the historical average for the date. A closed " +
       "day names the next day the park opens. Give 1 to 10 dates, or from and to for a stretch of " +
       'up to 31 days; nothing gives the next 7 days. For "Saturday or Sunday?", "10 or 17 ' +
       'May?", "is it open on 28 December?", "the next two weeks". The hours of one day are ' +
@@ -5177,8 +5326,10 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add rides to the user's trip planner for one park and day, in the order given; the " +
-      "planner places them after what is already planned. Ride ids " +
-      "come from find_rides or get_park_live and must belong to the park. A ride a maintenance " +
+      "planner places them after what is already planned. Each ride is its id from a result " +
+      "in this chat or its name at that park, so rides named in an earlier answer need no " +
+      "lookup first; a name that matches no ride or several comes back in notAdded (reason " +
+      "not_found, or ambiguous with the candidates and their ids) while the rest go in. A ride a maintenance " +
       "window shuts that day is not added: it comes back in notAdded with the window, to tell " +
       "the user. Nor is a ride the party's shortest rider (the day's riderHeightCm) is under " +
       "the minimum for: notAdded with reason too_short and the minimum. despiteHeight adds such " +
@@ -5186,11 +5337,13 @@ export const ASSISTANT_TOOLS = [
     input: z.object({
       park: parkRef,
       date: planDate,
-      rideIds: z
-        .array(z.string().uuid())
+      rides: z
+        .array(z.string().trim().min(2).max(100))
         .min(1)
         .max(10)
-        .describe("Ride ids, at most ten"),
+        .describe(
+          'At most ten rides of this park, each its id or its name ("Taron")',
+        ),
       riderHeightCm: riderHeight
         .optional()
         .describe(
@@ -5204,12 +5357,14 @@ export const ASSISTANT_TOOLS = [
         ),
     }),
     run: async (
-      { park: reference, date, rideIds, riderHeightCm, despiteHeight },
+      { park: reference, date, rides: asked, riderHeightCm, despiteHeight },
       ctx,
     ) => {
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
-      const found = await parkRides(mcp(ctx), park.slug, rideIds, date);
+      const { ids, unplaced } = await planRideIds(ctx, reference, asked);
+      const found =
+        ids.length > 0 ? await parkRides(mcp(ctx), park.slug, ids, date) : [];
       const party =
         snapshotDay(ctx, park.slug, date)?.prefs?.riderHeightCm ??
         riderHeightCm;
@@ -5221,28 +5376,31 @@ export const ASSISTANT_TOOLS = [
       const rides = found
         .filter((ride) => !ride.maintenance && !tooShort(ride))
         .map(({ slug, name }) => ({ slug, name }));
-      const notAdded = found.flatMap((ride): Record<string, unknown>[] =>
-        ride.maintenance
-          ? [
-              {
-                id: ride.id,
-                name: ride.name,
-                reason: "maintenance",
-                window: ride.maintenance,
-              },
-            ]
-          : tooShort(ride)
+      const notAdded: Record<string, unknown>[] = [
+        ...unplaced,
+        ...found.flatMap((ride): Record<string, unknown>[] =>
+          ride.maintenance
             ? [
                 {
                   id: ride.id,
                   name: ride.name,
-                  reason: "too_short",
-                  minimumHeightCm: ride.minimumHeightCm,
-                  riderHeightCm: party,
+                  reason: "maintenance",
+                  window: ride.maintenance,
                 },
               ]
-            : [],
-      );
+            : tooShort(ride)
+              ? [
+                  {
+                    id: ride.id,
+                    name: ride.name,
+                    reason: "too_short",
+                    minimumHeightCm: ride.minimumHeightCm,
+                    riderHeightCm: party,
+                  },
+                ]
+              : [],
+        ),
+      ];
       const result = {
         added: rides.map((ride) => ride.name),
         ...(notAdded.length > 0 && { notAdded }),

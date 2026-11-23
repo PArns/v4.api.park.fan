@@ -335,9 +335,7 @@ export function metricRowOf(input: {
     status: input.status,
     errorCode: input.errorCode ?? null,
     latencyMs: Math.max(0, Math.round(input.latencyMs)),
-    // `/best-days` has no cache of its own: the calendar's is the answer's.
-    cache:
-      (input.route === "best_days" ? trace.calendarCache : trace.cache) ?? null,
+    cache: trace.cache ?? null,
     calendarCache: trace.calendarCache ?? null,
     exact: facts.exact,
     relaxed: facts.relaxed,

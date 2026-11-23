@@ -499,19 +499,23 @@ describe("a metric row", () => {
     expect(regionOf(undefined)).toBe(UNKNOWN_REGION);
   });
 
-  it("takes the calendar's cache for the best days, and clamps the counts", () => {
+  it("keeps the best days' own cache apart from the calendar's, and clamps the counts", () => {
     const row = metricRowOf({
       route: "best_days",
       region: "orlando",
       at: new Date("2026-11-14T17:42:31Z"),
       latencyMs: 12.6,
-      trace: { calendarCache: "hit", shape: { rangeDays: 99999 } },
+      trace: {
+        cache: "miss",
+        calendarCache: "hit",
+        shape: { rangeDays: 99999 },
+      },
       status: 200,
     });
     expect(row).toMatchObject({
       bucket: new Date("2026-11-14T17:00:00Z"),
       route: "best_days",
-      cache: "hit",
+      cache: "miss",
       calendarCache: "hit",
       latencyMs: 13,
       rangeDays: 32767,

@@ -88,7 +88,7 @@ describe("MlOverviewService", () => {
       unclear: 0,
       worse: 0,
     });
-    expect(out.decisions).toHaveLength(8);
+    expect(out.decisions).toHaveLength(9);
     expect(out.decisions.some((d) => d.state === "ready")).toBe(false);
   });
 
@@ -277,7 +277,7 @@ describe("MlOverviewService", () => {
     const chronos = out.components.find((c) => c.id === "chronos");
     expect(chronos).toMatchObject({
       status: "warming",
-      note: "lädt Historie (12 von 70 Parks liefern schon)",
+      note: "Live ausgeliefert · lädt Historie (12 von 70 Parks liefern schon)",
     });
   });
 

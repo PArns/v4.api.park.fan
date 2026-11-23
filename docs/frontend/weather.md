@@ -20,8 +20,15 @@ the licence requires it.
 ```jsonc
 { "date": "2026-10-27", "dataType": "current", "temperatureMax": 14.2, "temperatureMin": 6.1,
   "precipitationSum": 0.4, "rainSum": 0.4, "snowfallSum": 0, "weatherCode": 61,
-  "weatherDescription": "Rain, slight intensity", "windSpeedMax": 18.0 }
+  "weatherDescription": "Rain, slight intensity", "windSpeedMax": 18.0,
+  "windGustsMax": 41.4, "precipitationProbabilityMax": 65, "precipitationHours": 3,
+  "uvIndexMax": 1.2, "sunshineHours": 2.4 }
 ```
+
+- `precipitationProbabilityMax` is the highest chance of precipitation in any hour of the day (%),
+  `precipitationHours` how many hours have some, `windGustsMax` the strongest gust (km/h),
+  `sunshineHours` the sunshine over the day. All five are `null` on a row stored before they were
+  fetched (PAR-1393).
 
 - `dataType`: `historical` for past days, `current` for the park's today, `forecast` after it. Units:
   °C, mm, cm, km/h; `weatherCode` is WMO.
@@ -32,7 +39,9 @@ the licence requires it.
 - A day without a row is simply missing, and a park without coordinates answers `weather: []`.
 - The live fields (current temperature, humidity, `isDay`) are not on these endpoints: they are on the
   park payload's `weather.now` and on the nowcast. Climate normals past the forecast are served by the
-  calendar only.
+  calendar (with their spread: `tempMaxP25`…`tempMinP75`, `wetDayPercent`), the day planner's
+  `climateNormal` and the trip planner's `climate` blocks
+  ([the spread](../architecture/weather.md#the-spread-typically-1618-c)).
 
 ## The nowcast
 

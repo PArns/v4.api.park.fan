@@ -899,11 +899,12 @@ const STEP_GUIDE: Record<Exclude<InterviewStep, "refine">, StepGuide> = {
   day: {
     ask: "which park and which day",
     apply: "plan_day",
-    chips: "today / tomorrow / a park by name",
+    chips:
+      "today / tomorrow / a real park by its name (the page's, one in their plans, else a big park they may mean)",
   },
   mustdo: {
     ask: "the rides they must not miss",
-    apply: "plan_add_rides with the rides' ids",
+    apply: "plan_add_rides with the rides, by id or by name",
     chips: "two headliners by name / the biggest coasters / whatever is quiet",
   },
   heights: {

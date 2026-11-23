@@ -111,9 +111,19 @@ function applyPlan(state: any, params: any): any {
  * plan is BUILT on the wait alone, and the search and the incumbent measure it
  * the same way.
  *
- *     pnpm test:planner-optimize
- *     BENCH=1 pnpm test:planner-optimize   # plus the timing table for §16
+ *     pnpm test -- optimize.vectors
+ *     pnpm test:planner-exhaustive              # plus §16's eight rides, every order
+ *     BENCH=1 pnpm test:planner-exhaustive      # plus the timing table for §16
+ *
+ * §16 enumerates all 40,320 orders of eight rides, about a minute alone, so it
+ * runs only with `PLANNER_EXHAUSTIVE=1`: CI sets it when a pull request touches
+ * src/planner/day-optimizer/, and so does anyone who changes the optimizer
+ * (docs/frontend/plan-day/optimize.md#checks). Without it the test shows as
+ * skipped, never as passed.
  */
+
+/** §16's eight-ride enumeration runs: `PLANNER_EXHAUSTIVE=1` (`pnpm test:planner-exhaustive`). */
+const EXHAUSTIVE = process.env.PLANNER_EXHAUSTIVE === "1";
 
 const failures: string[] = [];
 function check(name: string, ok: unknown, detail: unknown = ""): any {
@@ -1632,9 +1642,11 @@ function idleOfPlan(payload?: any, stops?: any): any {
 // It named a runtime and an optimum for "eight rides across four lands with six
 // different turning points" and the instance was written down nowhere, so the
 // numbers could not be re-measured or disputed. It lives here now. The brute
-// force over all 40,320 orders runs on every pass, because it is the assertion
-// the docstring's claim rests on; the timing table for ten to twenty-four stops
-// is behind `BENCH=1`, since a wall-clock number is not something to assert.
+// force over all 40,320 orders is the assertion the docstring's claim rests on;
+// it takes about a minute, so it runs with `PLANNER_EXHAUSTIVE=1` (CI sets it for
+// every change to the optimizer). The timing table for ten to twenty-four stops
+// is behind `BENCH=1` as well, since a wall-clock number is not something to
+// assert.
 const BENCH_LANDS = ["A", "B", "C", "D"];
 const BENCH_TURNS = [10, 11, 12, 13, 14, 16];
 
@@ -1668,7 +1680,7 @@ function benchInput(n?: any): any {
   };
 }
 
-{
+if (EXHAUSTIVE) {
   const input = benchInput(8);
   const slugs = input.entries.map((e: any) => e.attractionSlug);
 
@@ -2236,4 +2248,13 @@ describe("day optimizer vectors", () => {
   it("holds every vector ported from park.fan", () => {
     expect(failures).toEqual([]);
   });
+
+  // Ran at load with the vectors above, and failed there; listed here so a run
+  // without it says it was skipped rather than reporting it as held.
+  (EXHAUSTIVE ? it : it.skip)(
+    "finds the best of all 40,320 orders of eight rides (§16, PLANNER_EXHAUSTIVE=1)",
+    () => {
+      expect(failures).toEqual([]);
+    },
+  );
 });

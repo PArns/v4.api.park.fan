@@ -89,6 +89,19 @@ by the key guard). It answers 400 for:
       "warnings": ["hours_not_published"],
       "seasons": [], // ids into `seasons`
       "closesEarlyDays": 0,
+      "climate": {
+        // the window's typical weather at the climate park, over all its days; never a forecast
+        "tempMax": 22.1,
+        "tempMin": 11.8,
+        "tempMaxP25": 20.4,
+        "tempMaxP75": 24,
+        "tempMinP25": 9.6,
+        "tempMinP75": 14.1,
+        "precipitationMm": 18, // the window's total
+        "wetDayPercent": 21,
+        "basis": "climate_normal",
+        "period": "2015-2024",
+      },
       "plan": {
         "days": [
           { "date": "2027-02-16", "kind": "arrival", "parks": [] },
@@ -114,7 +127,12 @@ by the key guard). It answers 400 for:
       "climate": {
         "tempMax": 20.7,
         "tempMin": 11.3,
-        "precipitationMm": 72,
+        "tempMaxP25": 18.4,
+        "tempMaxP75": 23.6,
+        "tempMinP25": 8.2,
+        "tempMinP75": 14.9,
+        "precipitationMm": 72, // the month's total
+        "wetDayPercent": 19,
         "basis": "climate_normal",
         "period": "2015-2024",
       },
@@ -154,8 +172,8 @@ by the key guard). It answers 400 for:
   hold (`plan.unplaced`), so a window that drops a chosen park ranks behind every window that keeps
   it. **Every day is on the measured scale**
   ([the day's figure](./trip-regions.md#the-days-get-v1trip-regionsorlandocalendarfromto)):
-  within 60 days the forecast times its lead factor, past them the same weekday a year back as
-  measured, never the long-range forecast, which read 42 % low and almost flat against 2026
+  within 60 days the forecast times its lead factor, past them the matching day a year back as
+  measured ([which day](./trip-regions.md#the-matching-day-a-year-back)), never the long-range forecast, which read 42 % low and almost flat against 2026
   (PAR-1319). It includes extreme heat and the storm season
   ([how a day is priced](./trip-regions.md#how-a-day-is-priced)), and the storm peak's window term
   ([below](#how-the-storm-peak-ranks)). Windows are compared by that sum per visit, and **windows
@@ -181,6 +199,11 @@ by the key guard). It answers 400 for:
   the warnings stay as they were. The term is in `penalties` (per park day), never in
   `headlinerWait`, `weeks` or `months`, and no plan carries it: a trip whose dates are chosen is
   planned as before.
+- **`climate`**: the window's typical weather at the region's climate park, over all its days, in
+  the plan day's shape ([typical weather](./trip-regions.md#typical-weather)): the means, the range
+  half of such days' highs and lows fell in, the window's total precipitation and the chance of a
+  rain day. Never a forecast; absent while the normals are not cached. "Typically 20–24 °C, rain on
+  2 of 10 days" next to a window answers "and what's the weather like then?".
 - **`penalties`** (`{ heat?, hurricane? }`, `{ heat?, typhoon? }` in Japan): what heat and the
   region's storm season added to the ranking, in minutes per park day, one decimal, absent when both
   are zero. `headlinerWait` never
@@ -202,10 +225,13 @@ by the key guard). It answers 400 for:
     theirs.
   - `climate`: the climate normals (2015–2024, ERA5) at the region's climate park
     (`weather.climatePark` on the region route: Magic Kingdom in Orlando, Disneyland Park in
-    Southern California and in Paris, one park for a region in several cities), from `WeatherService.getClimateNormals`: the month's mean high and low and its total
-    precipitation. Never a forecast. Absent while the normals are not cached yet (the service
-    fetches them in the background). No `rainDays`: a normal is a mean per calendar day, and a mean
-    of 3 mm does not say on how many days it rains.
+    Southern California and in Paris, one park for a region in several cities), from `WeatherService.getClimateNormals`: the month's mean high and low, the range half of
+    its days' highs and lows fell in (`tempMaxP25`…`tempMinP75`), its total precipitation and the
+    chance of a rain day (`wetDayPercent`, at least 1 mm), in the shape of a plan day's
+    [typical weather](./trip-regions.md#typical-weather). Never a forecast. Absent while the
+    normals are not cached yet (the service fetches them in the background). No count of rain
+    days: `wetDayPercent` is the share over ten years' days, which says what a count would without
+    claiming to know this month's.
   - `localSchoolBreakDays`: the days of the range in the month that the region's calendar flags
     `isSchoolVacation` or `isHoliday`, each with its holiday names joined: the region's own school
     breaks and holidays (the US's in Orlando, Japan's in Japan, France's in Paris).
@@ -216,9 +242,11 @@ by the key guard). It answers 400 for:
     evening.
   - `dayGuestHours`: the mean day-guest open hours over the month's OPERATING days of the chosen
     headliner parks, one decimal; absent where no hours are published.
-  - `hurricaneSeason` (a region with a hurricane season: Orlando, June to November) or
-    `typhoonSeason` (Japan): the month touches the storm season, by its mid-month weight. Absent in
-    a region without one.
+  - `hurricaneSeason` (a region with a hurricane season: Orlando, August to October) or
+    `typhoonSeason` (Japan, August to October): a day of the calendar month lies in the storm
+    season, either half month weighs (`monthTouchesStorm`). Absent in a region without one. Which
+    months are the season: [one rule for every region](./trip-regions.md#how-a-day-is-priced)
+    (PAR-1411; until then June, July and November counted too).
   - `rainySeason` (Japan only): a day of the month in the range lies in the rainy season.
 
   `weeks` and `months` show the plain figures, without the heat and storm terms.
@@ -240,7 +268,7 @@ by the key guard). It answers 400 for:
 
   **Warnings**:
   - `school_break`: a day of the window is a school break of the region's own calendar;
-  - `hurricane_season`: the window touches 1 June to 30 November, a fact about the season;
+  - `hurricane_season`: the window touches 1 August to 31 October, a fact about the season;
   - `hurricane_peak`: and touches its peak, 15 August to 15 October;
   - `typhoon_season`, `typhoon_peak`: the same for Japan's typhoon season and its peak (the
     region route's `weather.storm`); a region has the codes of its own storm season only;
@@ -334,9 +362,11 @@ specs) the search always runs to the end. With tickets (measured on the dev shim
 UK 14-day tickets take 0.35 s and a US 4-day and a 3-day ticket 0.6 s, every window planned twice
 for the mixing comparison ([tickets](./trip-regions.md#tickets)).
 
-**Reads.** The days come from the same calendar read as `/calendar`, over the whole range plus its
-two-week reference span: one read per park and month from the month caches, the last-year
-snapshots for every day (−12 … 0 for a year's range), no ML call. The warmup keeps a region park's
+**Reads.** The days come from the region calendar `/calendar` reads, by month: the months any trip
+route of the region built within the hour are read from Redis, and the rest are built together over
+their span plus the two-week reference span: one read per park and month from the month caches, the
+last-year snapshots for every day (−12 … 0 for a year's range), no ML call
+([caching](./trip-regions.md#caching-and-cost)). The warmup keeps a region park's
 months to +13 and the snapshots −12 … −1 so a year's range is all cache hits
 ([trip regions](./trip-regions.md#caching-and-cost)). An answer is kept six hours in Redis
 (`trip-regions:when:v4:{region}:{query}`) by its normalized query.
@@ -372,7 +402,9 @@ trips to all of them, so every region offers every country below; only "today" i
   `/when` resolves `within` through this list, one source. A region's periods are its own rows and
   the country's nationwide ones, merged into runs of consecutive days (a break ending on a Friday
   and one starting the Monday after are one run), each widened over the weekend before and after
-  it, since there is no school on either. A period is named by the name most of its days carry.
+  it, since there is no school on either. The weekend is the country's (`isCountryWeekendDate`):
+  an Israeli break from Sunday to Thursday takes in the Friday and Saturday on either side. A
+  period is named by the name most of its days carry.
 - **The regions offered**, by country (the names are the regions' own):
   - DE: the 16 states, `DE-BW` … `DE-TH`.
   - AT: the 9 states as OpenHolidays codes them: `AT-BL`, `AT-KÄ`, `AT-NÖ`, `AT-OÖ`, `AT-SB`,

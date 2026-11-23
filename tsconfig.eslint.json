@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": { "isolatedModules": true },
   "include": ["src/**/*", "scripts/**/*", "test/**/*"],
   "exclude": ["node_modules", "dist"]
 }

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import {
   CYCLE_WINDOW_DAYS,
@@ -17,6 +17,7 @@ import { Queue } from "bull";
 import { CronExpressionParser } from "cron-parser";
 import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
 import { newestSuccessByName, settledAt } from "../queues/queue-job-history";
+import { DisplayConsistencyService } from "./display-consistency/display-consistency.service";
 
 /**
  * Three detectors for the ways this system went quietly wrong for weeks.
@@ -283,12 +284,14 @@ export class DataQualityMonitorService {
   constructor(
     private readonly dataSource: DataSource,
     @InjectQueue("analytics") private readonly analyticsQueue: Queue,
+    @Optional() private readonly displayConsistency?: DisplayConsistencyService,
   ) {}
 
   /**
    * The admin's data-quality report in one read: the four detectors the
-   * dashboard and the MCP server show side by side. `windowDays` bounds the
-   * cluster detector only.
+   * dashboard and the MCP server show side by side, and the last daily
+   * display-consistency run's count of mismatches per park (null when none ran
+   * in two days). `windowDays` bounds the cluster detector only.
    */
   async report(windowDays: number) {
     const [
@@ -296,11 +299,15 @@ export class DataQualityMonitorService {
       failingJobs,
       absenceRetiredUnreviewed,
       reissueCandidates,
+      displayConsistency,
     ] = await Promise.all([
       this.findSilencedClusters(windowDays),
       this.findFailingJobs(),
       this.findAbsenceRetiredUnreviewed(),
       this.findReissueCandidates(),
+      Promise.resolve()
+        .then(() => this.displayConsistency?.latestSummary() ?? null)
+        .catch(() => null),
     ]);
     return {
       windowDays,
@@ -308,6 +315,7 @@ export class DataQualityMonitorService {
       failingJobs,
       absenceRetiredUnreviewed,
       reissueCandidates,
+      displayConsistency,
     };
   }
 

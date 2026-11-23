@@ -43,6 +43,7 @@ find what runs when, or before adding a queue or a cron.
 | `analytics` / `calculate-percentiles` | 02:00 | `queue_data_aggregates` (P25…P99 per hour) |
 | `analytics` / `detect-seasonal` | 02:30 | [Seasonality](attraction-status/seasonality.md) and the [maze rule](attraction-status/maze-rule.md) |
 | `analytics` / `monitor-data-quality` | 06:45 | Silenced clusters, silent parks, failing jobs (below), blind-park days without usable hours (PAR-1094) |
+| `analytics` / `check-display-consistency` | 09:40, 23:40 | Every surface's value of a park-day compared where they must agree, park.fan's calendar and best-days relays included, over the parks in a running season and the most read park pages: after the 08:00 calendar warmup and its ring, and after midnight in Europe, when today has moved on under the evening's copies ([display consistency](../analytics/display-consistency.md#where-it-runs)) |
 | `stats` / `update-today-stats`, `finalize-yesterday-stats` | hourly; 01:00 | `park_daily_stats` |
 | `stats` / `plan-day-coverage` | 09:00 | `/plan/day` coverage measurement |
 | `p50-baseline` / `calculate-park-baselines`, `calculate-attraction-baselines` | 03:00; 04:00 | P50 + P90 (548 days) and typical-day-peak ([crowd levels](../analytics/crowd-levels.md)) |

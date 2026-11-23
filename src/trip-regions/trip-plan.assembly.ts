@@ -5,6 +5,8 @@
  * docs/frontend/trip-regions.md.
  */
 import { BadRequestException } from "@nestjs/common";
+import type { ClimateNormals } from "../external-apis/weather/climate-normals";
+import { climateOfDates, climateParkOfDay } from "./trip-climate";
 import { isoDateWeekday, isoDaysBetween } from "../common/utils/date.util";
 import {
   hotelKinds,
@@ -941,6 +943,12 @@ export interface PlanResponseContext {
    * named and no fireworks view is suggested.
    */
   shows?: EveningShows;
+  /**
+   * The climate normals of the parks the days' typical weather is read at
+   * (`climateParkOf`), by slug. Absent, or a park missing: its days carry no
+   * `climate`.
+   */
+  climate?: ReadonlyMap<string, ClimateNormals>;
 }
 
 /**
@@ -1219,12 +1227,17 @@ export function planResponse(
     days: plan.days.map((raw) => {
       const { day, area } = withStay(raw, q, region.timezone);
       const evening = evenings.get(day.date);
+      const climate = climateOfDates(
+        ctx.climate?.get(climateParkOfDay(region, raw)),
+        [day.date],
+      );
       return {
         ...withTravel(day, legs, q.stays ? area : q.area),
         ...(day.ticket
           ? windowDayOf(day, tickets.summaries)
           : tickets.days.get(day.date)),
         ...(evening && { evening }),
+        ...(climate && { climate }),
       };
     }) as unknown as Array<Record<string, unknown>>,
     parks: plan.parks as unknown as Array<Record<string, unknown>>,

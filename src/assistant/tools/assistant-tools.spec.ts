@@ -449,12 +449,16 @@ import {
   CHAT_END_COOLDOWN_MINUTES,
 } from "./assistant-tools";
 import { PlanDayService } from "../../parks/services/plan-day.service";
+import { WeatherService } from "../../parks/weather.service";
+import { WeatherWarningsService } from "../../parks/weather-warnings.service";
 import { CalendarService } from "../../parks/services/calendar.service";
+import { ParkSeasonService } from "../../parks/services/park-season.service";
+import { HolidaysService } from "../../holidays/holidays.service";
 import { FavoritesService } from "../../favorites/favorites.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { ShowsService } from "../../shows/shows.service";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
-import { addIsoDays } from "../../common/utils/date.util";
+import { addIsoDays, eachIsoDate } from "../../common/utils/date.util";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 
@@ -493,13 +497,157 @@ describe("the same day last year", () => {
       providers,
     );
     expect(json.sameDateLastYear).toBeNull();
-    expect(json.sameWeekdayLastYear).toMatchObject({
+    // A park without a country reads 52 weeks back.
+    expect(json.comparableDayLastYear).toMatchObject({
       date: "2025-11-08",
       weekday: "Saturday",
       crowdLevel: "high",
       headlinerPeakWaitMinutes: 55,
       schoolVacation: true,
     });
+  });
+
+  it("compares a holiday with the same holiday last year (PAR-1377)", async () => {
+    const easterMonday = (date: string) => ({
+      date,
+      name: "Easter Monday",
+      localName: "Ostermontag",
+      country: "DE",
+      region: null,
+      holidayType: "public",
+      isNationwide: true,
+    });
+    const buildCalendarResponse = jest.fn(
+      async (_park: unknown, fromDate: Date) => {
+        const date = formatInTimeZone(fromDate, "Europe/Berlin", "yyyy-MM-dd");
+        return {
+          days: [
+            {
+              date,
+              status: "OPERATING",
+              crowdLevel: date === "2026-04-06" ? "very_high" : "low",
+              isHoliday: date === "2026-04-06",
+              isBridgeDay: false,
+              isSchoolVacation: false,
+              headlinerForecast: { avgWait: 30, rides: [], actual: true },
+            },
+          ],
+        };
+      },
+    );
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            ...park,
+            countryCode: "DE",
+            regionCode: "NRW",
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+      [CalendarService, { buildCalendarResponse }],
+      [
+        HolidaysService,
+        {
+          getHolidays: jest.fn(async () => [
+            easterMonday("2026-04-06"),
+            easterMonday("2027-03-29"),
+          ]),
+          getSchoolHolidayCoverage: jest.fn(async () => null),
+        },
+      ],
+      [ParkSeasonService, { forParkInRange: jest.fn(async () => []) }],
+    ]);
+    const { json } = await run(
+      "get_park_history",
+      { park: PARK_ID, date: "2027-03-29" },
+      providers,
+    );
+    // 52 weeks back is Monday 30 March 2026, an ordinary Monday.
+    expect(json.comparableDayLastYear).toMatchObject({
+      date: "2026-04-06",
+      weekday: "Monday",
+      crowdLevel: "very_high",
+    });
+    expect(json.sameDateLastYear).toMatchObject({ date: "2026-03-29" });
+    // Each day is read on its own, once.
+    expect(buildCalendarResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes over a day the park was closed a year back (PAR-1386)", async () => {
+    // NRW's Christmas breaks; Phantasialand opened its winter on 26 December 2025.
+    const breakDays = (from: string, to: string) =>
+      eachIsoDate(from, to).map((date) => ({
+        date,
+        name: "Christmas Holidays",
+        localName: "Weihnachtsferien",
+        country: "DE",
+        region: "DE-NW",
+        holidayType: "school",
+        isNationwide: false,
+      }));
+    const buildCalendarResponse = jest.fn(
+      async (_park: unknown, fromDate: Date) => {
+        const date = formatInTimeZone(fromDate, "Europe/Berlin", "yyyy-MM-dd");
+        const open = date >= "2025-12-26";
+        return {
+          days: [
+            {
+              date,
+              status: open ? "OPERATING" : "CLOSED",
+              crowdLevel: open ? "high" : "closed",
+              isHoliday: false,
+              isBridgeDay: false,
+              isSchoolVacation: date >= "2025-12-22",
+              ...(open && {
+                headlinerForecast: { avgWait: 55, rides: [], actual: true },
+              }),
+            },
+          ],
+        };
+      },
+    );
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            ...park,
+            countryCode: "DE",
+            regionCode: "NRW",
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+      [CalendarService, { buildCalendarResponse }],
+      [
+        HolidaysService,
+        {
+          getHolidays: jest.fn(async () => [
+            ...breakDays("2025-12-22", "2026-01-06"),
+            ...breakDays("2026-12-23", "2027-01-06"),
+          ]),
+          getSchoolHolidayCoverage: jest.fn(async () => null),
+        },
+      ],
+      [ParkSeasonService, { forParkInRange: jest.fn(async () => []) }],
+    ]);
+    const { json } = await run(
+      "get_park_history",
+      { park: PARK_ID, date: "2026-12-23" },
+      providers,
+    );
+    // 52 weeks back, Wednesday 24 December 2025, was a break day too, and closed.
+    expect(json.comparableDayLastYear).toMatchObject({
+      date: "2025-12-31",
+      weekday: "Wednesday",
+      crowdLevel: "high",
+      headlinerPeakWaitMinutes: 55,
+    });
+    // The two days picked, then the same date.
+    expect(buildCalendarResponse).toHaveBeenCalledTimes(3);
   });
 
   it("reads a past day's level unknown where nothing was measured, not the stored forecast", async () => {
@@ -2733,14 +2881,15 @@ describe("planner tools", () => {
       minimumHeight: slug === "taron" ? 130 : null,
     });
     const shut = { from: dayAhead(1), to: dayAhead(30), toUncertain: false };
+    afterEach(() => jest.restoreAllMocks());
     const add = (
-      rideIds: string[],
+      rides: string[],
       plan: typeof planner = planner,
       input: Record<string, unknown> = {},
     ) =>
       runAssistantTool(
         "plan_add_rides",
-        { park: PARK_ID, date: DATE, rideIds, ...input },
+        { park: PARK_ID, date: DATE, rides, ...input },
         {
           ...context(
             new Map<unknown, unknown>([
@@ -2823,6 +2972,68 @@ describe("planner tools", () => {
       expect(result.action).toMatchObject({
         rides: [{ slug: "taron", name: "Taron" }],
       });
+    });
+
+    // "Ja, alle Tipps einplanen" cost five find_rides rounds: the earlier answer's ids were gone.
+    it("takes a ride by its name at the park, so no lookup goes first", async () => {
+      const search = jest
+        .spyOn(findAttractionsTool, "handler")
+        .mockResolvedValue({ attractions: [{ id: TARON, name: "Taron" }] });
+      const result = await add(["taron", RAIK.toUpperCase()]);
+      expect(search.mock.calls[0][0]).toMatchObject({ query: "taron" });
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: ["Taron"],
+        notAdded: [{ name: "Raik", reason: "maintenance" }],
+      });
+    });
+
+    it("names a ride it cannot place and still adds the rest", async () => {
+      jest
+        .spyOn(findAttractionsTool, "handler")
+        .mockResolvedValue({ attractions: [] });
+      const result = await add(["Nirgendwo-Bahn", TARON]);
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: ["Taron"],
+        notAdded: [{ name: "Nirgendwo-Bahn", reason: "not_found" }],
+      });
+    });
+
+    it("hands two rides of one name back with their ids instead of a guess", async () => {
+      jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+        attractions: [
+          { id: TARON, name: "Winja", park: { name: "Phantasialand" } },
+          { id: RAIK, name: "Winja", park: { name: "Phantasialand" } },
+        ],
+      });
+      const result = await add(["Winja"]);
+      expect(result.action).toBeUndefined();
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: [],
+        notAdded: [
+          {
+            name: "Winja",
+            reason: "ambiguous",
+            candidates: [{ id: TARON }, { id: RAIK }],
+          },
+        ],
+      });
+    });
+
+    it("adds a ride named twice once", async () => {
+      jest
+        .spyOn(findAttractionsTool, "handler")
+        .mockResolvedValue({ attractions: [{ id: TARON, name: "Taron" }] });
+      const result = await add(["Taron", TARON]);
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect((result.action as { rides: unknown[] }).rides).toHaveLength(1);
     });
   });
 
@@ -3295,6 +3506,127 @@ describe("reopenSearchFrom", () => {
   });
 });
 
+describe("get_park_weather", () => {
+  beforeEach(() => {
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-07T08:00:00Z"));
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  const providers = (warnings: () => Promise<unknown[]>) =>
+    new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+      [
+        WeatherService,
+        {
+          getNowcast: jest.fn(async () => ({
+            currentTemperatureC: 6,
+            currentApparentTemperatureC: 2,
+            currentHumidity: 91,
+            currentlyRaining: true,
+            currentRainIntensity: "moderate",
+            rainStartsAt: null,
+            rainEndsAt: "2026-11-07T10:15:00+01:00",
+            thunderstormStartsAt: null,
+            thunderstormEndsAt: null,
+            hailStartsAt: null,
+            hailEndsAt: null,
+            stormStartsAt: "2026-11-07T13:00:00+01:00",
+            stormEndsAt: null,
+            currentWindSpeedKmh: 28,
+            currentWindGustsKmh: 52,
+            peakWindGustsKmh: 74,
+            temperatureMinC: 4,
+            temperatureMaxC: 9,
+          })),
+          getHourlyForecast: jest.fn(async () => [
+            {
+              time: "2026-11-07T06:00:00.000Z",
+              temperature: 5,
+              precipitation: 0.4,
+              weatherCode: 61,
+              windSpeed: 20,
+              precipitationProbability: 70,
+              windGusts: 45,
+            },
+            {
+              time: "2026-11-07T09:00:00.000Z",
+              temperature: 6,
+              precipitation: 1.2,
+              weatherCode: 63,
+              windSpeed: 30,
+              precipitationProbability: 90,
+              windGusts: 74,
+            },
+          ]),
+        },
+      ],
+      [WeatherWarningsService, { getActiveWarnings: jest.fn(warnings) }],
+    ]);
+
+  it("gives wind, gusts, the warnings in force and each hour's chance of rain", async () => {
+    const { json } = await run(
+      "get_park_weather",
+      { park: PARK_ID },
+      providers(async () => [
+        {
+          event: "STURMBÖEN",
+          eventEn: "storm gusts",
+          severity: "Moderate",
+          onset: "2026-11-07T12:00:00.000Z",
+          expires: "2026-11-07T20:00:00.000Z",
+          headline: "Amtliche WARNUNG vor STURMBÖEN",
+          headlineEn: "Official WARNING of STORM GUSTS",
+          instruction: null,
+          instructionEn: null,
+        },
+      ]),
+    );
+    expect(json.now).toMatchObject({
+      humidityPercent: 91,
+      rainIntensity: "moderate",
+      // Park time, as every instant Parky reads.
+      stormStartsAt: "2026-11-07 13:00",
+      windKmh: 28,
+      windGustsKmh: 52,
+      peakWindGustsKmh: 74,
+    });
+    expect(json.warnings).toEqual([
+      {
+        event: "storm gusts",
+        severity: "Moderate",
+        from: "2026-11-07 13:00",
+        until: "2026-11-07 21:00",
+        headline: "Official WARNING of STORM GUSTS",
+        instruction: null,
+      },
+    ]);
+    // The hour that has passed is left out, the next one kept.
+    expect(json.nextHours).toEqual([
+      {
+        time: "2026-11-07 10:00",
+        temperatureC: 6,
+        precipitationMm: 1.2,
+        precipitationChancePercent: 90,
+        weatherCode: 63,
+        windKmh: 30,
+        windGustsKmh: 74,
+      },
+    ]);
+  });
+
+  it("answers with the weather when the warnings cannot be read", async () => {
+    const { json } = await run(
+      "get_park_weather",
+      { park: PARK_ID },
+      providers(async () => {
+        throw new Error("warnings down");
+      }),
+    );
+    expect(json.warnings).toEqual([]);
+    expect(json.now.temperatureC).toBe(6);
+  });
+});
+
 describe("get_ride › today / get_park_day", () => {
   // The fixture is 7 November 2026, and `planDate` refuses a day more than two days back, so the
   // clock is the fixture's: a fixed date in the input stops being valid two days after it is written.
@@ -3383,6 +3715,48 @@ describe("get_ride › today / get_park_day", () => {
     });
     expect(json.reopening).toBeUndefined();
     expect(json.bestVisitTimesToday).toBeUndefined();
+  });
+
+  it("gives the day's weather with its units, never the legacy rainChance", async () => {
+    const wet = {
+      ...plan,
+      context: {
+        ...plan.context,
+        weather: {
+          basis: "forecast",
+          condition: "Drizzle, dense intensity",
+          icon: 55,
+          tempMin: -1.5,
+          tempMax: 2.6,
+          rainChance: 12.6,
+          precipitationMm: 12.6,
+          precipitationProbability: 85,
+          precipitationHours: 11,
+          windMax: 24,
+          windGustsMax: 48,
+        },
+      },
+    };
+    const { json } = await run(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      new Map<unknown, unknown>([
+        ...providers(),
+        [PlanDayService, { buildPlanDay: jest.fn(async () => wet) }],
+      ]),
+    );
+    expect(json.weather).toEqual({
+      basis: "forecast",
+      condition: "Drizzle, dense intensity",
+      weatherCode: 55,
+      tempMin: -1.5,
+      tempMax: 2.6,
+      precipitationMm: 12.6,
+      precipitationChancePercent: 85,
+      precipitationHours: 11,
+      windMaxKmh: 24,
+      windGustsMaxKmh: 48,
+    });
   });
 
   it("names the rides a maintenance window shuts that day", async () => {

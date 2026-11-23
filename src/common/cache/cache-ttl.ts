@@ -18,6 +18,26 @@
 export const CALENDAR_WARMUP_MONTH_TTL = 13 * 60 * 60;
 
 /**
+ * How long the season level's inputs live (`CacheKeys.seasonLevelInputs`):
+ * the calendar warmup evicts and rebuilds them every 12 h, and they outlive
+ * the month caches built from them, so a late run finds the months cold
+ * before the inputs, and the months rebuild from the inputs the run left.
+ * Past it, a warmup has failed and the next read recomputes them, which no
+ * forecast ring announces.
+ */
+export const SEASON_LEVEL_INPUTS_TTL = CALENDAR_WARMUP_MONTH_TTL + 60 * 60;
+
+/**
+ * How long a failed load of the season level's inputs is remembered
+ * (`CacheKeys.seasonLevelInputsFailed`). The usual failure is a read running
+ * into its 20-second statement timeout on a loaded database; run again by
+ * every serving read, it adds those 20 seconds to each and load to the
+ * database that caused it. Five minutes, so a passing slowdown costs the
+ * level for minutes, not until the next warmup.
+ */
+export const SEASON_LEVEL_FAILURE_TTL = 5 * 60;
+
+/**
  * The CURRENT month is the exception and keeps its own, much shorter life: its
  * data still moves intraday (today's live level, today's forecast) and it is
  * what somebody checks right after a deploy, so it must not freeze for a whole
@@ -27,9 +47,10 @@ export const CALENDAR_WARMUP_MONTH_TTL = 13 * 60 * 60;
 export const CALENDAR_WARMUP_CURRENT_MONTH_TTL = 2 * 60 * 60;
 
 /**
- * A trip region's calendar and plan answers: an hour, the edge lifetime the
- * contract gives them (docs/frontend/trip-regions.md). They are assembled from
- * the month caches above, so an hour is the most they lag a warmup.
+ * A trip region's calendar months and its plan and best-days answers: an hour,
+ * the edge lifetime the contract gives them (docs/frontend/trip-regions.md).
+ * They are assembled from the month caches above, so an hour is the most they
+ * lag a warmup.
  */
 export const TRIP_REGION_RESPONSE_TTL = 60 * 60;
 

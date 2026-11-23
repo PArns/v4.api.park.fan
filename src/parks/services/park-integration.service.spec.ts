@@ -130,14 +130,14 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       date: string;
       hour: number;
       wait: number;
-      confidence?: number;
+      confidence?: number | null;
     }>,
   ) =>
     rows.map((r) => ({
       attractionId: r.attractionId,
       predictedTime: `${r.date}T${String(r.hour).padStart(2, "0")}:00:00Z`,
       predictedWaitTime: r.wait,
-      confidence: r.confidence ?? 0.9,
+      confidence: r.confidence === undefined ? 0.9 : r.confidence,
       crowdLevel: "moderate" as const,
       baseline: 30,
       modelVersion: "v1",
@@ -649,6 +649,38 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
 
       // (0.8 + 1.0) / 2 = 0.9
       expect(day.confidencePercentage).toBeCloseTo(0.9);
+    });
+
+    it("leaves a season-level row's missing confidence out of the mean", async () => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+        new Set(["h1", "h2"]),
+      );
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+
+      const [mixed, seasonOnly] = await service.aggregateDailyPredictions(
+        buildPredictions([
+          { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 50 },
+          {
+            attractionId: "h2",
+            date: "2026-06-13",
+            hour: 12,
+            wait: 60,
+            confidence: null,
+          },
+          {
+            attractionId: "h1",
+            date: "2026-06-14",
+            hour: 12,
+            wait: 60,
+            confidence: null,
+          },
+        ]),
+        "p1",
+        TZ,
+      );
+
+      expect(mixed.confidencePercentage).toBeCloseTo(0.9);
+      expect(seasonOnly.confidencePercentage).toBeNull();
     });
 
     it("returns an empty array when no predictions are provided", async () => {

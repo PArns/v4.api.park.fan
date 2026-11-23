@@ -29,6 +29,11 @@ interface WeatherRow {
   precipitationSum?: number | string | null;
   snowfallSum?: number | string | null;
   windSpeedMax?: number | string | null;
+  windGustsMax?: number | string | null;
+  precipitationProbabilityMax?: number | string | null;
+  precipitationHours?: number | string | null;
+  uvIndexMax?: number | string | null;
+  sunshineHours?: number | string | null;
   humidity?: number | string | null;
   apparentTemperature?: number | string | null;
   weatherCode?: number | null;
@@ -75,9 +80,57 @@ export function toWeatherSummary(
     precipitationMm: num(weather.precipitationSum),
     snowMm: num(weather.snowfallSum),
     windMax: num(weather.windSpeedMax),
+    windGustsMax: num(weather.windGustsMax),
+    precipitationProbability: num(weather.precipitationProbabilityMax),
+    precipitationHours: num(weather.precipitationHours),
+    uvIndexMax: num(weather.uvIndexMax),
+    sunshineHours: num(weather.sunshineHours),
     humidity: num(weather.humidity),
     apparentTemp: num(weather.apparentTemperature),
     icon: weather.weatherCode ?? 0,
+  };
+}
+
+/** What {@link weatherView} holds, as the tools that return it describe it. */
+export const WEATHER_VIEW_FIELDS =
+  "condition, °C (feelsLikeC today), precipitation in mm with its highest hourly chance in % " +
+  "and its hours, snow in cm, wind and gusts in km/h, UV index, sunshine hours; " +
+  "`basis: climate_normal` is the historical average for the date (note), with typicalHighC " +
+  "and typicalLowC (the range half such days fell in) and rainDayChancePercent";
+
+/**
+ * A day's weather as Parky and the admin MCP read it: every figure the calendar
+ * has, each named with its unit, and the legacy `rainChance` left out — it holds
+ * millimetres under a name that reads as a percentage, and a model reading it
+ * said "12,6 % chance of rain" for 12.6 mm. Absent fields stay absent.
+ */
+export function weatherView(weather: WeatherSummary | null | undefined) {
+  if (!weather) return weather;
+  return {
+    basis: weather.basis,
+    condition: weather.condition,
+    // The WMO code, as get_park_weather names it.
+    weatherCode: weather.icon ?? null,
+    tempMin: weather.tempMin,
+    tempMax: weather.tempMax,
+    feelsLikeC: weather.apparentTemp,
+    precipitationMm: weather.precipitationMm ?? weather.rainChance,
+    precipitationChancePercent: weather.precipitationProbability,
+    precipitationHours: weather.precipitationHours,
+    snowCm: weather.snowMm,
+    windMaxKmh: weather.windMax,
+    windGustsMaxKmh: weather.windGustsMax,
+    uvIndexMax: weather.uvIndexMax,
+    sunshineHours: weather.sunshineHours,
+    humidityPercent: weather.humidity,
+    // A normal is said as what such a day is usually like, never as the day's
+    // forecast: the note says so beside the figures, the ranges give the spread.
+    ...(weather.basis === "climate_normal" && {
+      note: CLIMATE_NORMAL_NOTE,
+      typicalHighC: tempRange(weather.tempMaxP25, weather.tempMaxP75),
+      typicalLowC: tempRange(weather.tempMinP25, weather.tempMinP75),
+      rainDayChancePercent: weather.wetDayPercent,
+    }),
   };
 }
 
@@ -94,9 +147,34 @@ export function toClimateNormalSummary(
   if (!normal) return undefined;
   const summary = toWeatherSummary(normal);
   if (!summary) return undefined;
+  const maxP25 = num(normal.temperatureMaxP25);
+  const maxP75 = num(normal.temperatureMaxP75);
+  const minP25 = num(normal.temperatureMinP25);
+  const minP75 = num(normal.temperatureMinP75);
+  const wet = num(normal.wetDayShare);
   return {
     ...summary,
     basis: "climate_normal",
     normalPeriod: CLIMATE_NORMAL_PERIOD,
+    // The spread of the days the mean is taken over (PAR-1411); absent in
+    // normals cached before it.
+    ...(maxP25 !== undefined &&
+      maxP75 !== undefined && { tempMaxP25: maxP25, tempMaxP75: maxP75 }),
+    ...(minP25 !== undefined &&
+      minP75 !== undefined && { tempMinP25: minP25, tempMinP75: minP75 }),
+    ...(wet !== undefined && { wetDayPercent: Math.round(wet * 100) }),
   };
+}
+
+/** What a climate normal is, in the words Parky and the admin MCP read beside it. */
+export const CLIMATE_NORMAL_NOTE =
+  `historical average for this calendar date (${CLIMATE_NORMAL_PERIOD}), ` +
+  "not a forecast for the day";
+
+/** A range of two temperatures as one short string, "15-19"; one figure where they round alike. */
+export function tempRange(low: number | undefined, high: number | undefined) {
+  if (low === undefined || high === undefined) return undefined;
+  const a = Math.round(low);
+  const b = Math.round(high);
+  return a === b ? `${a}` : `${a}-${b}`;
 }

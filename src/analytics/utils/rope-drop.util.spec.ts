@@ -81,15 +81,16 @@ function days(
 }
 
 const WINDOW_START = "2026-04-01";
+const SAT_SUN: ReadonlySet<number> = new Set([0, 6]);
 
 describe("computeRopeDrop", () => {
   it("returns null when there is no data", () => {
-    expect(computeRopeDrop([], WINDOW_START)).toBeNull();
+    expect(computeRopeDrop([], WINDOW_START, SAT_SUN)).toBeNull();
   });
 
   it("flags a busy headliner as worth + high strength with the right levels", () => {
     // 20 Saturdays of busy data, all within the window.
-    const result = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START);
+    const result = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START, SAT_SUN);
     expect(result).not.toBeNull();
     const r = result!;
     expect(r.worth).toBe(true);
@@ -104,7 +105,11 @@ describe("computeRopeDrop", () => {
     // the [0,15) park-open window). Regression test for the bug that dropped
     // every such day → sampleDays=0 → busyPeak=0 → worth=false (Phantasialand
     // headliners like Taron, F.L.Y.).
-    const r = computeRopeDrop(days(staggeredOpenDay, 6, 20), WINDOW_START);
+    const r = computeRopeDrop(
+      days(staggeredOpenDay, 6, 20),
+      WINDOW_START,
+      SAT_SUN,
+    );
     expect(r).not.toBeNull();
     expect(r!.sampleDays).toBe(20);
     // Staggered opening (first slot 60 min after PARK open) → open wait is
@@ -117,20 +122,20 @@ describe("computeRopeDrop", () => {
   });
 
   it("computes rideBy at the 50%-of-peak crossing", () => {
-    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START, SAT_SUN)!;
     // bin15 ratio = 0.50 (not > 0.5); bin30 ratio = 1.0 → first bin exceeding.
     expect(r.rideByMinutesAfterOpen).toBe(30);
   });
 
   it("picks the absolute best slot (evening) by minimum ratio", () => {
-    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START, SAT_SUN)!;
     // Genuine evening trough at 510 (ratio 0.167) wins — the 540 closing-drain
     // slot (ratio 0.025) is guarded out, so it can't steal the trough.
     expect(r.bestSlotMinutesAfterOpen).toBe(510);
   });
 
   it("guards out the pre-closing drain so it is never the trough", () => {
-    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START, SAT_SUN)!;
     // The 540 drain (wait 3) is within the closing guard of the last slot.
     expect(r.bestSlotMinutesAfterOpen).not.toBe(540);
     // The reported trough wait reflects the genuine evening low (~20), not ~3.
@@ -139,7 +144,7 @@ describe("computeRopeDrop", () => {
   });
 
   it("flags a busy ride with a real evening trough as end-of-day worth", () => {
-    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START, SAT_SUN)!;
     // Trough at 510 is past 60% of the guarded day (510) → counts as end-of-day,
     // and busyPeak − bestSlotWait = 100 clears the savings floor.
     expect(r.endOfDayWorth).toBe(true);
@@ -159,7 +164,11 @@ describe("computeRopeDrop", () => {
         { minutesAfterOpen: 510, p90: 90 },
       ],
     });
-    const r = computeRopeDrop(days(morningTrough, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(
+      days(morningTrough, 6, 20),
+      WINDOW_START,
+      SAT_SUN,
+    )!;
     expect(r.bestSlotMinutesAfterOpen).toBe(0); // trough is at open
     expect(r.endOfDayWorth).toBe(false);
   });
@@ -177,7 +186,7 @@ describe("computeRopeDrop", () => {
         { minutesAfterOpen: 600, p90: 200 },
       ],
     });
-    const r = computeRopeDrop(days(flagship, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(flagship, 6, 20), WINDOW_START, SAT_SUN)!;
     expect(r.busyPeak).toBe(240);
     expect(r.openWait).toBe(150);
     expect(r.savings).toBe(90);
@@ -188,7 +197,7 @@ describe("computeRopeDrop", () => {
   });
 
   it("does not flag a quiet ride (peak below the floor)", () => {
-    const r = computeRopeDrop(days(quietDay, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(quietDay, 6, 20), WINDOW_START, SAT_SUN)!;
     expect(r.busyPeak).toBe(30);
     expect(r.worth).toBe(false);
     expect(r.strength).toBeNull();
@@ -197,8 +206,16 @@ describe("computeRopeDrop", () => {
   it("uses the busier of the weekend/weekday buckets as the headline", () => {
     // Weekend busy (peak 120), weekday quiet (peak 30).
     const input = [...days(busyDay, 6, 10), ...days(quietDay, 3, 10)];
-    const r = computeRopeDrop(input, WINDOW_START)!;
+    const r = computeRopeDrop(input, WINDOW_START, SAT_SUN)!;
     expect(r.busyPeak).toBe(120); // headline follows the weekend bucket
+    expect(r.byDaytype.weekend.busyPeak).toBe(120);
+    expect(r.byDaytype.weekday.busyPeak).toBe(30);
+  });
+
+  it("buckets by the country's weekend, not Saturday and Sunday", () => {
+    // Saudi Arabia: Friday + Saturday. Busy Fridays, quiet Sundays.
+    const input = [...days(busyDay, 5, 10), ...days(quietDay, 0, 10)];
+    const r = computeRopeDrop(input, WINDOW_START, new Set([5, 6]))!;
     expect(r.byDaytype.weekend.busyPeak).toBe(120);
     expect(r.byDaytype.weekday.busyPeak).toBe(30);
   });
@@ -222,12 +239,17 @@ describe("computeRopeDrop", () => {
     const r = computeRopeDrop(
       [...days(busyDay, 6, 20), ...older],
       WINDOW_START,
+      SAT_SUN,
     )!;
     expect(r.busyPeak).toBe(120); // 200-peak January days excluded from levels
   });
 
   it("derives confidence from the number of in-window operating days", () => {
-    const medium = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    const medium = computeRopeDrop(
+      days(busyDay, 6, 20),
+      WINDOW_START,
+      SAT_SUN,
+    )!;
     expect(medium.sampleDays).toBe(20);
     expect(medium.confidence).toBe("medium"); // >=20 && <40
 
@@ -235,11 +257,12 @@ describe("computeRopeDrop", () => {
     const hi = computeRopeDrop(
       [...days(busyDay, 6, 20), ...days(busyDay, 0, 20)],
       WINDOW_START,
+      SAT_SUN,
     )!;
     expect(hi.sampleDays).toBe(40);
     expect(hi.confidence).toBe("high");
 
-    const lo = computeRopeDrop(days(busyDay, 6, 10), WINDOW_START)!;
+    const lo = computeRopeDrop(days(busyDay, 6, 10), WINDOW_START, SAT_SUN)!;
     expect(lo.sampleDays).toBe(10);
     expect(lo.confidence).toBe("low");
   });
@@ -256,13 +279,14 @@ describe("computeRopeDrop", () => {
     const r = computeRopeDrop(
       [...days(busyDay, 6, 20), preOpenOnly],
       WINDOW_START,
+      SAT_SUN,
     )!;
     // 20 valid days contribute; the pre-open-only day is dropped.
     expect(r.sampleDays).toBe(20);
   });
 
   it("uses the default window length in the result", () => {
-    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START)!;
+    const r = computeRopeDrop(days(busyDay, 6, 20), WINDOW_START, SAT_SUN)!;
     expect(r.windowDays).toBe(DEFAULT_ROPE_DROP_THRESHOLDS.windowDays);
   });
 
@@ -287,6 +311,7 @@ describe("computeRopeDrop", () => {
     const r = computeRopeDrop(
       [...days(busyDay, 6, 20), ...days(longDay, 0, 2, "04")],
       WINDOW_START,
+      SAT_SUN,
     )!;
     // The trough stays on the typical day's curve, not the rare long-day tail.
     expect(r.bestSlotMinutesAfterOpen).toBe(510);
@@ -316,6 +341,7 @@ describe("computeRopeDrop", () => {
         dayAt("2026-05-03", 6, [240, 300]),
       ],
       WINDOW_START,
+      SAT_SUN,
     );
     expect(r).not.toBeNull();
   });

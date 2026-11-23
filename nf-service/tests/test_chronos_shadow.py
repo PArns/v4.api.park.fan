@@ -48,8 +48,8 @@ def windows(*days: tuple[str, str, str]) -> pd.DataFrame:
 # --------------------------------------------------------------------------- shared holiday module
 
 
-@pytest.mark.parametrize("name", ["holiday_features.py", "holiday_utils.py"])
-def test_holiday_module_is_the_ml_service_one(name):
+@pytest.mark.parametrize("name", ["holiday_features.py", "holiday_utils.py", "weekend_rules.py"])
+def test_shared_module_is_the_ml_service_one(name):
     """The covariates must come from THE shared implementation: the nf-service
     copy is byte-identical to ml-service's (the image cannot import across
     build contexts, so it is vendored — and this keeps it from drifting)."""
@@ -114,6 +114,15 @@ def test_covariate_vector_on_a_bridge_day():
         "is_bridge_day": 1.0,
     })
     assert cov.loc[sat, "is_weekend"] == 1.0
+
+
+def test_saudi_weekend_is_friday_and_saturday():
+    # PAR-1379: the country's weekend, as CatBoost reads it.
+    meta = cs.ParkMeta(park_id=PID, timezone="Asia/Riyadh", country="SA", region=None,
+                       influencing=[])
+    thu, fri, sat, sun = (dt.date(2026, 5, d) for d in (14, 15, 16, 17))
+    cov = cs.day_covariates(meta, [thu, fri, sat, sun], _holidays([]))
+    assert cov["is_weekend"].tolist() == [0.0, 1.0, 1.0, 0.0]
 
 
 def test_bridge_day_sees_a_holiday_just_outside_the_asked_dates():

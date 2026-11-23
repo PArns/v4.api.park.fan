@@ -15,14 +15,24 @@ import { ParkMetadata } from "../../external-apis/data-sources/interfaces/data-s
 import { generateSlug } from "../../common/utils/slug.util";
 import { WARTEZEITEN_CREATION_WHITELIST } from "../../external-apis/data-sources/config/wartezeiten-only-parks";
 import { ParkValidatorService } from "../../parks/services/park-validator.service";
-import { CacheWarmupService } from "../services/cache-warmup.service";
+import {
+  CALENDAR_WARMUP_PARK_PAUSE_MS,
+  CacheWarmupService,
+} from "../services/cache-warmup.service";
 import { PopularityService } from "../../popularity/popularity.service";
 import {
   ParkRenameService,
   captureParkPath,
 } from "../../parks/services/park-rename.service";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
-import { parkCacheTag } from "../../common/revalidation/park-status-transitions";
+import {
+  bestDaysCacheTag,
+  scheduleCacheTags,
+} from "../../common/revalidation/park-status-transitions";
+import {
+  BestDaysService,
+  touchesBestDaysWindow,
+} from "../../parks/services/best-days.service";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -54,6 +64,7 @@ export class ParkMetadataProcessor {
     @InjectQueue("children-metadata") private childrenQueue: Queue,
     @InjectQueue("park-enrichment") private enrichmentQueue: Queue,
     @InjectQueue("holidays") private holidaysQueue: Queue,
+    private bestDaysService: BestDaysService,
   ) {}
 
   /**
@@ -1104,11 +1115,15 @@ export class ParkMetadataProcessor {
      * it is not survivable now that the calendar is cached for a day at every layer, because the
      * expiry would be the only thing that ever surfaced the correction.
      *
-     * So the job posts the same per-park tag the status-flip wire already uses. Collected here
-     * and sent once at the end rather than per park: 213 POSTs in a loop against one is a
-     * difference the frontend notices and this job does not.
+     * So the job posts the same per-park tag the status-flip wire already uses, the park's
+     * calendar tag, which the calendar relay and the month summary carry, and the best-days tag of
+     * each park whose snapshot it rebuilt ({@link rebuildBestDays}). Collected here and sent
+     * once at the end rather than per park: 213 POSTs in a loop against one is a difference the
+     * frontend notices and this job does not.
      */
     const revalidatedTags: string[] = [];
+    /** Parks for which this run wrote a changed day the best-days snapshot covers. */
+    const changedParks: Park[] = [];
 
     for (const park of parks) {
       // Only sync schedules for parks with Wiki data
@@ -1169,11 +1184,14 @@ export class ParkMetadataProcessor {
         // day, the duplicate cleanup — needs the pass even for a park the feed
         // has gone quiet about.
         await this.parksService.fillScheduleGaps(park.id);
-        await this.parksService.recordScheduleVersions(park.id, "themeparks");
+        const changedDays = await this.parksService.recordScheduleVersions(
+          park.id,
+          "themeparks",
+        );
         await this.parksService.invalidateCalendarMonthCache(park.id);
 
-        const tag = parkCacheTag(park);
-        if (tag) revalidatedTags.push(tag);
+        revalidatedTags.push(...scheduleCacheTags(park));
+        if (touchesBestDaysWindow(park, changedDays)) changedParks.push(park);
       } catch (error) {
         if (error instanceof ThemeParksRateLimitError) {
           // Never an error line: nothing is broken and nothing was lost. The
@@ -1190,10 +1208,14 @@ export class ParkMetadataProcessor {
           // still got it (it arrived here as an empty list, not as a throw).
           try {
             await this.parksService.fillScheduleGaps(park.id);
-            await this.parksService.recordScheduleVersions(park.id, "gap_fill");
+            const changedDays = await this.parksService.recordScheduleVersions(
+              park.id,
+              "gap_fill",
+            );
             await this.parksService.invalidateCalendarMonthCache(park.id);
-            const tag = parkCacheTag(park);
-            if (tag) revalidatedTags.push(tag);
+            revalidatedTags.push(...scheduleCacheTags(park));
+            if (touchesBestDaysWindow(park, changedDays))
+              changedParks.push(park);
           } catch (gapError) {
             this.logger.warn(
               `Gap fill after a throttled fetch failed for ${park.name}: ${gapError}`,
@@ -1210,6 +1232,8 @@ export class ParkMetadataProcessor {
         `empty upstream: ${emptyParks} · throttled: ${throttledParks}`,
     );
 
+    revalidatedTags.push(...(await this.rebuildBestDays(changedParks)));
+
     // `immediate` because this is not a "will be right eventually" refresh: the month the
     // correction lands in is the month the frontend is serving from a day-long cache, and the
     // next reader is the one who would otherwise see the old hours.
@@ -1218,6 +1242,31 @@ export class ParkMetadataProcessor {
         immediate: true,
       });
     }
+  }
+
+  /**
+   * Rebuilds the best-days snapshot of the parks whose schedule a sync changed inside the
+   * snapshot's window, one after the other, and answers the `best-days:` tag of each park it
+   * rebuilt.
+   *
+   * The snapshot is a projection of the calendar months, stored by the warmup for 13 hours and not
+   * evicted with the months, so after a correction the grid showed a closed day that „Prognose
+   * heute" still forecast until the evening warmup. Rung without a rebuild, the frontend would only
+   * fetch the same snapshot again. Each rebuild is a 90-day calendar build, so only a changed day
+   * inside the window earns one: the day versions also count the placeholder the gap fill adds at
+   * its horizon every day, past the window, which sent nearly every park through a cold build back
+   * to back. A park whose rebuild failed keeps the old snapshot and is not rung.
+   */
+  private async rebuildBestDays(parks: readonly Park[]): Promise<string[]> {
+    const tags: string[] = [];
+    for (const [i, park] of parks.entries()) {
+      if (i > 0) await this.sleep(CALENDAR_WARMUP_PARK_PAUSE_MS);
+      const tag = bestDaysCacheTag(park);
+      if (tag && (await this.bestDaysService.precomputeForPark(park))) {
+        tags.push(tag);
+      }
+    }
+    return tags;
   }
 
   /**

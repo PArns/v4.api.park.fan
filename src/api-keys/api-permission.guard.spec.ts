@@ -226,4 +226,44 @@ describe("permissions", () => {
     // The cached original is never changed.
     expect(park.attractions[0].minimumHeight).toBe(130);
   });
+
+  it("opens the typical waits and headliners alone with stats.typical-waits", () => {
+    const park = {
+      ropeDropHeadliners: ["Taron"],
+      attractions: [
+        {
+          name: "Taron",
+          typicalWaits: { p50: 25 },
+          isHeadliner: true,
+          statistics: { avg: 30 },
+          ropeDrop: { gain: 20 },
+        },
+      ],
+    };
+    const held = effectivePermissions({
+      usage: "non-commercial",
+      permissions: ["parks.details", "stats.typical-waits"],
+    });
+    const result = omitPaths(park, withheldPaths("park", held)) as typeof park;
+    expect(result).not.toHaveProperty("ropeDropHeadliners");
+    expect(result.attractions[0]).toEqual({
+      name: "Taron",
+      typicalWaits: { p50: 25 },
+      isHeadliner: true,
+    });
+    const ride = { name: "Taron", typicalWaits: { p50: 25 }, history: [] };
+    expect(omitPaths(ride, withheldPaths("ride", held))).toEqual({
+      name: "Taron",
+      typicalWaits: { p50: 25 },
+    });
+  });
+
+  it("lets a key with stats.history read the typical waits without storing them", () => {
+    const key = { usage: "non-commercial", permissions: ["stats.history"] };
+    expect(effectivePermissions(key).has("stats.typical-waits")).toBe(true);
+    expect(grantedPermissions(key.permissions)).toEqual(["stats.history"]);
+    expect(withheldPaths("park", effectivePermissions(key))).not.toContain(
+      "attractions[].typicalWaits",
+    );
+  });
 });

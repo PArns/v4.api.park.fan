@@ -106,6 +106,16 @@ const JOBS = {
     path: "train-ml-model",
     run: (ctx) => admin(ctx).triggerMLTraining(),
   },
+  "train-nf": {
+    does: "a TFT training run; skipped while one is in flight",
+    path: "train-nf",
+    run: (ctx) => admin(ctx).triggerTftTraining(),
+  },
+  "warmup-calendar": {
+    does: "the calendar warmup and forecast ring, after a deploy or training that changes forecasts; answers with the running one if a warmup is active",
+    path: "warmup-calendar",
+    run: (ctx) => admin(ctx).triggerCalendarWarmup(),
+  },
   "pcn-train": {
     does: "the PCN intraday models per park",
     path: "pcn/train",

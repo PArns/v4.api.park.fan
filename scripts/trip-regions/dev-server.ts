@@ -47,6 +47,9 @@
  *   climate normals off the region's climate park's calendar days marked `climate_normal`,
  *   so the first two weeks (a forecast there) have none; its school coverage
  *   is what OpenHolidays holds for the next two years, not the database's.
+ *   Without the holiday table every day reads last year 52 weeks back, not
+ *   the matching day (`lastYearReferenceDay`): a moved holiday, break or
+ *   season reads another day than production does.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -299,6 +302,7 @@ async function seasonsFor(
       opensAt: row.opensAt ?? null,
       closesAt: row.closesAt ?? null,
       attractionIds: null,
+      pausedAttractionIds: null,
       url: row.url ?? null,
       sourceUrl: row.sourceUrl ?? null,
       confirmedAt: null,

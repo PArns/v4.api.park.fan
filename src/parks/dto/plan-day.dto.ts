@@ -98,11 +98,13 @@ export class PlanDayHourDto {
  * - `peak_scaled` — the year's hourly P50 profile stretched so its maximum is
  *   the day level (`composeDayCurve`). Hourly only.
  * - `h5` — the H5 hybrid profile of the ride's last 56 days, 15-minute, plain:
- *   no TFT level was available for the day.
+ *   no level `h5LevelFor` routes was available for the day.
  * - `h5_tft` — the same profile scaled by the RATIO of the TFT day level to the
  *   ride's median daily P90 over those 56 days; the rope-drop hour unscaled.
+ * - `h5_season` — the same, scaled by the season level (PAR-1343) on a day of
+ *   a running park season.
  */
-export type PlanDayComposer = "peak_scaled" | "h5" | "h5_tft";
+export type PlanDayComposer = "peak_scaled" | "h5" | "h5_tft" | "h5_season";
 
 /** One quarter-hour of a shadow curve. Internal, never serialised. */
 export interface PlanDaySlotShadow {
@@ -217,7 +219,7 @@ export class PlanDayRideDto {
 
   @ApiProperty({
     required: false,
-    enum: ["peak_scaled", "h5", "h5_tft"],
+    enum: ["peak_scaled", "h5", "h5_tft", "h5_season"],
     description:
       "Which composition produced this ride's COMPOSED numbers; absent when " +
       "none of its numbers were composed (all measured, or another tier). " +
@@ -364,7 +366,8 @@ export class PlanDayRideDto {
     required: false,
     example: 49,
     description:
-      "Present on an H5-composed ride (`composer` `h5` / `h5_tft`): the days " +
+      "Present on an H5-composed ride (`composer` `h5`, `h5_tft` or " +
+      "`h5_season`): the days " +
       "of the 56-day window that had readings for this ride. Diagnostic; not a " +
       "replacement for `sampleDays`.",
   })
@@ -577,6 +580,18 @@ export class PlanDayContextDto {
   })
   weather?: Record<string, unknown> | null;
 
+  @ApiProperty({
+    required: false,
+    description:
+      "Past the forecast's reach, the date's climate normal: the calendar's " +
+      'weather block with `basis: "climate_normal"` and its `normalPeriod`, ' +
+      "the long-run average for the date with the range half of such days " +
+      "fell in (`tempMaxP25`…`tempMaxP75`) and `wetDayPercent`. Shown as what " +
+      "the date is usually like, never as the day's forecast; it moves no bar. " +
+      "Absent while `weather` is set and while the park's normals are not cached.",
+  })
+  climateNormal?: Record<string, unknown>;
+
   @ApiProperty({ example: false })
   isHoliday: boolean;
 
@@ -597,9 +612,11 @@ export class PlanDayContextDto {
   @ApiProperty({
     example: true,
     description:
-      "Saturday or Sunday in the park's own timezone. Derived here because " +
-      "the calendar carries no such field and every surface was deriving it " +
-      "separately.",
+      "The date (the park's own) falls on the weekend of the park's country: " +
+      "Friday and Saturday in Saudi Arabia or Israel, Saturday and Sunday " +
+      "where no other rule is listed or the park has no country. Derived here " +
+      "because the calendar carries no such field and every surface was " +
+      "deriving it separately.",
   })
   isWeekend: boolean;
 

@@ -243,6 +243,7 @@ function setup(
     parks as unknown as ParksService,
     {} as CalendarService,
     {} as ParkSeasonService,
+    {} as HolidaysService,
     redis,
   );
   jest.spyOn(regions, "resolveParks").mockResolvedValue(regionParks as never);
@@ -255,6 +256,9 @@ function setup(
       getLeadTimeMae: jest.fn(async () => null),
     } as unknown as PredictionLeadSnapshotService,
     { showsOn: jest.fn(async () => []) } as unknown as PlanDayService,
+    {
+      getClimateNormals: jest.fn(async () => null),
+    } as unknown as WeatherService,
     redis,
   );
   const seasons = {

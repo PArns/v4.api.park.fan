@@ -1,7 +1,9 @@
 # Chronos-2 served on the live surface (PAR-911)
 
-With `SERVE_CHRONOS_INTRADAY=true` on the API, Chronos-2's `live` curve serves the intraday slots
-45–120 minutes ahead; nothing else changes. **Default off** (`docker-compose.production.yml`):
+While the constant `SERVE_CHRONOS_INTRADAY` in `src/ml/chronos-serving.ts` is `true`, Chronos-2's
+`live` curve serves the intraday slots 45 minutes to 4 hours ahead (to 2 hours until PAR-1409);
+nothing else changes. **On since 2026-11-22.** It was an env flag until PAR-1410 and is a code
+constant now, so no Coolify variable can override it:
 prepared so that, once the [live A/B](chronos-shadow.md) confirms the offline result (Chronos-2
 beats persistence from 30 min and the served PCN/profiles at 30–120 min; persistence stays best at
 15 min — [chronos-2.md](../foundation-models/chronos-2.md)), switching is a flag flip. Open this
@@ -16,13 +18,19 @@ actual time (PAR-1026).
 | Lead | Both flags on | `SERVE_PCN_INTRADAY` off |
 | --- | --- | --- |
 | 0–30 min | PCN + persistence blend (pure anchor for a ride with an OPERATING reading ≥ 5 min) | CatBoost |
-| 45–120 min | **Chronos-2** q50 | **Chronos-2** q50 |
-| > 120 min | PCN + blend (anchor share decays to 0 by 3 h, for an anchor ≥ 40 min) | CatBoost |
+| 45–240 min | **Chronos-2** q50 | **Chronos-2** q50 |
+| > 240 min | PCN + blend (the anchor share has decayed to 0 by 3 h) | CatBoost |
+
+**Why 4 hours (PAR-1409, 2026-11-22).** The live archive, against what was served, over 28 days
+and 136 parks (autumn only): Chronos-2 −1.2 min at 1–2 h and −1.1 min at 2–4 h, both sure; in the
+first hour −0.1 min, not sure, so ≤ 30 min stays the blend. The `live` curve reaches 240 min
+(`keep_minutes`), so no new call is needed; a curve up to 90 min old covers only up to ~150 min
+from now, and the slots it lacks stay PCN. 6–12 h (−0.8 min, sure) comes from the 06:00
+`chronos_grid` curve, which is not in the serving cache.
 
 A ride without a cached curve, a curve older than **90 min** (`CHRONOS_MAX_CURVE_AGE_MS`), or a slot
 the curve has no value for keeps what the row above would serve — the fallback is the incumbent,
-never an empty slot. There is a seam at 120 → 135 min (Chronos-2 → a blend still half anchor at
-2 h); the offline bench shows no lead where that ordering is wrong.
+never an empty slot. The seam is at 240 → 255 min (Chronos-2 → pure PCN, the blend's anchor share is 0 from 3 h).
 
 Per served slot, the same quantile split CatBoost and PCN use
 ([quantile serving](../quantile-serving-and-calibration.md)):
@@ -61,11 +69,11 @@ list of served and CatBoost-pure reads is in [intraday serving](../intraday-serv
 badges are not affected: they compare the current slot, inside the ≤ 30 min stretch Chronos-2 never
 serves.
 
-**The accuracy badge barely moves.** `prediction_accuracy.served_source` can read `chronos`, but the
-recorder scores each slot at the last write ≥ 2 h ahead (`SERVED_ACCURACY_MIN_LEAD_MS`), and
-Chronos-2 serves ≤ 120 min — so the scored row is mostly PCN/blend at 2 h–2 h 15 min
-([reader-facing accuracy](../reader-facing-accuracy.md)). Moving the scored lead into Chronos-2's
-window would grade the fallback rides on a mostly-anchor blend, the self-grading PAR-854 avoided.
+**The accuracy badge follows Chronos-2 since PAR-1409.** The recorder scores each slot at the last
+write ≥ 2 h ahead (`SERVED_ACCURACY_MIN_LEAD_MS`); with Chronos-2 serving up to 4 h, that row is
+Chronos-2's wherever its curve covered the slot, and `prediction_accuracy.served_source` reads
+`chronos` there ([reader-facing accuracy](../reader-facing-accuracy.md)). Until 2026-11-22 the
+window ended at 2 h and the scored row was mostly PCN/blend.
 
 ## The archive after the switch
 
@@ -86,13 +94,13 @@ window would grade the fallback rides on a mostly-anchor blend, the self-grading
 2. Cache is warm: `redis-cli --scan --pattern 'ml:chronos-serve:*' | wc -l` during an intraday hour
    ≈ the rides of the parks at that origin; a sample's `originAt` is the last even hour.
 3. `GET /v1/admin/ml-overview`: the Chronos component is not `failed` / `warming`.
-4. Set `SERVE_CHRONOS_INTRADAY=true` on the API in Coolify, redeploy.
+4. Set the constant `SERVE_CHRONOS_INTRADAY` to `true` in `src/ml/chronos-serving.ts` and deploy.
 5. Next odd hour: the archive job log shows the refresh; the overview says "Live ausgeliefert";
-   `GET /v1/parks/<slug>` shows `modelVersion …+chronos` on 45–120 min slots.
+   `GET /v1/parks/<slug>` shows `modelVersion …+chronos` on 45–240 min slots.
 6. Next day's scoring: surface 8 rows exist, `chronos2` vs `served` keeps its sign, and
    `chronos2_served` slots appear in the scores.
 
-**Rollback:** `SERVE_CHRONOS_INTRADAY=false` (or unset) and redeploy. Every read path is back to
+**Rollback:** set the constant `SERVE_CHRONOS_INTRADAY` to `false` and deploy. Every read path is back to
 PCN/blend/CatBoost on the next request; nothing persisted depends on the flag (cache keys expire
 within 3 h and are only read while it is on; surface 8 stops being written). The shadow keeps
 running under `CHRONOS_SHADOW_ENABLED`.

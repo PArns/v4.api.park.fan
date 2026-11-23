@@ -89,6 +89,25 @@ export class WeatherData {
   @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
   windSpeedMax: number | null;
 
+  /** The day's strongest gust (km/h). */
+  @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
+  windGustsMax: number | null;
+
+  /** The highest chance of precipitation in any hour of the day (0-100). */
+  @Column({ type: "smallint", nullable: true })
+  precipitationProbabilityMax: number | null;
+
+  /** Hours of the day with precipitation. */
+  @Column({ type: "decimal", precision: 4, scale: 1, nullable: true })
+  precipitationHours: number | null;
+
+  @Column({ type: "decimal", precision: 4, scale: 2, nullable: true })
+  uvIndexMax: number | null;
+
+  /** Hours of sunshine over the day. */
+  @Column({ type: "decimal", precision: 4, scale: 1, nullable: true })
+  sunshineHours: number | null;
+
   // Live current conditions (updated hourly)
   @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
   temperatureCurrent: number | null;

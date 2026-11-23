@@ -44,7 +44,12 @@ import {
   type TripParkDay,
   type TripParkDayInternal,
 } from "./trip-calendar.util";
-import { monthOf, type LastYearMonth } from "./last-year-snapshot";
+import {
+  monthBounds,
+  monthOf,
+  shiftMonth,
+  type LastYearMonth,
+} from "./last-year-snapshot";
 import type {
   TripCalendarDto,
   TripRegionDto,
@@ -88,6 +93,11 @@ export interface ParkCalendarSource {
   };
   rows: ScheduleRowLike[];
   lastYear: Map<string, LastYearMonth>;
+  /**
+   * The reference day a year back per date (`lastYearReferenceDays`); a date
+   * it lacks, or a source without it, reads 52 weeks back.
+   */
+  lastYearReferences?: ReadonlyMap<string, string>;
 }
 
 /** A curated season as the public seasons route serves it, with its park. */
@@ -313,41 +323,59 @@ export function basesOfGateway(
 /** Days in a month of a common year; a storm season never ends in February. */
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-/** A storm season's first and last day (`MM-DD`) and its peak, as the region route names them. */
+/**
+ * A storm season's first and last day (`MM-DD`) and its peak, as the region route names them:
+ * the first and last half month with a weight, so the span is exactly the days whose plan day
+ * says `<kind>_season` or `<kind>_peak` (`stormWarning`). Until PAR-1411 it was read by whole
+ * month, and Japan's November, whose second half has no weight, read as typhoon season to its
+ * last day on the planner's calendars.
+ */
 export function stormSeasonSpan(storm: StormSeasonConfig): {
   kind: StormSeasonConfig["kind"];
   from: string;
   to: string;
   peak: { from: string; to: string };
 } {
-  const months = storm.weights
-    .filter(([, a, b]) => a > 0 || b > 0)
-    .map(([m]) => m);
   const pad = (n: number) => String(n).padStart(2, "0");
-  const first = Math.min(...months);
-  const last = Math.max(...months);
+  const halves = storm.weights.flatMap(([m, first, second]) => {
+    const split = storm.firstHalfEnds?.[m] ?? 15;
+    return [
+      ...(first > 0
+        ? [{ from: `${pad(m)}-01`, to: `${pad(m)}-${pad(split)}` }]
+        : []),
+      ...(second > 0
+        ? [
+            {
+              from: `${pad(m)}-${pad(split + 1)}`,
+              to: `${pad(m)}-${pad(MONTH_DAYS[m - 1])}`,
+            },
+          ]
+        : []),
+    ];
+  });
   return {
     kind: storm.kind,
-    from: `${pad(first)}-01`,
-    to: `${pad(last)}-${pad(MONTH_DAYS[last - 1])}`,
+    from: halves.reduce((a, h) => (h.from < a ? h.from : a), halves[0].from),
+    to: halves.reduce((a, h) => (h.to > a ? h.to : a), halves[0].to),
     peak: { ...storm.peak },
   };
 }
 
 /**
- * The past months a window's days read last year from: the same weekday a
- * year back, for each day from today on. Every day, forecast or not: past
- * TFT's reach the day is ranked on last year, and within it last year sits
- * beside the forecast (`lastYearWait`).
+ * The past months a window's days read last year from: each day's reference
+ * day a year back (`lastYearDateFor`), for each day from today on. Every day,
+ * forecast or not: past TFT's reach the day is ranked on last year, and within
+ * it last year sits beside the forecast (`lastYearWait`).
  */
 export function lastYearMonthsNeeded(
   days: CalendarDayLike[],
   today: string,
+  references?: ReadonlyMap<string, string>,
 ): string[] {
   const months = new Set<string>();
   for (const day of days) {
     if (day.date < today) continue;
-    const ly = lastYearDateFor(day.date);
+    const ly = lastYearDateFor(day.date, references);
     if (ly < today) months.add(monthOf(ly));
   }
   return [...months].sort();
@@ -412,6 +440,67 @@ export function referenceRange(
   return {
     from: addIsoDays(from, -REFERENCE_DAYS),
     to: addIsoDays(to, REFERENCE_DAYS),
+  };
+}
+
+/** A calendar month of the region calendar as it is kept: from the region's today on. */
+export interface CalendarMonthPart {
+  /** `YYYY-MM` */
+  month: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * The months a window from today on is joined from, each whole from today
+ * on. Every day is priced from its own reference span, so a month built once
+ * serves every window that touches it: the hub's 30 days, a month page, a
+ * plan's trip and `/when`'s year read the same parts.
+ */
+export function calendarMonths(
+  from: string,
+  to: string,
+  today: string,
+): CalendarMonthPart[] {
+  const parts: CalendarMonthPart[] = [];
+  for (let month = monthOf(from); month <= monthOf(to);) {
+    const { first, last } = monthBounds(month);
+    parts.push({ month, from: first < today ? today : first, to: last });
+    month = shiftMonth(month, 1);
+  }
+  return parts;
+}
+
+/**
+ * A window cut from the months that hold it: their days in the window, the
+ * seasons that touch it once each in start order, and the meta of the newest
+ * month with the oldest `computedAt`, the age of the answer's oldest day.
+ */
+export function joinCalendarMonths(
+  parts: readonly InternalRegionCalendar[],
+  from: string,
+  to: string,
+): InternalRegionCalendar {
+  const newest = parts.reduce((a, b) =>
+    b.meta.computedAt > a.meta.computedAt ? b : a,
+  );
+  const oldest = parts.reduce((a, b) =>
+    b.meta.computedAt < a.meta.computedAt ? b : a,
+  );
+  const seasons = new Map<string, InternalRegionCalendar["seasons"][number]>();
+  for (const s of parts.flatMap((p) => p.seasons)) {
+    const touches = String(s.startDate) <= to && String(s.endDate) >= from;
+    if (touches && !seasons.has(String(s.id))) seasons.set(String(s.id), s);
+  }
+  return {
+    meta: { ...newest.meta, from, to, computedAt: oldest.meta.computedAt },
+    parks: newest.parks,
+    days: parts
+      .flatMap((p) => p.days)
+      .filter((d) => d.date >= from && d.date <= to),
+    seasons: [...seasons.values()].sort((a, b) =>
+      String(a.startDate).localeCompare(String(b.startDate)),
+    ),
   };
 }
 
@@ -583,7 +672,13 @@ export function assembleRegionCalendar(
 
   const cells = new Map<string, Map<string, TripParkDayInternal>>();
   const coverage: Record<string, string | null> = {};
-  for (const { park, calendar, rows, lastYear } of sources) {
+  for (const {
+    park,
+    calendar,
+    rows,
+    lastYear,
+    lastYearReferences,
+  } of sources) {
     const tz = park.timezone || region.timezone;
     const earlyKind = earlyKindOf.get(park.config.group) ?? "early_entry";
     const rowsByDate = new Map<string, ScheduleRowLike[]>();
@@ -597,7 +692,7 @@ export function assembleRegionCalendar(
     const seasons = seasonsByPark.get(park.id) ?? [];
     const parkCells = new Map<string, TripParkDayInternal>();
     for (const date of span) {
-      const ly = lastYearDateFor(date);
+      const ly = lastYearDateFor(date, lastYearReferences);
       parkCells.set(
         date,
         buildParkDay({

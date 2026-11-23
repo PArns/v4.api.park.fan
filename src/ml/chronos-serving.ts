@@ -4,8 +4,8 @@ import type { PredictionDto } from "./dto";
 import { roundServedWait } from "./pcn-serving.constants";
 
 /**
- * Serving Chronos-2 on the live intraday surface (PAR-911), behind
- * `SERVE_CHRONOS_INTRADAY` (default OFF).
+ * Serving Chronos-2 on the live intraday surface (PAR-911), on since
+ * 2026-11-22 (PAR-1409).
  *
  * Chronos-2 runs in nf-service as a shadow (PAR-852). The forward archive's
  * capture already asks it for each park's `live` curves at the intraday
@@ -13,27 +13,36 @@ import { roundServedWait } from "./pcn-serving.constants";
  * the request path can serve them WITHOUT calling nf-service. The request path
  * reads one MGET; a stale or missing curve leaves the slot as it was.
  *
- * Lead split when the flag is on (lead = slot start − the current slot start,
+ * Lead split (lead = slot start − the current slot start,
  * the same base the persistence blend uses, docs/ml/intraday-serving.md):
  *
  * | lead | served |
  * | --- | --- |
  * | ≤ 30 min | unchanged — persistence/blend (persistence wins at 15 min, PAR-869) |
- * | 45 … 120 min | Chronos-2 q50 (band q95 − q50, crowd from q80) |
- * | > 120 min | unchanged — PCN + blend (or CatBoost) |
+ * | 45 … 240 min | Chronos-2 q50 (band q95 − q50, crowd from q80) |
+ * | > 240 min | unchanged — PCN + blend (or CatBoost) |
  *
  * See docs/ml/forward-archive/chronos-serving.md.
  */
 
-/** `SERVE_CHRONOS_INTRADAY=true` — read per call, like `SERVE_PCN_INTRADAY`. */
+/**
+ * On in code, not an env flag (owner, 2026-11-23, PAR-1410). Rollback: `false`
+ * here and deploy; every read path then falls back to PCN / CatBoost.
+ */
+export const SERVE_CHRONOS_INTRADAY = true;
+
 export function serveChronosIntraday(): boolean {
-  return process.env.SERVE_CHRONOS_INTRADAY === "true";
+  return SERVE_CHRONOS_INTRADAY;
 }
 
 /** Leads strictly above this are Chronos's (≤ 30 min stays persistence/blend). */
 export const CHRONOS_SERVE_MIN_LEAD_MS = 30 * 60_000;
-/** Leads up to and including this are Chronos's (beyond stays PCN). */
-export const CHRONOS_SERVE_MAX_LEAD_MS = 120 * 60_000;
+/**
+ * Leads up to and including this are Chronos's (beyond stays PCN). 4 h since
+ * PAR-1409: live it beat PCN by 1.1 min at 2–4 h (sure, 28 days, 136 parks);
+ * the `live` curve reaches 240 min (`keep_minutes`), a slot it lacks stays PCN.
+ */
+export const CHRONOS_SERVE_MAX_LEAD_MS = 240 * 60_000;
 /**
  * A curve whose origin is older than this is not served. The cache is
  * refreshed every hour at :05 (+ up to ~15 min of capture) while the flag is

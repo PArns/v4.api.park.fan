@@ -286,12 +286,6 @@ export function isoDateWeekday(date: string): number {
   return new Date(`${date}T12:00:00Z`).getUTCDay();
 }
 
-/** Saturday or Sunday, from the date string itself (no timezone involved). */
-export function isWeekendDate(date: string): boolean {
-  const day = isoDateWeekday(date);
-  return day === 0 || day === 6;
-}
-
 /** Monday of a `YYYY-MM-DD`'s ISO week. */
 export function isoWeekStart(date: string): string {
   return addIsoDays(date, -((isoDateWeekday(date) + 6) % 7));

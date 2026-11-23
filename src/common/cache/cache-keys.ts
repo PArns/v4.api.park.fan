@@ -43,6 +43,21 @@ export const CacheKeys = {
     dateStr: string,
   ): string => `ml:park:${parkId}:${predictionType}:${dateStr}`,
 
+  /**
+   * The season level's inputs of a park (`loadSeasonLevelInputs`). No date:
+   * they change when the calendar warmup evicts them, whose forecast ring
+   * reaches the frontend, and not at the park's midnight, which nothing rings.
+   */
+  seasonLevelInputs: (parkId: string): string => `ml:season-level:v4:${parkId}`,
+
+  /**
+   * Set for a few minutes after the season level's inputs failed to load
+   * (`SEASON_LEVEL_FAILURE_TTL`), so the serving reads in between go without
+   * the level instead of each running the reads that just failed.
+   */
+  seasonLevelInputsFailed: (parkId: string): string =>
+    `ml:season-level:v4:${parkId}:failed`,
+
   /** Today's schedule (dateStr = park-local YYYY-MM-DD). */
   scheduleToday: (parkId: string, dateStr: string): string =>
     `schedule:today:${parkId}:${dateStr}`,
@@ -121,13 +136,27 @@ export const CacheKeys = {
     `predictions-yearly:resp:v1:${parkId}:*`,
 
   /**
-   * Trip regions (`src/trip-regions/`). The calendar and the plan are whole
-   * answers kept an hour; the two below are written by the calendar warmup and
-   * read by the calendar: a past month's measured figures for the `last_year`
-   * days, and the last day a region park's calendar carries a forecast.
+   * Trip regions (`src/trip-regions/`). The region calendar is kept an hour
+   * by month from the region's today, so the windows of every route join the
+   * same months; the plan and the best days are whole answers kept an hour.
+   * The last two are written by the calendar warmup and read by the calendar:
+   * a past month's measured figures for the `last_year` days, and the last day
+   * a region park's calendar carries a forecast.
    */
-  tripRegionCalendar: (region: string, from: string, to: string): string =>
-    `trip-regions:calendar:v2:${region}:${from}:${to}`,
+  tripRegionCalendarMonth: (
+    region: string,
+    today: string,
+    ym: string,
+  ): string => `trip-regions:calendar:v3:${region}:${today}:${ym}`,
+  /** `/best-days` by its window and `limit`, an hour like the calendar it reads. */
+  tripRegionBestDays: (
+    region: string,
+    today: string,
+    from: string,
+    to: string,
+    limit: number,
+  ): string =>
+    `trip-regions:best-days:v1:${region}:${today}:${from}:${to}:${limit}`,
   tripRegionPlan: (region: string, query: string): string =>
     `trip-regions:plan:v4:${region}:${query}`,
   /** A plan's ideas by the plan's normalized query, an hour like the plan. */

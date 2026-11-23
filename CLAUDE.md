@@ -56,9 +56,11 @@ One line per standing rule; each links its page in `docs/rules/` with the reason
   line `### <Type> — <title>`, links relative to `docs/`; [format](docs/changelog.d/README.md)),
   never `docs/changelog.md` directly. `pnpm changelog:check` reads the fragments,
   `pnpm changelog:merge` folds them in at release.
-- **Before finishing:** what CI runs — `pnpm lint:check`, `pnpm test`, `pnpm build` — plus
-  `pnpm test:e2e` when the change touches SQL, and `ruff check .` in a Python service you changed.
-  Routes are `/v1/<resources>`, shared types live in `src/common/types/`.
+- **Before finishing:** what CI runs — `pnpm lint:check`, `pnpm typecheck`, `pnpm test`,
+  `pnpm build` — plus `pnpm test:e2e` when the change touches SQL,
+  [`pnpm test:planner-exhaustive`](docs/frontend/plan-day/optimize.md#checks) when it touches
+  `src/planner/day-optimizer/` or what the day optimizer plans on, and `ruff check .` in a Python
+  service you changed. Routes are `/v1/<resources>`, shared types live in `src/common/types/`.
 
 ## Keeping the docs in shape
 

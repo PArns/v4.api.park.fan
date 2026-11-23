@@ -30,6 +30,21 @@ export class WeatherForecastItemDto {
   @ApiProperty({ description: "Wind speed (km/h)", nullable: true })
   windSpeed: number | null;
 
+  // Read by Parky's get_park_weather; the ML service's model leaves them out.
+  @ApiProperty({
+    description: "Chance of precipitation in the hour (0-100)",
+    required: false,
+    nullable: true,
+  })
+  precipitationProbability?: number | null;
+
+  @ApiProperty({
+    description: "Wind gusts in the hour (km/h)",
+    required: false,
+    nullable: true,
+  })
+  windGusts?: number | null;
+
   @ApiProperty({
     description: "Is this date a public holiday?",
     required: false,

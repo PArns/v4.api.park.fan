@@ -21,7 +21,7 @@ changes #1–#7 are quoted where they matter.
 
 Other model families have their own pages:
 [foundation models](../foundation-models/README.md) (Chronos-2, TimesFM, TiRex-2, Toto 2.0,
-Granite, TabPFN-TS) and [level drivers](../level-drivers.md) (`driver_level`, PAR-830).
+Granite, TabPFN-TS, and the tabular Kumo-Tabular / Inpriora) and [level drivers](../level-drivers.md) (`driver_level`, PAR-830).
 
 ## Layout
 
@@ -61,10 +61,12 @@ re-scorable with `report`) and `work/` are git-ignored. Everything under `result
 | Baselines, TFT level × H5, production's composed tier | `20261009-baselines-v2` | Plain H5 beats the planner's composed tier; TFT level only d0–d2 on busy rides (`TFT_LEVEL_MAX_LEAD_DAYS = 2`, PAR-901); persistence owns the first 2 h. The H5 composer is behind `PLAN_DAY_H5_COMPOSER` (default off), decision `planner_h5_slots` | [results-baselines.md](results-baselines.md) |
 | `driver_level` (PAR-830) | `20261009-par830-drivers` | Shadow on four day-ranking surfaces, serve nothing; running as a production shadow (PAR-1058) | [level-drivers.md](../level-drivers.md) |
 | Chronos-2 (PAR-828, PAR-869) | `20261010-par828-subset-chronos-v2`, `20261012-tide-vs-chronos` | Live candidate at 30–120 min and on the planner's d0–d1; runs in the forward archive's shadow, serving prepared behind `SERVE_CHRONOS_INTRADAY` (default off) | [chronos-2.md](../foundation-models/chronos-2.md) |
-| TiRex-2, Toto 2.0 (PAR-853) | `20261011-par853-toto-tirex-shard5` | Drop for serving; TiRex-2 kept as a plug-in | [tirex-toto.md](../foundation-models/tirex-toto.md) |
-| TiDE, NHITS (PAR-829) | `20261011-par829-stageA`, `20261011-par829-xseason` | Beat the incumbents on live / intraday leads, lose every head to head against Chronos-2; not pursued | [results-neuralforecast.md](results-neuralforecast.md) |
-| Chronos-2 LoRA, TimesFM 2.5, PatchTST-FM-r2, TTM-r2, TabPFN-TS | not run yet | Implemented and tested; the combined run is PAR-1141 | [running.md](running.md#the-foundation-model-arms-par-1063--1064--1067) |
-| TimesFM 3.0 | never scored | Ruled out: no q95 head, weights licence excludes production | [timesfm.md](../foundation-models/timesfm.md) |
+| TiRex-2, Toto 2.0 (PAR-853) | `20261011-par853-toto-tirex-shard5` | Drop for serving; TiRex-2 kept as a plug-in, Toto 2.0 retired (PAR-1405) | [tirex-toto.md](../foundation-models/tirex-toto.md) |
+| TiDE, NHITS (PAR-829) | `20261011-par829-stageA`, `20261011-par829-xseason` | Beat the incumbents on live / intraday leads, lose every head to head against Chronos-2; not pursued, retired (PAR-1405) | [results-neuralforecast.md](results-neuralforecast.md) |
+| Chronos-2 LoRA, TimesFM 2.5, PatchTST-FM-r2, TTM-r2 | not run yet | Implemented and tested; the combined run is PAR-1141 | [running.md](running.md#the-foundation-model-arms-par-1063--1064--1067) |
+| TimesFM 3.0 | never scored | Ruled out: no q95 head, weights licence excludes production; retired (PAR-1405) | [timesfm.md](../foundation-models/timesfm.md) |
+| TabPFN-TS (PAR-1067) | never scored | Retired before its run (PAR-1405): benchmark-only weights, and servable tabular models rank above TabPFN-3.5 | [granite-tabpfn.md](../foundation-models/granite-tabpfn.md) |
+| Kumo-Tabular, Inpriora as the daily-level learner (PAR-1405) | not run yet | Implemented and tested; join the combined run PAR-1141 | [tabular.md](../foundation-models/tabular.md) |
 
 Offline verdicts reach the product through `src/ml/data/offline-model-verdicts.json`, read by
 the admin model comparison ([forward-archive/model-comparison.md](../forward-archive/model-comparison.md)).

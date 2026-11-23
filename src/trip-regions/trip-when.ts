@@ -22,10 +22,16 @@ import type { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { CLIMATE_NORMAL_PERIOD } from "../external-apis/weather/climate-normals";
 import { weatherFor, type RegionConfig, type PerkRule } from "./regions";
 import {
+  climateOfDates,
+  climateOfNormals,
+  type TripClimate,
+} from "./trip-climate";
+import {
   dayCostParts,
   inSeasonNote,
   isStormPeak,
   medianDayHours,
+  monthTouchesStorm,
   penaltiesOf,
   PlanCostModel,
   stormWeight,
@@ -226,6 +232,12 @@ export interface TripWhenWindow {
   tickets?: WhenTicket[];
   /** With `suggest=1`: plan first's tickets for the window. */
   ticketSuggestion?: TicketSuggestion[];
+  /**
+   * The window's typical weather at the region's climate park, over all its
+   * days: the climate normals (`months[].climate`'s), never a forecast; absent
+   * while they are not cached.
+   */
+  climate?: TripClimate;
 }
 
 /** An owned ticket in a window's plan: `meta.tickets` of `/plan`, in short. */
@@ -244,14 +256,8 @@ export interface TripWhenWeek {
   basis: WhenBasis;
 }
 
-export interface TripWhenClimate {
-  tempMax: number;
-  tempMin: number;
-  precipitationMm: number;
-  rainDays?: number;
-  basis: "climate_normal";
-  period: string;
-}
+/** A month's or a window's typical weather (`trip-climate.ts`). */
+export type TripWhenClimate = TripClimate;
 
 export interface TripWhenMonth {
   month: string;
@@ -1089,6 +1095,10 @@ function describeWindow(
 
   const unplaced = e.plan.unplaced.map((u) => u.slug);
   const leftOut = parksLeftOut(region, slugs, e.plan);
+  const climate = climateOfDates(
+    input.climate,
+    window.map((d) => d.date),
+  );
   return {
     rank,
     from,
@@ -1114,6 +1124,7 @@ function describeWindow(
       ...(leftOut.length > 0 && { parksLeftOut: leftOut }),
       ...(e.plan.stays && { stays: e.plan.stays }),
     },
+    ...(climate && { climate }),
   };
 }
 
@@ -1222,7 +1233,7 @@ function monthStrip(input: WhenInput, weeks: WeekFigure[]): TripWhenMonth[] {
       partyNights,
       ...(hours != null && { dayGuestHours: round1(hours) }),
       ...(storm && {
-        [`${storm.kind}Season`]: stormWeight(storm, `${month}-15`) > 0,
+        [`${storm.kind}Season`]: monthTouchesStorm(storm, month),
       }),
       ...(rainy && {
         rainySeason: monthDays.some((d) =>
@@ -1239,10 +1250,12 @@ function isUsRegion(region: RegionConfig): boolean {
 }
 
 /**
- * A calendar month's normals: the mean high and low and the month's total
- * precipitation (the mean daily normal times the month's days, which is their
- * sum when every day has one). No `rainDays`: a normal is a mean per calendar
- * day, and a mean of 3 mm does not say on how many days it rains.
+ * A calendar month's normals: the mean high and low with their typical range,
+ * the month's total precipitation (the mean daily normal times the month's
+ * days, which is their sum when every day has one) and the chance of a rain
+ * day (`climateOfNormals`). No count of rain days: `wetDayPercent` is a share
+ * of the ten years' days, and "3 of 10 days" says what a count would without
+ * pretending to know this month's.
  */
 function monthClimate(
   climate: ClimateNormals | null | undefined,
@@ -1253,26 +1266,8 @@ function monthClimate(
   const entries = Object.entries(climate)
     .filter(([md]) => md.startsWith(`${mm}-`) && md !== "02-29")
     .map(([, n]) => n);
-  const highs = entries
-    .map((n) => n.temperatureMax)
-    .filter((v): v is number => v != null);
-  const lows = entries
-    .map((n) => n.temperatureMin)
-    .filter((v): v is number => v != null);
-  const rain = entries
-    .map((n) => n.precipitationSum)
-    .filter((v): v is number => v != null);
-  const high = mean(highs);
-  const low = mean(lows);
-  if (high == null || low == null || rain.length === 0) return undefined;
-  return {
-    tempMax: round1(high),
-    tempMin: round1(low),
-    precipitationMm: Math.round(
-      (mean(rain) as number) *
-        new Date(Date.UTC(2027, Number(mm), 0)).getUTCDate(),
-    ),
-    basis: "climate_normal",
-    period: CLIMATE_NORMAL_PERIOD,
-  };
+  return climateOfNormals(
+    entries,
+    new Date(Date.UTC(2027, Number(mm), 0)).getUTCDate(),
+  );
 }

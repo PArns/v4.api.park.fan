@@ -10,6 +10,7 @@ import {
   Query,
   HttpException,
   BadRequestException,
+  NotFoundException,
   Logger,
   UseGuards,
   UseInterceptors,
@@ -61,9 +62,16 @@ import { MlOverviewService } from "./ml-overview.service";
 import { AdminQueueStatusService } from "./admin-queue-status.service";
 import { MlOverviewDto } from "../ml/dto/ml-overview.dto";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
-import { AdminMinRole } from "./auth/admin-auth.decorators";
+import { AdminMinRole, CurrentAdmin } from "./auth/admin-auth.decorators";
+import type { AdminPrincipal } from "./auth/admin-principal";
+import { McpToolError } from "../mcp/mcp-tool";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
+import {
+  DISPLAY_CONSISTENCY_DEFAULT_DAYS,
+  DISPLAY_CONSISTENCY_MAX_DAYS,
+  DisplayConsistencyService,
+} from "../monitoring/display-consistency/display-consistency.service";
 import { PARK_CACHE_FLUSH_PATTERNS } from "./flush-cache-patterns";
 import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import { ISO_DATE_PATTERN } from "../common/utils/date.util";
@@ -160,6 +168,7 @@ export class AdminController {
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("park-enrichment") private parkEnrichmentQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
+    @InjectQueue("nf-training") private nfTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
@@ -186,6 +195,7 @@ export class AdminController {
     private readonly modelComparison: ModelComparisonService,
     private readonly mlOverview: MlOverviewService,
     private readonly queueStatus: AdminQueueStatusService,
+    private readonly displayConsistency: DisplayConsistencyService,
   ) {}
 
   /**
@@ -348,6 +358,67 @@ export class AdminController {
   async getDataQuality(@Query("windowDays") windowDays?: string) {
     const days = Math.min(Math.max(Number(windowDays) || 14, 1), 400);
     return this.dataQualityMonitor.report(days);
+  }
+
+  /**
+   * The last display-consistency run: per park the mismatches between surfaces
+   * that must show the same value and the surfaces it could not read, and each
+   * flagged park's details. docs/analytics/display-consistency.md.
+   */
+  @Get("display-consistency")
+  @ApiOperation({
+    summary:
+      "The last display-consistency run: parks whose surfaces disagree about a park-day, or could not be read",
+  })
+  async getDisplayConsistency() {
+    return (
+      (await this.displayConsistency.latestRun()) ?? {
+        summary: null,
+        parks: [],
+      }
+    );
+  }
+
+  /**
+   * Reads one park's days as every surface shows them now and compares them.
+   * Writes nothing: the caches it reads through are the ones the public
+   * endpoints fill on a miss.
+   */
+  @Get("display-consistency/check")
+  @ApiOperation({
+    summary:
+      "Compare what every surface shows for a park's next days (calendar, best-days, /plan/day, trip region, park payload, Parky, park.fan's calendar and best-days relays)",
+  })
+  @ApiQuery({
+    name: "park",
+    required: true,
+    description: "Park id, slug or name",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: `Days from today, today included (1–${DISPLAY_CONSISTENCY_MAX_DAYS}, default ${DISPLAY_CONSISTENCY_DEFAULT_DAYS})`,
+  })
+  async checkDisplayConsistency(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Query("park") reference?: string,
+    @Query("days") days?: string,
+  ) {
+    if (!reference?.trim()) throw new BadRequestException("park is required");
+    const span = Math.min(
+      Math.max(Math.trunc(Number(days)) || DISPLAY_CONSISTENCY_DEFAULT_DAYS, 1),
+      DISPLAY_CONSISTENCY_MAX_DAYS,
+    );
+    const found = await this.displayConsistency
+      .findPark(reference, admin)
+      .catch((error: unknown) => {
+        if (error instanceof McpToolError) {
+          throw new NotFoundException(`No park "${reference}"`);
+        }
+        throw error;
+      });
+    if ("ambiguous" in found) return found;
+    return this.displayConsistency.check(found, span);
   }
 
   /**
@@ -876,6 +947,69 @@ export class AdminController {
       message: "ML training job queued",
       jobId: job.id.toString(),
     };
+  }
+
+  /**
+   * Queues a TFT training (`nf-training` / `train-nf`), as the 03:00 UTC cron does. The job skips
+   * itself while a training is in flight, so a second click starts nothing.
+   */
+  @Post("train-nf")
+  @AdminMinRole("editor")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger TFT training",
+    description:
+      "Queues a TFT (nf-service) training run, about 40–50 minutes; skipped while one is in flight",
+  })
+  @ApiResponse({ status: 202, description: "TFT training job queued" })
+  async triggerTftTraining(): Promise<{ message: string; jobId: string }> {
+    const job = await this.nfTrainingQueue.add(
+      "train-nf",
+      {},
+      // One attempt, as the cron: a retry would stack a second training on the shared host.
+      { priority: 10, attempts: 1 },
+    );
+    return { message: "TFT training job queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Queues the calendar warmup (`park-metadata` / `warmup-calendar-daily`), as the 08:00 and
+   * 20:00 UTC cron does: it evicts and rebuilds every park's forecast months and best-days, then
+   * rings the frontend. Needed after a deploy or training that changes served forecasts
+   * (docs/deployment/coolify.md). Two warmups at once saturate the database's disk, so while one
+   * is running or waiting this answers with that job instead of queueing another.
+   */
+  @Post("warmup-calendar")
+  @AdminMinRole("editor")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger calendar warmup",
+    description:
+      "Queues the calendar warmup and forecast ring; returns the running one instead while a warmup is active or waiting",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Calendar warmup queued or already queued",
+  })
+  async triggerCalendarWarmup(): Promise<{
+    message: string;
+    jobId: string;
+  }> {
+    const pending = (
+      await this.parkMetadataQueue.getJobs(["active", "waiting"])
+    ).find((job) => job?.name === "warmup-calendar-daily");
+    if (pending) {
+      return {
+        message: "Calendar warmup already running or waiting",
+        jobId: pending.id.toString(),
+      };
+    }
+    const job = await this.parkMetadataQueue.add(
+      "warmup-calendar-daily",
+      {},
+      { priority: 10 },
+    );
+    return { message: "Calendar warmup queued", jobId: job.id.toString() };
   }
 
   /**

@@ -61,6 +61,30 @@ export function chatMessage(message: AssistantMessage) {
 }
 
 /**
+ * One question or answer for reading many chats in a row: what was said, what Parky looked up and
+ * on which prompt version, without the per-answer tokens and cost the chat's summary already sums.
+ */
+export function transcriptMessage(message: AssistantMessage) {
+  return {
+    at: message.createdAt,
+    role: message.role,
+    text: message.text,
+    ...(message.toolCalls?.length && {
+      toolCalls: message.toolCalls.map((call) => ({
+        name: call.name,
+        input: call.input,
+        ...(call.error && { error: true }),
+      })),
+    }),
+    ...(message.role === "assistant" &&
+      message.promptVersion !== null && {
+        promptVersion: message.promptVersion,
+      }),
+    ...(message.rating !== null && { rating: message.rating }),
+  };
+}
+
+/**
  * One piece of feedback, without the email address. `source` says who filed it: the visitor in
  * the form, or Parky from the chat, whose `message` is then the visitor's own words.
  */

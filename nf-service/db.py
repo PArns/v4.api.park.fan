@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, text
 from config import get_settings
 from holiday_features import SchoolCoverage
 from uuid_params import uuid_list
+from weekend_rules import is_weekend
 
 settings = get_settings()
 logger = logging.getLogger("nf.db")
@@ -472,7 +473,13 @@ def add_calendar_covariates(
     ds = df["ds"]
     dow = ds.dt.dayofweek
     doy = ds.dt.dayofyear
-    df["is_weekend"] = (dow >= 5).astype(int)
+    # The park country's weekend (PAR-1379): Friday + Saturday in the Gulf states
+    # and Israel. A series without a country reads Saturday + Sunday.
+    country = None
+    if {"unique_id", "country"} <= set(meta.columns):
+        country_by_series = meta.drop_duplicates("unique_id").set_index("unique_id")["country"]
+        country = df["unique_id"].map(country_by_series).to_numpy()
+    df["is_weekend"] = is_weekend(dow, country).astype(int)
     df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
     df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
     df["doy_sin"] = np.sin(2 * np.pi * doy / 365.0)

@@ -148,13 +148,26 @@ def check_weekday_aliasing(origins: list, n_shards: int, allow: bool) -> dict:
     return census
 
 
-def load_model(spec: str) -> Model:
+def retired_reason(cls: type[Model]) -> str | None:
+    """Why an arm is retired (``models.RETIRED``, PAR-1405), or None."""
+    from .models import RETIRED
+
+    return RETIRED.get(cls.scored_name()) or RETIRED.get(getattr(cls, "name", ""))
+
+
+def load_model(spec: str, allow_retired: bool = False) -> Model:
     from .models import REGISTRY
 
     if spec in REGISTRY:
-        return REGISTRY[spec]()
-    mod, _, cls = spec.partition(":")
-    return getattr(importlib.import_module(mod), cls)()
+        cls = REGISTRY[spec]
+    else:
+        mod, _, name = spec.partition(":")
+        cls = getattr(importlib.import_module(mod), name)
+    why = retired_reason(cls)
+    if why and not allow_retired:
+        raise SystemExit(f"refusing to run {spec!r}: the arm is retired — {why}. Pass --allow-retired "
+                         "to score it as a reference anyway.")
+    return cls()
 
 
 # --------------------------------------------------------------------------- scoring SQL
@@ -955,6 +968,9 @@ def add_args(p: argparse.ArgumentParser) -> None:
                         "long run; a probe's scores are not a result)")
     p.add_argument("--reference", action="store_true",
                    help="a run others compare against: refuse to start without git SHA and image id")
+    p.add_argument("--allow-retired", action="store_true",
+                   help="score an arm listed in models.RETIRED (its question is answered, PAR-1405) "
+                        "as a reference; run-*.json records it under `retired`")
 
 
 def main(args: argparse.Namespace) -> int:
@@ -973,7 +989,7 @@ def main(args: argparse.Namespace) -> int:
     i, n = (int(v) for v in args.shard.split("/"))
     # the served arm (PAR-1043) finds the archived curves next to the export it scores
     os.environ.setdefault("MLBENCH_EXPORT", str(args.export))
-    models = [load_model(s) for s in args.model]
+    models = [load_model(s, allow_retired=getattr(args, "allow_retired", False)) for s in args.model]
     sha = git_sha()
     image = os.environ.get("MLBENCH_IMAGE_ID", "unknown")
     if args.reference and ("unknown" in (sha, image) or sha.endswith("-dirty")):
@@ -985,6 +1001,9 @@ def main(args: argparse.Namespace) -> int:
             "licences": {type(m).scored_name(): {"licence": getattr(m, "licence", None),
                                                  "serving_candidate": getattr(m, "serving_candidate", None)}
                          for m in models},
+            # PAR-1405: a retired arm run with --allow-retired is labelled as such
+            "retired": {type(m).scored_name(): retired_reason(type(m)) for m in models
+                        if retired_reason(type(m))},
             # `git_sha` is whatever the launcher asserted; `code_sha256` is measured from
             # the sources in this process and is the one to trust (see provenance.py).
             "git_sha": sha, "git_sha_source": git_sha_source(),

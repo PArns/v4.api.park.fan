@@ -171,11 +171,13 @@ export class TripTicketMarketsDto {
 export class TripStormSeasonDto {
   @ApiProperty({ enum: ["hurricane", "typhoon"] }) kind: string;
   @ApiProperty({
-    example: "06-01",
-    description: "The season's first day, MM-DD.",
+    example: "08-01",
+    description:
+      "The season's first day, MM-DD: the first day a plan day says `<kind>_season`. The " +
+      "months storms reach the region at least half as often as in its peak month.",
   })
   from: string;
-  @ApiProperty({ example: "11-30", description: "Its last day, MM-DD." })
+  @ApiProperty({ example: "10-31", description: "Its last day, MM-DD." })
   to: string;
   @ApiProperty({ example: { from: "08-15", to: "10-15" } })
   peak: { from: string; to: string };
@@ -408,6 +410,36 @@ export class TripSlotDto {
   source?: string;
 }
 
+export class TripDayWeatherDto {
+  @ApiPropertyOptional({ example: 26.1, description: "The day's high, °C." })
+  tempMax?: number;
+  @ApiPropertyOptional({ example: 14.8, description: "The day's low, °C." })
+  tempMin?: number;
+  @ApiPropertyOptional({ example: 2.3, description: "Precipitation, mm." })
+  precipitationMm?: number;
+  @ApiPropertyOptional({
+    example: 3,
+    description: "WMO code: the forecast's, a normal's most frequent.",
+  })
+  icon?: number;
+  @ApiPropertyOptional({ enum: ["forecast", "climate_normal"] })
+  basis?: "forecast" | "climate_normal";
+  @ApiPropertyOptional({
+    example: 24.3,
+    description:
+      "climate_normal only: the 25th percentile of the daily high; with tempMaxP75 the range half of such days' highs fell in.",
+  })
+  tempMaxP25?: number;
+  @ApiPropertyOptional({ example: 28.0 })
+  tempMaxP75?: number;
+  @ApiPropertyOptional({
+    example: 24,
+    description:
+      "climate_normal only: the chance of a day with at least 1 mm, in percent.",
+  })
+  wetDayPercent?: number;
+}
+
 export class TripParkDayDto {
   @ApiProperty({ enum: ["OPERATING", "CLOSED", "UNKNOWN"] }) status: string;
   @ApiProperty() hoursPublished: boolean;
@@ -419,7 +451,7 @@ export class TripParkDayDto {
   @ApiProperty({ example: "low" }) crowdLevel: string;
   @ApiPropertyOptional({
     description:
-      "The headliners' mean day peak on the measured scale, rounded to 5: within 60 days the forecast times its lead factor, past them the same weekday a year back as measured. What every trip surface ranks by.",
+      "The headliners' mean day peak on the measured scale, rounded to 5: within 60 days the forecast times its lead factor, past them the matching day a year back as measured. What every trip surface ranks by.",
   })
   headlinerWait?: number;
   @ApiProperty({ enum: ["forecast", "long_range", "last_year", "none"] })
@@ -431,7 +463,7 @@ export class TripParkDayDto {
   forecastWait?: number;
   @ApiPropertyOptional({
     description:
-      "The same weekday a year back as measured, rounded to 5, from today on.",
+      "The matching day a year back as measured, rounded to 5, from today on: the same public holiday, else the nearest day of the same weekday (at most three weeks from 52 weeks back) in the same holiday or school-break situation.",
   })
   lastYearWait?: number;
   @ApiPropertyOptional({ type: [String] }) seasons?: string[];
@@ -448,6 +480,14 @@ export class TripParkDayDto {
     description: "The day guests' close on such a day (park offset).",
   })
   dayGuestCloseAt?: string;
+  @ApiPropertyOptional({
+    type: () => TripDayWeatherDto,
+    description:
+      "The park's weather that day: within the forecast's reach (about 16 days) the forecast; " +
+      "past it the date's climate normal (2015-2024). A normal is what the date is usually " +
+      "like, never the day's forecast. Absent where the park's calendar has none.",
+  })
+  weather?: TripDayWeatherDto;
 }
 
 export class TripCalendarDayDto {

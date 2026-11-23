@@ -105,15 +105,17 @@ export class CuratedDataProcessor {
 
   /**
    * The delayed revalidation of other tags, after the CDN window: the ticket
-   * catalog's `trip-tickets:<region>` (`AdminTicketService.publish`).
+   * catalog's `trip-tickets:<region>` (`AdminTicketService.publish`) and the
+   * forecast warmup's best-days and calendar tags
+   * (`CacheWarmupService.announceForecast`).
    */
   @Process("revalidate-tags")
   async handleRevalidateTags(job: Job<{ tags?: string[] }>): Promise<void> {
     const tags = (job.data?.tags ?? []).filter((t) => typeof t === "string");
     if (tags.length === 0) return;
-    this.logger.log(
-      `♻️ Re-revalidating ${tags.join(", ")} after the CDN window...`,
-    );
+    // The forecast warmup sends some 400 tags, which do not belong in one log line.
+    const named = tags.length > 3 ? `${tags.length} tags` : tags.join(", ");
+    this.logger.log(`♻️ Re-revalidating ${named} after the CDN window...`);
     await this.revalidationService.revalidateTags(tags);
   }
 
