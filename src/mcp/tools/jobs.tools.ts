@@ -31,6 +31,8 @@ interface Trigger {
   run(ctx: McpToolContext, params: JobParams): Promise<unknown>;
 }
 
+import { AdminWeatherClosureController } from "../../admin/admin-weather-closure.controller";
+
 const admin = (ctx: McpToolContext) => ctx.get(AdminController);
 
 const JOBS = {
@@ -95,6 +97,11 @@ const JOBS = {
     param: "days",
     run: (ctx, { days }) =>
       admin(ctx).rebuildDowntime(days === undefined ? undefined : String(days)),
+  },
+  "rebuild-weather-closure": {
+    does: "relearns which rides cold or snow shuts, all parks (normally Mondays 05:45)",
+    path: "weather-closure/rebuild",
+    run: (ctx) => ctx.get(AdminWeatherClosureController).rebuild(),
   },
   "aggregate-accuracy-stats": {
     does: "forecast accuracy figures",
