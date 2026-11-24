@@ -1,5 +1,5 @@
 import { HttpException } from "@nestjs/common";
-import { AdminController } from "./admin.controller";
+import { AdminJobsController } from "./admin-jobs.controller";
 import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 
 function globToRegExp(glob: string): RegExp {
@@ -103,12 +103,12 @@ describe("deleteKeysByPatterns", () => {
   });
 });
 
-describe("AdminController.resetCache", () => {
+describe("AdminJobsController.resetCache", () => {
   function controllerWith(redis: ReturnType<typeof fakeRedis>) {
     const queue = () => ({ add: jest.fn().mockResolvedValue({ id: 1 }) });
     const controller = Object.create(
-      AdminController.prototype,
-    ) as AdminController;
+      AdminJobsController.prototype,
+    ) as AdminJobsController;
     Object.assign(controller, {
       redis,
       logger: { warn: jest.fn(), log: jest.fn() },

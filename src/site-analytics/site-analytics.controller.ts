@@ -13,7 +13,6 @@ import {
   Put,
   Query,
   Req,
-  UseGuards,
   UseInterceptors,
 } from "@nestjs/common";
 import {
@@ -22,12 +21,9 @@ import {
   ApiOperation,
   ApiParam,
   ApiResponse,
-  ApiSecurity,
   ApiTags,
 } from "@nestjs/swagger";
 import { Request } from "express";
-import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
-import { AdminAuditInterceptor } from "../admin/auth/admin-audit.interceptor";
 import {
   AdminMinRole,
   CurrentAdmin,
@@ -75,6 +71,7 @@ import {
   SiteUncoveredQueryDto,
 } from "./dto/site-analytics.dto";
 import { OpenRoute } from "../api-keys/api-permission.decorator";
+import { AdminApi } from "../admin/auth/admin-api.decorator";
 
 /** What every report answers when it is bounded; the body's `reason` says which. */
 const REPORT_BUSY =
@@ -152,11 +149,7 @@ export class SiteAnalyticsCollectController {
  * takes a window of UTC days (`days`, or `from` and `to`), `interval`,
  * `locale` and `filter=<dim>:<value>`.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/analytics")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor)
+@AdminApi("admin/analytics")
 export class AdminSiteAnalyticsController {
   constructor(
     private readonly analytics: SiteAnalyticsService,

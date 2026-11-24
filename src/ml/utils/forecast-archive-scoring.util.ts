@@ -207,6 +207,10 @@ export function crowdOrdinal(level: string | null | undefined): number | null {
 }
 const BUSY_ORDINAL = CROWD_ORDINALS.high;
 
+/** Every value of the score's region axis: the pool of all parks, then `regionOf`'s. */
+export const SCORE_REGIONS = ["ALL", "EU", "NA", "ASIA", "OTHER"] as const;
+export type ScoreRegion = (typeof SCORE_REGIONS)[number];
+
 /** Region of a park for the score's region axis (BENCH-SPEC: EU / NA / Asia). */
 export function regionOf(continentSlug: string | null | undefined): string {
   switch (continentSlug) {

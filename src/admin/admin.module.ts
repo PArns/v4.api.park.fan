@@ -6,6 +6,8 @@ import { ParksModule } from "../parks/parks.module";
 import { AdminWeatherClosureController } from "./admin-weather-closure.controller";
 import { AttractionsModule } from "../attractions/attractions.module";
 import { AdminController } from "./admin.controller";
+import { AdminJobsController } from "./admin-jobs.controller";
+import { ParkDuplicateMergeService } from "./park-duplicate-merge.service";
 import { AdminAuthModule } from "./auth/admin-auth.module";
 import { AdminContentModule } from "./content/admin-content.module";
 import { SystemHealthService } from "./system-health.service";
@@ -42,12 +44,17 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "park-day-operation" }),
     BullModule.registerQueue({ name: "search-console" }),
   ],
-  controllers: [AdminController, AdminWeatherClosureController],
+  controllers: [
+    AdminController,
+    AdminJobsController,
+    AdminWeatherClosureController,
+  ],
   providers: [
     SystemHealthService,
     DowntimeMeasurementService,
     MlOverviewService,
     AdminQueueStatusService,
+    ParkDuplicateMergeService,
   ],
 })
 export class AdminModule {}

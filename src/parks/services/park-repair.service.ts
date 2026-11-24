@@ -6,6 +6,7 @@ import { Park } from "../entities/park.entity";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParkMergeService } from "./park-merge.service";
+import type { ValidationReport } from "./park-validator.service";
 
 export interface RepairResult {
   fixedQtMismatches: number;
@@ -348,6 +349,42 @@ export class ParkRepairService {
       `✅ Added ${result.addedWzIds} WZ-IDs, ${result.errors.length} errors`,
     );
     return result;
+  }
+
+  /**
+   * Adds the Queue-Times and Wartezeiten.app ids a validation run found
+   * missing. Mismatched ids are left alone: which of two ids is the right one
+   * needs a human, and a wrong guess moves a park's live data to another park.
+   */
+  async addMissingIds(
+    report: Pick<ValidationReport, "missingQtIds" | "missingWzIds">,
+  ): Promise<RepairResult> {
+    const [qt, wz] = await Promise.all([
+      report.missingQtIds.length > 0
+        ? this.addMissingQueueTimesIds(
+            report.missingQtIds.map((m) => ({
+              parkId: m.parkId,
+              qtId: m.suggestedQtId,
+            })),
+          )
+        : null,
+      report.missingWzIds.length > 0
+        ? this.addMissingWartezeitenIds(
+            report.missingWzIds.map((m) => ({
+              parkId: m.parkId,
+              wzId: m.suggestedWzId,
+            })),
+          )
+        : null,
+    ]);
+    return {
+      fixedQtMismatches: 0,
+      fixedWzMismatches: 0,
+      addedQtIds: qt?.addedQtIds ?? 0,
+      addedWzIds: wz?.addedWzIds ?? 0,
+      mergedDuplicates: 0,
+      errors: [...(qt?.errors ?? []), ...(wz?.errors ?? [])],
+    };
   }
 
   /**

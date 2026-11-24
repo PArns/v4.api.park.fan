@@ -72,7 +72,10 @@ import {
   AttractionResponseDto,
   ParkAttractionListItemDto,
 } from "../attractions/dto/attraction-response.dto";
-import { PaginatedResponseDto } from "../common/dto/pagination.dto";
+import {
+  PaginatedResponseDto,
+  PaginationDto,
+} from "../common/dto/pagination.dto";
 import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
 import { ParkHistoricalStatsDto } from "../analytics/dto/park-historical-stats.dto";
@@ -85,12 +88,18 @@ import { PopularityService } from "../popularity/popularity.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { fromZonedTime } from "date-fns-tz";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
-  ISO_DATE_PATTERN,
   isRealIsoDate,
+  secondsUntilEndOfDayInTimezone,
 } from "../common/utils/date.util";
+import {
+  parseDateRange,
+  validateDateRange,
+} from "../common/utils/date-parsing.util";
+import { ApiParkPath, parkNotFound } from "./park-path";
 import { ttlSecondsToNextBoundary } from "../common/utils/best-visit-times.util";
 
 /** The four values `includeHourly` documents on the calendar route. */
@@ -106,6 +115,19 @@ function queryStringOf(res: { req?: { originalUrl?: string } }): string {
   const url = res.req?.originalUrl ?? "";
   const at = url.indexOf("?");
   return at >= 0 ? url.slice(at) : "";
+}
+
+/** All a route that writes its own cache header needs of the response. */
+type HeaderTarget = { setHeader(name: string, value: string): unknown };
+
+/** The park as the weather and schedule answers name it. */
+function parkRef(park: Park) {
+  return {
+    id: park.id,
+    name: park.name,
+    slug: park.slug,
+    timezone: park.timezone,
+  };
 }
 
 /**
@@ -175,17 +197,9 @@ export class ParksController {
       ],
     },
   })
-  async findAll(@Query() query: ParkQueryDto): Promise<{
-    data: ParkResponseDto[];
-    pagination: {
-      page: number;
-      limit: number;
-      total: number;
-      totalPages: number;
-      hasNext: boolean;
-      hasPrevious: boolean;
-    };
-  }> {
+  async findAll(
+    @Query() query: ParkQueryDto,
+  ): Promise<PaginatedResponseDto<ParkResponseDto>> {
     const { data: parks, total } =
       await this.parksService.findAllWithFilters(query);
     const mappedParks =
@@ -193,14 +207,7 @@ export class ParksController {
 
     return {
       data: mappedParks,
-      pagination: {
-        page: query.page || 1,
-        limit: query.limit || 10,
-        total,
-        totalPages: Math.ceil(total / (query.limit || 10)),
-        hasNext: (query.page || 1) < Math.ceil(total / (query.limit || 10)),
-        hasPrevious: (query.page || 1) > 1,
-      },
+      pagination: new PaginationDto(query.page || 1, query.limit || 10, total),
     };
   }
 
@@ -468,26 +475,7 @@ export class ParksController {
       "`includeHourly=none` — which is what a caller wanting a long-lived copy of the day " +
       "fields should send.",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiQuery({
     name: "from",
     required: false,
@@ -552,24 +540,11 @@ export class ParksController {
     )
     includeHourly?: (typeof INCLUDE_HOURLY_VALUES)[number],
     @Query("include") include?: string,
-    @Res({ passthrough: true }) res?: any,
+    @Res({ passthrough: true }) res?: HeaderTarget,
   ): Promise<IntegratedCalendarResponse> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Parse date range with timezone awareness
-    const { parseDateRange, validateDateRange } =
-      await import("../common/utils/date-parsing.util");
     const { fromDate, toDate } = parseDateRange(from, to, {
       timezone: park.timezone,
       defaultFromDaysAgo: 0,
@@ -631,8 +606,6 @@ export class ParksController {
     );
 
     // Set dynamic cache headers based on date range
-    const { getCurrentDateInTimezone, secondsUntilEndOfDayInTimezone } =
-      await import("../common/utils/date.util");
     const today = getCurrentDateInTimezone(park.timezone);
     const endsInThePast = response.days.every((d) => d.date < today);
     const includesToday = response.days.some((d) => d.date === today);
@@ -765,10 +738,7 @@ export class ParksController {
       "snapshot refreshed by the daily forecast batch — never a lazy ML compute. " +
       "Cache: public, max-age=3600, stale-while-revalidate=86400.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "bruhl" })
-  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiParkPath()
   @ApiQuery({
     name: "from",
     required: false,
@@ -800,28 +770,15 @@ export class ParksController {
     @Param("parkSlug") parkSlug: string,
     @Query("from") from?: string,
     @Query("to") to?: string,
-    @Res({ passthrough: true }) res?: any,
+    @Res({ passthrough: true }) res?: HeaderTarget,
   ): Promise<BestDaysResponse> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Parse + validate the optional window (park timezone, capped at 90 days).
     // Defaults (no params) resolve inside the service to today → +90d.
     let fromStr: string | undefined;
     let toStr: string | undefined;
     if (from || to) {
-      const { parseDateRange, validateDateRange } =
-        await import("../common/utils/date-parsing.util");
       const { fromDate, toDate } = parseDateRange(from, to, {
         timezone: park.timezone,
         defaultFromDaysAgo: 0,
@@ -871,26 +828,7 @@ export class ParksController {
       "Returns 16-day weather forecast for a park via geographic path. " +
       "Cache TTL: 1 hour (HTTP + Redis).",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiResponse({
     status: 200,
     description: "Weather forecast",
@@ -903,18 +841,7 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
   ): Promise<WeatherResponseDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Use helper method for consistent response
     return this.buildWeatherForecastResponse(park);
@@ -941,10 +868,7 @@ export class ParksController {
       "Cache is aligned to the next 15-min slot boundary (nextUpdateAt): the snapshot " +
       "is re-derived per request and the response cannot outlive its promised update.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "bruhl" })
-  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiParkPath()
   @ApiResponse({
     status: 200,
     description: "Nowcast data",
@@ -960,20 +884,9 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-    @Res({ passthrough: true }) res?: any,
+    @Res({ passthrough: true }) res?: HeaderTarget,
   ): Promise<WeatherNowcastDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     const [nowcast, warnings] = await Promise.all([
       this.weatherService.getNowcast(park.id),
@@ -1001,15 +914,7 @@ export class ParksController {
       res.setHeader("Vary", "Accept-Encoding");
     }
 
-    const dto = WeatherNowcastDto.fromNowcast(
-      {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-      },
-      nowcast,
-    );
+    const dto = WeatherNowcastDto.fromNowcast(parkRef(park), nowcast);
     dto.warnings = warnings.map((w) => WeatherWarningDto.fromEntity(w));
     return dto;
   }
@@ -1038,26 +943,7 @@ export class ParksController {
       "Returns weather data within a date range via geographic path. " +
       "Includes historical, current, and forecast data. Cache TTL: 1 hour (HTTP + Redis).",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiQuery({
     name: "from",
     required: false,
@@ -1087,22 +973,9 @@ export class ParksController {
     @Query("from") from?: string,
     @Query("to") to?: string,
   ): Promise<WeatherResponseDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Parse date range with timezone awareness
-    const { parseDateRange, validateDateRange } =
-      await import("../common/utils/date-parsing.util");
     // `to` defaults to the park's today; parseDateRange's own default counts
     // from `from`, which made a bare request one day a month back.
     const { fromDate, toDate } = parseDateRange(
@@ -1119,12 +992,7 @@ export class ParksController {
     );
 
     return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-      },
+      park: parkRef(park),
       weather: weatherData.map((w) => WeatherItemDto.fromEntity(w)),
       attribution: OPEN_METEO_ATTRIBUTION,
     };
@@ -1153,26 +1021,7 @@ export class ParksController {
       "Returns schedule data within a date range via geographic path (default: 30 days). " +
       "Cache TTL: 1 hour (HTTP + Redis).",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiQuery({
     name: "from",
     required: false,
@@ -1202,22 +1051,9 @@ export class ParksController {
     @Query("from") from?: string,
     @Query("to") to?: string,
   ): Promise<ScheduleResponseDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Parse date range with timezone awareness
-    const { parseDateRange, validateDateRange } =
-      await import("../common/utils/date-parsing.util");
     const { fromDate, toDate } = parseDateRange(from, to, {
       timezone: park.timezone,
       defaultFromDaysAgo: 0, // Default from: today
@@ -1243,12 +1079,7 @@ export class ParksController {
     const today = getCurrentDateInTimezone(park.timezone);
 
     return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-      },
+      park: parkRef(park),
       schedule: schedules.map((s) => {
         const dto = ScheduleItemDto.fromEntity(s);
         const dateStr = dto.date;
@@ -1298,26 +1129,7 @@ export class ParksController {
       "Returns current wait times for all attractions in a park via geographic path. " +
       "Cached for 5 minutes.",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiQuery({
     name: "queueType",
     required: false,
@@ -1354,18 +1166,7 @@ export class ParksController {
     )
     queueType?: QueueType,
   ): Promise<ParkWaitTimesResponseDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     return this.parkIntegrationService.getParkWaitTimesResponse(
       park,
@@ -1390,10 +1191,7 @@ export class ParksController {
       "grouped by month and day-of-week, plus a top-10 attraction ranking. " +
       "Useful for identifying busy seasons and peak days. Cached for 24 hours.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "rust" })
-  @ApiParam({ name: "parkSlug", example: "europa-park" })
+  @ApiParkPath()
   @ApiQuery({
     name: "years",
     required: false,
@@ -1437,18 +1235,7 @@ export class ParksController {
     @QueryInt({ name: "minAttractionDays", fallback: 20, min: 0 })
     minAttractionDays: number,
   ): Promise<ParkHistoricalStatsDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     return this.parkHistoricalStatsService.getParkHistoricalStats(
       park,
@@ -1482,10 +1269,7 @@ export class ParksController {
       "busiest ride is used, preferring one that actually reported today, so " +
       "the answer is not a closed or out-of-season ride. ~1 KB.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "rust" })
-  @ApiParam({ name: "parkSlug", example: "europa-park" })
+  @ApiParkPath()
   @ApiQuery({
     name: "attraction",
     required: false,
@@ -1505,17 +1289,7 @@ export class ParksController {
     @Param("parkSlug") parkSlug: string,
     @Query("attraction") attraction?: string,
   ): Promise<RideDayCurveDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Two minutes in Redis for the keyed answer, which leaves private; the
     // stripped one is still cached at the edge on top of this, so the copy a
@@ -1573,10 +1347,7 @@ export class ParksController {
       "composed number is not a measured one. Rides with no measured hourly " +
       "shape are omitted rather than drawn flat.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "bruehl" })
-  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiParkPath()
   @ApiQuery({
     name: "date",
     required: false,
@@ -1593,27 +1364,13 @@ export class ParksController {
     @Param("parkSlug") parkSlug: string,
     @Query("date") dateStr?: string,
   ): Promise<PlanDayDto> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     const date = dateStr ?? getCurrentDateInTimezone(park.timezone);
     // Validated rather than coerced: `new Date("tomorrow")` is Invalid Date and
     // would otherwise become a day of nulls that reads like a closed park. The
     // round trip also rejects 2026-02-31, which Date.parse rolls into March.
-    if (
-      !ISO_DATE_PATTERN.test(date) ||
-      Number.isNaN(Date.parse(date)) ||
-      new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date
-    ) {
+    if (!isRealIsoDate(date)) {
       throw new BadRequestException(
         `Invalid date "${date}" — expected YYYY-MM-DD`,
       );
@@ -1644,10 +1401,7 @@ export class ParksController {
       "rides) rather than a slice of the attraction detail endpoint, which " +
       "answers ~53 KB per ride. Cached for 24 hours.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "rust" })
-  @ApiParam({ name: "parkSlug", example: "europa-park" })
+  @ApiParkPath()
   @ApiQuery({
     name: "years",
     required: false,
@@ -1707,18 +1461,7 @@ export class ParksController {
     @Query("to") to?: string,
   ): Promise<ParkHourlyProfileDto> {
     const range = parseHourlyProfileRange(from, to);
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     return this.parkHistoricalStatsService.getParkHourlyProfile(
       park,
@@ -1809,24 +1552,11 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
   ) {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
 
     // Kept until the park's next midnight, an hour at most: a keyed answer
     // leaves private, and building it costs four queries and an aggregation
     // over every ride-day of the year. A degraded answer is not kept.
-    const { secondsUntilEndOfDayInTimezone, getCurrentDateInTimezone } =
-      await import("../common/utils/date.util");
     return cachedJson(
       this.redis,
       CacheKeys.predictionsYearlyResponse(
@@ -1839,10 +1569,7 @@ export class ParksController {
     );
   }
 
-  /**
-   * Helper: Build yearly predictions response
-   * Extracts duplicated logic from both yearly predictions endpoints
-   */
+  /** What `predictions/yearly` answers, before it is cached. */
   private async buildYearlyPredictionsResponse(park: Park) {
     const predictions = await this.mlService.getParkPredictionsYearly(park.id);
     const [dailyPredictions, holidays] = await Promise.all([
@@ -1934,26 +1661,7 @@ export class ParksController {
       "park payload's number is the one that describes the park**, and this route's surplus " +
       "is duplicate rows rather than hidden attractions (PAR-259).",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiQuery({
     name: "page",
     required: false,
@@ -1996,29 +1704,8 @@ export class ParksController {
     page: number,
     @QueryInt({ name: "limit", fallback: 10, min: 1, max: 100 })
     limit: number,
-  ): Promise<{
-    data: ParkAttractionListItemDto[];
-    pagination: {
-      page: number;
-      limit: number;
-      total: number;
-      totalPages: number;
-      hasNext: boolean;
-      hasPrevious: boolean;
-    };
-  }> {
-    const park = await this.parksService.findByGeographicPath(
-      continent,
-      country,
-      city,
-      parkSlug,
-    );
-
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+  ): Promise<PaginatedResponseDto<ParkAttractionListItemDto>> {
+    await this.findParkOr404(continent, country, city, parkSlug);
 
     // Use findAllWithFilters with geo parameters to ensure geo filtering is applied
     // This ensures that any additional query parameters respect the geo context
@@ -2040,14 +1727,7 @@ export class ParksController {
 
     return {
       data: mappedAttractions,
-      pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasNext: page < Math.ceil(total / limit),
-        hasPrevious: page > 1,
-      },
+      pagination: new PaginationDto(page, limit, total),
     };
   }
 
@@ -2076,26 +1756,7 @@ export class ParksController {
       "This is the primary route with full integration support. Includes historical data (utilization, hourly P90, down counts). " +
       "Cached for 5 minutes.",
   })
-  @ApiParam({
-    name: "continent",
-    description: "Continent slug (e.g., 'europe', 'north-america')",
-    example: "europe",
-  })
-  @ApiParam({
-    name: "country",
-    description: "Country slug (e.g., 'germany', 'united-states')",
-    example: "germany",
-  })
-  @ApiParam({
-    name: "city",
-    description: "City slug (e.g., 'bruhl', 'orlando')",
-    example: "bruhl",
-  })
-  @ApiParam({
-    name: "parkSlug",
-    description: "Park slug (e.g., 'phantasialand', 'magic-kingdom')",
-    example: "phantasialand",
-  })
+  @ApiParkPath()
   @ApiParam({
     name: "attractionSlug",
     description: "Attraction slug (e.g., 'taron', 'space-mountain')",
@@ -2190,6 +1851,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
+  @ApiParkPath()
   @ApiPermission("parks.details")
   @PermissionFields("park")
   @ForecastFields("attractions[].bestVisitTimes")
@@ -2261,27 +1923,35 @@ export class ParksController {
         return undefined;
       }
 
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
+      throw parkNotFound(continent, country, city, parkSlug);
     }
 
     // Return with integrated live data
     return this.parkIntegrationService.buildIntegratedResponse(park);
   }
 
-  /**
-   * Helper: Build weather forecast response
-   * Extracts duplicated logic from both weather forecast endpoints
-   */
+  /** The park a park route's path names, or that route's 404. */
+  private async findParkOr404(
+    continent: string,
+    country: string,
+    city: string,
+    parkSlug: string,
+  ): Promise<Park> {
+    const park = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+    if (!park) throw parkNotFound(continent, country, city, parkSlug);
+    return park;
+  }
+
+  /** The next 16 days of forecast weather, from today in the park's timezone. */
   private async buildWeatherForecastResponse(
     park: Park,
   ): Promise<WeatherResponseDto> {
     // Get forecast data (next 16 days) using park's timezone
-    const { getCurrentDateInTimezone } =
-      await import("../common/utils/date.util");
-    const { fromZonedTime } = await import("date-fns-tz");
-
     const todayStr = getCurrentDateInTimezone(park.timezone);
     const today = fromZonedTime(`${todayStr}T00:00:00`, park.timezone);
     const futureDate = new Date(today);
@@ -2297,12 +1967,7 @@ export class ParksController {
     const forecastData = weatherData.filter((w) => w.dataType === "forecast");
 
     return {
-      park: {
-        id: park.id,
-        name: park.name,
-        slug: park.slug,
-        timezone: park.timezone,
-      },
+      park: parkRef(park),
       weather: forecastData.map((w) => WeatherItemDto.fromEntity(w)),
       attribution: OPEN_METEO_ATTRIBUTION,
     };

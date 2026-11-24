@@ -1,4 +1,5 @@
 import { AdminController } from "../../admin/admin.controller";
+import { AdminJobsController } from "../../admin/admin-jobs.controller";
 import { AdminSearchConsoleController } from "../../search-console/search-console.controller";
 import { McpToolError } from "../mcp-tool";
 import { runJobTool, runMaintenanceTool } from "./jobs.tools";
@@ -11,7 +12,7 @@ describe("run_job", () => {
     const triggerRideStats = jest.fn(async () => queued);
     const triggerPcn = jest.fn(async () => queued);
     const { ctx, audit } = adminContext("editor", [
-      [AdminController, { triggerRideStats, triggerPcn }],
+      [AdminJobsController, { triggerRideStats, triggerPcn }],
     ]);
     expect(
       await runJobTool.handler({ job: "import-ride-stats", limit: 25 }, ctx),
@@ -31,7 +32,7 @@ describe("run_job", () => {
     const triggerCalendarWarmup = jest.fn(async () => queued);
     const triggerTftTraining = jest.fn(async () => queued);
     const { ctx, audit } = adminContext("editor", [
-      [AdminController, { triggerCalendarWarmup, triggerTftTraining }],
+      [AdminJobsController, { triggerCalendarWarmup, triggerTftTraining }],
     ]);
     await runJobTool.handler({ job: "warmup-calendar" }, ctx);
     await runJobTool.handler({ job: "train-nf" }, ctx);
@@ -54,7 +55,7 @@ describe("run_job", () => {
   });
 
   it("refuses a parameter the job does not take, and an author", async () => {
-    const { ctx, audit } = adminContext("editor", [[AdminController, {}]]);
+    const { ctx, audit } = adminContext("editor", [[AdminJobsController, {}]]);
     await expect(
       runJobTool.handler({ job: "sync-parks", days: 3 }, ctx),
     ).rejects.toEqual(new McpToolError("sync-parks takes no days"));
@@ -69,7 +70,7 @@ describe("run_maintenance", () => {
   it("says what a flush would do and flushes only on dryRun false", async () => {
     const flushCache = jest.fn(async () => ({ keysDeleted: 12 }));
     const { ctx, audit } = adminContext("owner", [
-      [AdminController, { flushCache }],
+      [AdminJobsController, { flushCache }],
     ]);
     const preview = await runMaintenanceTool.handler(
       { op: "flush-cache", dryRun: true },
@@ -106,7 +107,7 @@ describe("run_maintenance", () => {
   it("wants both dates for a backfill and none elsewhere, and an owner", async () => {
     const triggerParkDayOperationBackfill = jest.fn(async () => queued);
     const { ctx } = adminContext("owner", [
-      [AdminController, { triggerParkDayOperationBackfill }],
+      [AdminJobsController, { triggerParkDayOperationBackfill }],
     ]);
     await expect(
       runMaintenanceTool.handler(

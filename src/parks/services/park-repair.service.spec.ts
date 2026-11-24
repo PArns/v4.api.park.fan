@@ -319,4 +319,69 @@ describe("ParkRepairService ID repairs", () => {
       expect(result.errors).toEqual([]);
     });
   });
+
+  describe("addMissingIds", () => {
+    const missing = (
+      qt: Array<{ parkId: string; suggestedQtId: string }>,
+      wz: Array<{ parkId: string; suggestedWzId: string }>,
+    ) =>
+      ({ missingQtIds: qt, missingWzIds: wz }) as unknown as Parameters<
+        ParkRepairService["addMissingIds"]
+      >[0];
+
+    it("adds both kinds and reports them in one result", async () => {
+      const { service } = build();
+      const addQt = jest
+        .spyOn(service, "addMissingQueueTimesIds")
+        .mockResolvedValue({
+          fixedQtMismatches: 0,
+          fixedWzMismatches: 0,
+          addedQtIds: 1,
+          addedWzIds: 0,
+          mergedDuplicates: 0,
+          errors: [],
+        });
+      const addWz = jest
+        .spyOn(service, "addMissingWartezeitenIds")
+        .mockResolvedValue({
+          fixedQtMismatches: 0,
+          fixedWzMismatches: 0,
+          addedQtIds: 0,
+          addedWzIds: 0,
+          mergedDuplicates: 0,
+          errors: [{ parkId: "p2", error: "Park p2 not found" }],
+        });
+
+      const result = await service.addMissingIds(
+        missing(
+          [{ parkId: "p1", suggestedQtId: "qt-1" }],
+          [{ parkId: "p2", suggestedWzId: "wz-2" }],
+        ),
+      );
+
+      expect(addQt).toHaveBeenCalledWith([{ parkId: "p1", qtId: "qt-1" }]);
+      expect(addWz).toHaveBeenCalledWith([{ parkId: "p2", wzId: "wz-2" }]);
+      expect(result).toEqual({
+        fixedQtMismatches: 0,
+        fixedWzMismatches: 0,
+        addedQtIds: 1,
+        addedWzIds: 0,
+        mergedDuplicates: 0,
+        errors: [{ parkId: "p2", error: "Park p2 not found" }],
+      });
+    });
+
+    it("calls neither repair when nothing is missing", async () => {
+      const { service } = build();
+      const addQt = jest.spyOn(service, "addMissingQueueTimesIds");
+      const addWz = jest.spyOn(service, "addMissingWartezeitenIds");
+
+      const result = await service.addMissingIds(missing([], []));
+
+      expect(addQt).not.toHaveBeenCalled();
+      expect(addWz).not.toHaveBeenCalled();
+      expect(result.addedQtIds + result.addedWzIds).toBe(0);
+      expect(result.errors).toEqual([]);
+    });
+  });
 });

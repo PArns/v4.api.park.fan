@@ -1,32 +1,22 @@
 import {
   Body,
   ConflictException,
-  Controller,
   Get,
   HttpCode,
   HttpStatus,
   Inject,
   Post,
   Query,
-  UseGuards,
-  UseInterceptors,
 } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
-import {
-  ApiOperation,
-  ApiResponse,
-  ApiSecurity,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiOperation, ApiResponse } from "@nestjs/swagger";
 import type { Queue } from "bull";
 import type Redis from "ioredis";
-import { AdminAuditInterceptor } from "../admin/auth/admin-audit.interceptor";
 import {
   AdminMinRole,
   CurrentAdmin,
 } from "../admin/auth/admin-auth.decorators";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
-import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getSearchConsoleSetup } from "../config/search-console.config";
@@ -51,6 +41,7 @@ import {
   type ReindexQueue,
   type ReindexRecordResult,
 } from "./search-console-reindex.service";
+import { AdminApi } from "../admin/auth/admin-api.decorator";
 
 /**
  * Google Search Console in the admin: how the site is found in Google's
@@ -59,11 +50,7 @@ import {
  * statistic's window (`days`, or `from` and `to`) and `locale`; they answer
  * `private, no-store` like all admin routes. docs/frontend/search-console.md.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/search-console")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor, new NoCdnCacheInterceptor())
+@AdminApi("admin/search-console", new NoCdnCacheInterceptor())
 export class AdminSearchConsoleController {
   constructor(
     private readonly reports: SearchConsoleService,
