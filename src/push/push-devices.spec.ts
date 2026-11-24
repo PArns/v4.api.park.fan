@@ -16,7 +16,7 @@ const PEM = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
 const VALID = {
   installId: "6F1C2D3E-4A5B-4C6D-8E7F-0123456789AB",
   token: "AB".repeat(32),
-  kinds: ["ride-wait", "news", "bogus"],
+  kinds: ["ride-wait", "news", "plan-change", "bogus"],
   newsParks: ["europe/germany/rust/europa-park"],
   locale: "de-AT",
   timezone: "Europe/Berlin",
@@ -60,6 +60,33 @@ describe("POST /v1/push/devices", () => {
     expect(await errorsOf(VALID)).toEqual([]);
   });
 
+  it("accepts a trip id or null, refuses one that cannot be an id", async () => {
+    expect(await errorsOf({ ...VALID, tripId: "AbC_d-12" })).toEqual([]);
+    expect(await errorsOf({ ...VALID, tripId: null })).toEqual([]);
+    expect(await errorsOf({ ...VALID, tripId: "../x" })).toContain("tripId");
+  });
+
+  it("passes the trip pointer on as sent: id, null or omitted", async () => {
+    await controller.registerDevice(
+      { ...VALID, tripId: "t1" } as PushDeviceDto,
+      REQ,
+    );
+    expect(registerDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tripId: "t1" }),
+    );
+    await controller.registerDevice(
+      { ...VALID, tripId: null } as PushDeviceDto,
+      REQ,
+    );
+    expect(registerDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tripId: null }),
+    );
+    await controller.registerDevice(VALID as PushDeviceDto, REQ);
+    expect(registerDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tripId: undefined }),
+    );
+  });
+
   it.each([
     ["installId", { installId: "not-a-uuid" }],
     ["token", { token: "zz".repeat(32) }],
@@ -75,7 +102,7 @@ describe("POST /v1/push/devices", () => {
       expect.objectContaining({
         installId: VALID.installId.toLowerCase(),
         token: VALID.token.toLowerCase(),
-        kinds: ["ride-wait", "news"],
+        kinds: ["ride-wait", "news", "plan-change"],
         newsParks: VALID.newsParks,
         locale: "de-AT",
         timezone: "Europe/Berlin",
@@ -101,5 +128,72 @@ describe("POST /v1/push/devices", () => {
     ).rejects.toBeInstanceOf(HttpException);
     expect(registerDevice).not.toHaveBeenCalled();
     expect(controller.status().apns).toBe(false);
+  });
+});
+
+describe("PushService.registerDevice — the trip pointer", () => {
+  const ENV = process.env;
+  let rows: Map<string, Record<string, unknown>>;
+  let trips: Map<string, { id: string; expiresAt: Date }>;
+  let service: PushService;
+
+  beforeEach(() => {
+    process.env = {
+      ...ENV,
+      APNS_KEY_ID: "ABC123DEFG",
+      APNS_TEAM_ID: "KC5QAXDX94",
+      APNS_BUNDLE_ID: "fan.park.app",
+      APNS_KEY: PEM,
+    };
+    rows = new Map();
+    trips = new Map([
+      ["t1", { id: "t1", expiresAt: new Date(Date.now() + 86_400_000) }],
+      ["old", { id: "old", expiresAt: new Date(Date.now() - 1) }],
+    ]);
+    const repository = {
+      findOne: jest.fn(async ({ where }) => rows.get(where.endpoint) ?? null),
+      create: jest.fn((row) => ({ ...row })),
+      delete: jest.fn(async () => ({ affected: 0 })),
+      save: jest.fn(async (row) => {
+        rows.set(row.endpoint, row);
+        return row;
+      }),
+      manager: {
+        transaction: jest.fn(async (fn) =>
+          fn({
+            findOne: jest.fn(async (_entity, { where, lock }) => {
+              expect(lock).toEqual({ mode: "pessimistic_write" });
+              return trips.get(where.id) ?? null;
+            }),
+            getRepository: () => repository,
+          }),
+        ),
+      },
+    };
+    service = new PushService(repository as never, {} as never);
+  });
+  afterAll(() => {
+    process.env = ENV;
+  });
+
+  const register = (tripId?: string | null) =>
+    service.registerDevice({
+      installId: "6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab",
+      token: "ab".repeat(32),
+      kinds: ["plan-change"],
+      newsParks: null,
+      ...(tripId !== undefined && { tripId }),
+    });
+
+  it("links a live trip, keeps it when omitted, clears it with null", async () => {
+    expect((await register("t1"))?.tripId).toBe("t1");
+    expect((await register())?.tripId).toBe("t1");
+    expect((await register(null))?.tripId).toBeNull();
+  });
+
+  it("answers 404 for a trip that does not exist or expired", async () => {
+    await expect(register("nope")).rejects.toThrow("Trip not found");
+    await expect(register("old")).rejects.toThrow("Trip not found");
+    expect(rows.size).toBe(0);
   });
 });

@@ -150,6 +150,9 @@ export function isAllowedPushEndpoint(url: URL): boolean {
  * - `ride-wait` / `ride-reopen` — its ride alerts, by alert kind.
  * - `show` — its followed shows.
  * - `news` — a new news post (`NewsPushService`).
+ * - `plan-change` — something its stored plan was built around changed
+ *   (`PlanChangePushService`). Devices only: the website has no switch or
+ *   wording for it, so it is not a `PUSH_TOPICS` entry.
  * - the trip topics, for a device that stores a plan.
  */
 export const DEVICE_PUSH_KINDS = [
@@ -157,6 +160,7 @@ export const DEVICE_PUSH_KINDS = [
   "ride-reopen",
   "show",
   "news",
+  "plan-change",
   ...PUSH_TOPICS,
 ] as const;
 export type DevicePushKind = (typeof DEVICE_PUSH_KINDS)[number];

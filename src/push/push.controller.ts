@@ -113,6 +113,7 @@ export class PushController {
       locale:
         body.locale === undefined ? undefined : normalizeLocale(body.locale),
       timezone: normalizeTimezone(body.timezone),
+      tripId: body.tripId,
     });
     if (!stored) {
       throw new HttpException(
@@ -124,6 +125,7 @@ export class PushController {
       endpoint: stored.endpoint,
       kinds: stored.topics,
       newsParks: stored.newsParks,
+      tripId: stored.tripId,
     };
   }
 

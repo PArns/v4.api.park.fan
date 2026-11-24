@@ -130,6 +130,7 @@ describe("APNs", () => {
     expect(pushKindOf({ tag: "show-start:9ab1:2026" })).toBe("show");
     expect(pushKindOf({ tag: "rain-soon:x" })).toBe("rain-soon");
     expect(pushKindOf({ tag: "morning-plan:x" })).toBe("morning-plan");
+    expect(pushKindOf({ tag: "plan-change:p:2026-10-17" })).toBe("plan-change");
     expect(pushKindOf({ tag: "ride-alert:x" })).toBeNull();
     expect(pushKindOf({ tag: "ride-alert:x", kind: "ride-reopen" })).toBe(
       "ride-reopen",
@@ -187,6 +188,13 @@ describe("APNs", () => {
       const show = { title: "t", body: "b", url: "/", tag: "show-start:1:x" };
       await expect(service.send(device, reopen)).resolves.toBe(false);
       await expect(service.send(device, show)).resolves.toBe(false);
+      const plan = {
+        title: "t",
+        body: "b",
+        url: "/",
+        tag: "plan-change:p:2026-10-17",
+      };
+      await expect(service.send(device, plan)).resolves.toBe(false);
       await expect(
         service.send({ ...device, topics: [] } as PushSubscription, wait),
       ).resolves.toBe(false);

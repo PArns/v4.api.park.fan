@@ -365,8 +365,9 @@ export class PushService {
    * Store an app install: an upsert on `apns:<installId>`.
    *
    * `kinds` and `newsParks` are the device's whole current choice and replace
-   * what was stored (the app sends them on every change); the trip pointer is
-   * left alone, like `subscribe` does for a browser.
+   * what was stored (the app sends them on every change). `tripId` follows
+   * `subscribe`: omitted keeps the stored pointer, null clears it, an id is
+   * checked under the trip's row lock and is a 404 when it names no live trip.
    */
   async registerDevice(input: {
     installId: string;
@@ -375,30 +376,63 @@ export class PushService {
     newsParks: string[] | null;
     locale?: string;
     timezone?: string | null;
+    tripId?: string | null;
   }): Promise<PushSubscription | null> {
     if (!isApnsConfigured()) return null;
+    if (!input.tripId) return this.storeDevice(this.repository, input);
+    return this.repository.manager.transaction(async (manager) => {
+      const trip = await manager.findOne(Trip, {
+        where: { id: input.tripId as string },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!trip || trip.expiresAt.getTime() <= Date.now()) {
+        throw new NotFoundException("Trip not found");
+      }
+      return this.storeDevice(manager.getRepository(PushSubscription), input);
+    });
+  }
+
+  private async storeDevice(
+    repository: Repository<PushSubscription>,
+    input: Parameters<PushService["registerDevice"]>[0],
+  ): Promise<PushSubscription> {
     const endpoint = deviceEndpoint(input.installId);
     const row =
-      (await this.repository.findOne({ where: { endpoint } })) ??
-      this.repository.create({ endpoint, tripId: null, p256dh: "", auth: "" });
+      (await repository.findOne({ where: { endpoint } })) ??
+      repository.create({ endpoint, tripId: null, p256dh: "", auth: "" });
     // A token moved to another install (restore onto a new phone) is not two
     // devices: the older row would receive the same banners twice.
-    await this.repository.delete({
+    await repository.delete({
       apnsToken: input.token,
       endpoint: Not(endpoint),
     });
     row.apnsToken = input.token;
     row.topics = input.kinds;
     row.newsParks = input.newsParks;
+    if (input.tripId !== undefined) row.tripId = input.tripId;
     if (input.locale !== undefined) row.locale = input.locale;
     if (input.timezone !== undefined) row.timezone = input.timezone;
     row.failureCount = 0;
-    return this.repository.save(row);
+    return repository.save(row);
   }
 
   /** Forget an install and, by cascade, its alerts and follows. Idempotent. */
   async removeDevice(installId: string): Promise<void> {
     await this.repository.delete({ endpoint: deviceEndpoint(installId) });
+  }
+
+  /** Devices with a stored plan and this kind switched on (`PlanChangePushService`). */
+  async devicesWithTripAndKind(
+    kind: DevicePushKind,
+  ): Promise<PushSubscription[]> {
+    return this.repository
+      .createQueryBuilder("s")
+      .where("s.apnsToken IS NOT NULL")
+      .andWhere("s.tripId IS NOT NULL")
+      .andWhere("s.topics @> CAST(:topics AS jsonb)", {
+        topics: JSON.stringify([kind]),
+      })
+      .getMany();
   }
 
   /** Devices with `news` switched on, for `NewsPushService`. */

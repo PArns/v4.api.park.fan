@@ -228,6 +228,18 @@ export class PushDeviceDto {
   @IsString()
   @MaxLength(64)
   timezone?: string;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description:
+      "The stored plan (`/v1/trips`) the trip kinds read. Omitted keeps what " +
+      "was stored, null clears it; an id that names no trip is a 404.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,32}$/)
+  tripId?: string | null;
 }
 
 export class PushDeviceRemoveDto {
@@ -250,4 +262,7 @@ export class PushDeviceResponseDto {
 
   @ApiProperty({ nullable: true, type: [String] })
   newsParks: string[] | null;
+
+  @ApiProperty({ nullable: true, type: String })
+  tripId: string | null;
 }
