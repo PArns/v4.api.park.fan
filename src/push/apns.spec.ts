@@ -109,6 +109,32 @@ describe("APNs", () => {
     });
   });
 
+  it("stops calling an unreachable Apple for a few minutes", async () => {
+    process.env = { ...ENV, ...APNS_ENV };
+    const client = new ApnsClient();
+    const post = jest
+      .spyOn(client as unknown as { post: () => Promise<unknown> }, "post")
+      .mockRejectedValue(new Error("APNs timeout"));
+    const request = { headers: {}, body: "{}" };
+    let clock = 1_000_000;
+    const now = jest.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      for (let i = 0; i < ApnsClient.BREAKER_FAILURES; i++) {
+        await expect(client.send("ab", request)).resolves.toBe("failed");
+      }
+      expect(post).toHaveBeenCalledTimes(ApnsClient.BREAKER_FAILURES);
+      // Open: no request at all.
+      await expect(client.send("ab", request)).resolves.toBe("failed");
+      expect(post).toHaveBeenCalledTimes(ApnsClient.BREAKER_FAILURES);
+      // After the pause Apple is asked again, and an answer closes it.
+      clock += ApnsClient.BREAKER_OPEN_MS;
+      post.mockResolvedValue({ status: 200, body: "" });
+      await expect(client.send("ab", request)).resolves.toBe("sent");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("classifies dead tokens apart from bad minutes", () => {
     expect(classifyApnsResponse(200, "")).toBe("sent");
     expect(classifyApnsResponse(410, '{"reason":"Unregistered"}')).toBe("dead");

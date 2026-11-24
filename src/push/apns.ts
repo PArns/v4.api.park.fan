@@ -151,12 +151,24 @@ export class ApnsClient implements OnModuleDestroy {
   /** Apple wants a token refreshed at most every 20 and at least every 60 minutes. */
   private static readonly TOKEN_TTL_MS = 50 * 60_000;
   private static readonly TIMEOUT_MS = 10_000;
+  /**
+   * Circuit breaker: after this many requests in a row that got no answer
+   * (network error, timeout), sends fail at once for `BREAKER_OPEN_MS`. Each
+   * would otherwise cost up to `TIMEOUT_MS` inside the five-minute sweep that
+   * also serves the web's alerts.
+   */
+  static readonly BREAKER_FAILURES = 5;
+  static readonly BREAKER_OPEN_MS = 5 * 60_000;
+  private unanswered = 0;
+  private openUntilMs = 0;
 
   async send(deviceToken: string, request: ApnsRequest): Promise<ApnsOutcome> {
     const config = getApnsConfig();
     if (!config) return "failed";
+    if (Date.now() < this.openUntilMs) return "failed";
     try {
       const { status, body } = await this.post(config, deviceToken, request);
+      this.unanswered = 0;
       // A rejected provider token is ours to fix, not the device's.
       if (status === 403) this.token = null;
       const outcome = classifyApnsResponse(status, body);
@@ -168,6 +180,13 @@ export class ApnsClient implements OnModuleDestroy {
       this.logger.warn(`APNs request failed: ${(error as Error)?.message}`);
       this.session?.destroy();
       this.session = null;
+      if (++this.unanswered >= ApnsClient.BREAKER_FAILURES) {
+        this.unanswered = 0;
+        this.openUntilMs = Date.now() + ApnsClient.BREAKER_OPEN_MS;
+        this.logger.warn(
+          `APNs unreachable ${ApnsClient.BREAKER_FAILURES} times in a row; skipping sends for ${ApnsClient.BREAKER_OPEN_MS / 60_000} min`,
+        );
+      }
       return "failed";
     }
   }
