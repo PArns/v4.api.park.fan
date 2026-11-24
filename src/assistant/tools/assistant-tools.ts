@@ -283,7 +283,12 @@ type ParkSummary =
       scheduleToday?: Array<{ opens?: string | null; closes?: string | null }>;
       nextSchedule?: unknown;
       rides?: {
-        longestWaits?: Array<{ id: string; name: string; waitMinutes: number }>;
+        longestWaits?: Array<{
+          id: string;
+          name: string;
+          waitMinutes: number;
+          tooColdToGetWet?: true;
+        }>;
         down?: Array<{ id: string; name: string }>;
       };
     };
@@ -5136,6 +5141,7 @@ export const ASSISTANT_TOOLS = [
           name: string;
           waitMinutes: number | null;
           status: string;
+          tooColdToGetWet?: true;
         }> = [
           ...waiting.map((ride) => ({ ...ride, status: "OPERATING" })),
           ...down.slice(0, Math.max(0, room)).map((ride) => ({
@@ -5189,6 +5195,7 @@ export const ASSISTANT_TOOLS = [
                 ...heightOf(ride),
                 ...(types.length > 0 && { types }),
                 ...(dryness && { indoorOutdoor: dryness }),
+                ...(ride.tooColdToGetWet && { tooColdToGetWet: true }),
                 ...riddenMark(ctx, ride.id),
               };
             }),

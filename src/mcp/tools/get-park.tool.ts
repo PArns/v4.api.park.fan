@@ -132,6 +132,8 @@ function summarize(
           waitMinutes: wait,
           crowdLevel: ride.crowdLevel ?? null,
           trend: ride.trend ?? null,
+          // A short queue here is the cold, not a tip (PAR-1420).
+          ...(ride.tooColdToGetWet && { tooColdToGetWet: true }),
         })),
       down: rides
         .filter((ride) => rideStatus(ride) === "DOWN")

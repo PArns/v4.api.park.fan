@@ -63,6 +63,7 @@ import {
   nameDuplicateKey,
   outranksNameDuplicate,
 } from "../../common/utils/name-duplicate.util";
+import { TOO_COLD_TO_GET_WET_DESCRIPTION } from "../utils/wet-ride-weather.util";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -224,6 +225,13 @@ export class ParkAttractionDto {
     required: false,
   })
   isHeadliner?: boolean;
+
+  @ApiProperty({
+    description: TOO_COLD_TO_GET_WET_DESCRIPTION,
+    required: false,
+    example: true,
+  })
+  tooColdToGetWet?: true;
 
   @ApiProperty({
     description: "Whether this attraction only operates during certain seasons",

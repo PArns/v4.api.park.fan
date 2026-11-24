@@ -70,6 +70,11 @@ import { toDowntimeBlock } from "../dto/downtime-reliability.dto";
 import { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
 import { hasMeasuredDays } from "../../analytics/utils/typical-waits.util";
 import { servedHourlyConfidence } from "../../ml/utils/hourly-confidence.util";
+import {
+  cachedParkWeatherNow,
+  tooColdToGetWet,
+  wetInTheCold,
+} from "../../parks/utils/wet-ride-weather.util";
 
 /**
  * Attraction Integration Service
@@ -813,6 +818,13 @@ export class AttractionIntegrationService {
       } catch {
         // Unknown: the flag stays absent and the client asks as before.
       }
+    }
+
+    // Too cold to get wet now (PAR-1420), from the park payload's reading:
+    // the ride page and Parky's get_ride say why it is no tip.
+    if (dto.mayGetWet === true) {
+      const now = await cachedParkWeatherNow(this.redis, attraction.parkId);
+      Object.assign(dto, wetInTheCold(dto.mayGetWet, tooColdToGetWet(now)));
     }
 
     // Cache aligned to next 5-min boundary (+5s buffer) so the entry expires

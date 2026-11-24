@@ -1,6 +1,7 @@
 import type { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import type { NearbyShortWaitDto } from "./dto/nearby-response.dto";
+import { tooColdToGetWet } from "../parks/utils/wet-ride-weather.util";
 
 /** At most this many rides in `shortWaits`, across all nearby parks. */
 export const SHORT_WAITS_LIMIT = 5;
@@ -49,10 +50,12 @@ export function pickShortWaits(
   for (const { integrated, name, distance } of parks) {
     if (integrated.status !== "OPERATING") continue;
     if (integrated.liveWaitTimes?.available === false) continue;
+    const cold = tooColdToGetWet(integrated.weather?.now);
 
     for (const attraction of integrated.attractions ?? []) {
       if (attraction.effectiveStatus !== "OPERATING") continue;
       if (attraction.isCurrentlyInSeason === false) continue;
+      if (cold && attraction.mayGetWet === true) continue;
       if (
         !attraction.comparison ||
         !SHORT_COMPARISONS.has(attraction.comparison)

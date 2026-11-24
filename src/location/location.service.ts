@@ -31,6 +31,11 @@ import {
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { pickShortWaits } from "./short-waits.util";
+import {
+  cachedParkWeatherNow,
+  tooColdToGetWet,
+  wetInTheCold,
+} from "../parks/utils/wet-ride-weather.util";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import {
@@ -297,6 +302,7 @@ export class LocationService {
       headlinerIds,
       parkRatable,
       shows,
+      weatherNow,
     ] = await Promise.all([
       this.parksService.getBatchParkStatus([parkId]),
       this.analyticsService.getEffectiveStartTime(park.id, park.timezone),
@@ -311,7 +317,9 @@ export class LocationService {
       this.analyticsService.isParkRatable(parkId),
       // Shows are an extra: their failure must not take the rides down.
       this.findShowsInPark(park, userLocation).catch(() => []),
+      cachedParkWeatherNow(this.redis, parkId),
     ]);
+    const cold = tooColdToGetWet(weatherNow);
 
     const parkAnalytics = await this.analyticsService
       .getParkStatistics(parkId, park.timezone, startTime)
@@ -394,6 +402,9 @@ export class LocationService {
           status: queueData?.status || "CLOSED",
           crowdLevel,
           isHeadliner: headlinerIds.has(attraction.id),
+          // Still a headliner, but too cold to get wet now (PAR-1420): the
+          // compass leaves it out, and the key says why.
+          ...wetInTheCold(curated.mayGetWet, cold),
           isSeasonal,
           seasonMonths,
           isCurrentlyInSeason,

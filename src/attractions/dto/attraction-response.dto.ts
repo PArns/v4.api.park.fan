@@ -61,6 +61,7 @@ import {
   retiredKindOf,
   type RetiredKind,
 } from "../services/attraction-retirement.service";
+import { TOO_COLD_TO_GET_WET_DESCRIPTION } from "../../parks/utils/wet-ride-weather.util";
 
 /**
  * One weekday/weekend bucket of the typical-waits summary.
@@ -436,6 +437,13 @@ export class AttractionResponseDto {
     nullable: true,
   })
   mayGetWet?: boolean | null;
+
+  @ApiProperty({
+    description: TOO_COLD_TO_GET_WET_DESCRIPTION,
+    required: false,
+    example: true,
+  })
+  tooColdToGetWet?: true;
 
   @ApiProperty({
     description:
