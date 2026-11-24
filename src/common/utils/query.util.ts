@@ -1,4 +1,4 @@
-import { ObjectLiteral, SelectQueryBuilder } from "typeorm";
+import { Brackets, ObjectLiteral, SelectQueryBuilder } from "typeorm";
 
 /**
  * Query parsing and normalization utilities
@@ -30,4 +30,20 @@ export async function paginate<T extends ObjectLiteral>(
     .take(limit)
     .getManyAndCount();
   return { data, total };
+}
+
+/**
+ * `a OR b OR c` in brackets, so it ANDs with the rest of a query as one term.
+ * Every condition shares `parameters`.
+ */
+export function anyOf(
+  conditions: string[],
+  parameters?: ObjectLiteral,
+): Brackets {
+  return new Brackets((where) => {
+    conditions.forEach((condition, index) => {
+      if (index === 0) where.where(condition, parameters);
+      else where.orWhere(condition, parameters);
+    });
+  });
 }

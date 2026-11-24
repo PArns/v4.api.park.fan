@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Body,
-  Controller,
   Delete,
   Get,
   HttpCode,
@@ -11,17 +10,10 @@ import {
   Post,
   Put,
   Query,
-  UseGuards,
-  UseInterceptors,
 } from "@nestjs/common";
-import {
-  ApiOperation,
-  ApiResponse,
-  ApiSecurity,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiOperation, ApiQuery, ApiResponse } from "@nestjs/swagger";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Brackets, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../../parks/entities/park.entity";
 import { ParkSeason } from "../../parks/entities/park-season.entity";
@@ -35,12 +27,8 @@ import {
   resolveCuratedPark,
 } from "../../parks/utils/curated-park-facts.util";
 import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
-import { AdminAuthGuard } from "../auth/admin-auth.guard";
 import { AdminMinRole, CurrentAdmin } from "../auth/admin-auth.decorators";
-import {
-  AdminAuditInterceptor,
-  SelfAudited,
-} from "../auth/admin-audit.interceptor";
+import { SelfAudited } from "../auth/admin-audit.interceptor";
 import { AdminAuditService } from "../auth/admin-audit.service";
 import type { AdminPrincipal } from "../auth/admin-principal";
 import { AdminCurationService } from "./admin-curation.service";
@@ -67,17 +55,30 @@ import {
   VerifyFieldsDto,
 } from "./dto/curation.dto";
 import { likeContains } from "../../common/utils/like-pattern.util";
+import { anyOf } from "../../common/utils/query.util";
+import { QueryInt } from "../../common/pipes/query-int.pipe";
+import { AdminApi } from "../auth/admin-api.decorator";
+
+/**
+ * Both names, so a ride renamed in the admin is found under the name it was
+ * given as well as the one upstream still sends.
+ */
+const ATTRACTION_NAME_MATCHES = [
+  "attraction.name ILIKE :like",
+  "attraction.curated_name ILIKE :like",
+];
 
 /**
  * The editing surface: parks, rides, their curated fields, their seasons.
  *
- * Separate from `AdminController` because the two answer to different people.
- * That one triggers jobs and repairs data — an operator's console. This one is
- * where somebody who knows that Winni Splash has no minimum height writes it
- * down, and it is shaped for that: every read hands back the curated fields as
- * *descriptors* (upstream value, curated value, effective value, whether they
- * disagree) rather than a flat object, so the editor renders whatever the
- * backend says is curatable and adding a column here needs no frontend change.
+ * Separate from `AdminController` and `AdminJobsController` because they answer
+ * to different people. Those trigger jobs and repair data — an operator's
+ * console. This one is where somebody who knows that Winni Splash has no
+ * minimum height writes it down, and it is shaped for that: every read hands
+ * back the curated fields as *descriptors* (upstream value, curated value,
+ * effective value, whether they disagree) rather than a flat object, so the
+ * editor renders whatever the backend says is curatable and adding a column
+ * here needs no frontend change.
  *
  * Every write goes through `AdminCurationService`, which owns the part that is
  * easy to get wrong: writing only the curated cell, evicting our caches BEFORE
@@ -85,11 +86,7 @@ import { likeContains } from "../../common/utils/like-pattern.util";
  * window. And every write leaves an audit row carrying the reason and the URL
  * it was established from.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/content")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor)
+@AdminApi("admin/content")
 export class AdminContentController {
   constructor(
     @InjectRepository(Park) private readonly parks: Repository<Park>,
@@ -294,30 +291,40 @@ export class AdminContentController {
 
   @Get("parks")
   @ApiOperation({ summary: "Parks, with what has been curated on each" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    description: "1-500, default 200",
+  })
+  @ApiQuery({ name: "offset", required: false, description: "Rows to skip" })
   async listParks(
     @Query("q") q?: string,
     @Query("country") country?: string,
     @Query("curated") curated?: "only" | "none",
-    @Query("limit") limit?: string,
-    @Query("offset") offset?: string,
+    @QueryInt({ name: "limit", fallback: 200, min: 1, max: 500 })
+    limit: number = 200,
+    @QueryInt({ name: "offset", fallback: 0, min: 0 }) offset: number = 0,
   ) {
     const qb = this.parks
       .createQueryBuilder("park")
       .orderBy("park.name", "ASC")
-      .take(Math.min(Number(limit) || 200, 500))
-      .skip(Number(offset) || 0);
+      .take(limit)
+      .skip(offset);
 
     if (q && q.trim().length > 0) {
       const like = likeContains(q.trim());
       // Both names, because an editor searching for a park they renamed is
       // searching for the name they typed, not the one upstream still uses.
       qb.andWhere(
-        new Brackets((w) => {
-          w.where("park.name ILIKE :like", { like })
-            .orWhere("park.curated_name ILIKE :like", { like })
-            .orWhere("park.city ILIKE :like", { like })
-            .orWhere("park.slug ILIKE :like", { like });
-        }),
+        anyOf(
+          [
+            "park.name ILIKE :like",
+            "park.curated_name ILIKE :like",
+            "park.city ILIKE :like",
+            "park.slug ILIKE :like",
+          ],
+          { like },
+        ),
       );
     }
     if (country) {
@@ -331,13 +338,7 @@ export class AdminContentController {
     // triage list kept handing it back to the next editor.
     if (curated === "only") {
       qb.andWhere(
-        new Brackets((w) => {
-          CURATED_PARK_DB_COLUMNS.forEach((column, index) => {
-            const condition = `park.${column} IS NOT NULL`;
-            if (index === 0) w.where(condition);
-            else w.orWhere(condition);
-          });
-        }),
+        anyOf(CURATED_PARK_DB_COLUMNS.map((c) => `park.${c} IS NOT NULL`)),
       );
     }
     if (curated === "none") {
@@ -495,14 +496,7 @@ export class AdminContentController {
     }
     if (q && q.trim().length > 0) {
       const like = likeContains(q.trim());
-      qb.andWhere(
-        new Brackets((w) => {
-          w.where("attraction.name ILIKE :like", { like }).orWhere(
-            "attraction.curated_name ILIKE :like",
-            { like },
-          );
-        }),
-      );
+      qb.andWhere(anyOf(ATTRACTION_NAME_MATCHES, { like }));
     }
 
     const rows = await qb.getMany();
@@ -572,9 +566,11 @@ export class AdminContentController {
       "it was given — the public search index only learns that on its next " +
       "rebuild.",
   })
+  @ApiQuery({ name: "limit", required: false, description: "1-50, default 12" })
   async searchAttractions(
     @Query("q") q?: string,
-    @Query("limit") limit?: string,
+    @QueryInt({ name: "limit", fallback: 12, min: 1, max: 50 })
+    limit: number = 12,
   ) {
     const term = q?.trim() ?? "";
     if (term.length < 2) return { total: 0, attractions: [] };
@@ -584,14 +580,7 @@ export class AdminContentController {
       .createQueryBuilder("attraction")
       .leftJoinAndSelect("attraction.park", "park")
       .where("attraction.retired_at IS NULL")
-      .andWhere(
-        new Brackets((w) => {
-          w.where("attraction.name ILIKE :like", { like }).orWhere(
-            "attraction.curated_name ILIKE :like",
-            { like },
-          );
-        }),
-      )
+      .andWhere(anyOf(ATTRACTION_NAME_MATCHES, { like }))
       // Exact matches first: "Taron" must not be buried under every ride whose
       // name contains it.
       //
@@ -608,7 +597,7 @@ export class AdminContentController {
       .orderBy("exact_rank", "ASC")
       .addOrderBy("attraction.name", "ASC")
       .setParameter("exact", term)
-      .take(Math.min(Number(limit) || 12, 50))
+      .take(limit)
       .getManyAndCount();
 
     return {
@@ -829,6 +818,8 @@ export class AdminContentController {
       "status, year (overlapping it), current, parkId, region (a trip region's " +
       "parks; 404 for an unknown one).",
   })
+  @ApiQuery({ name: "limit", required: false, description: "Page size" })
+  @ApiQuery({ name: "offset", required: false, description: "Rows to skip" })
   async listSeasons(
     @Query("kind") kind?: string,
     @Query("status") status?: string,
@@ -836,8 +827,8 @@ export class AdminContentController {
     @Query("current") current?: string,
     @Query("parkId") parkId?: string,
     @Query("region") region?: string,
-    @Query("limit") limit?: string,
-    @Query("offset") offset?: string,
+    @QueryInt({ name: "limit", min: 1 }) limit?: number,
+    @QueryInt({ name: "offset", min: 0 }) offset?: number,
   ) {
     return this.seasonAdmin.list({
       kind: kind as never,
@@ -846,8 +837,8 @@ export class AdminContentController {
       current: current === "true",
       parkId: parkId || undefined,
       region: region || undefined,
-      limit: Number(limit) || undefined,
-      offset: Number(offset) || undefined,
+      limit,
+      offset,
     });
   }
 
@@ -899,21 +890,23 @@ export class AdminContentController {
 
   @Get("history")
   @ApiOperation({ summary: "What administrators have changed, newest first" })
+  @ApiQuery({ name: "limit", required: false, description: "Page size" })
+  @ApiQuery({ name: "offset", required: false, description: "Rows to skip" })
   async history(
     @Query("entityType") entityType?: string,
     @Query("entityId") entityId?: string,
     @Query("actorId") actorId?: string,
     @Query("action") action?: string,
-    @Query("limit") limit?: string,
-    @Query("offset") offset?: string,
+    @QueryInt({ name: "limit", min: 1 }) limit?: number,
+    @QueryInt({ name: "offset", min: 0 }) offset?: number,
   ) {
     return this.audit.list({
       entityType,
       entityId,
       actorId,
       action,
-      limit: Number(limit) || undefined,
-      offset: Number(offset) || undefined,
+      limit,
+      offset,
     });
   }
 

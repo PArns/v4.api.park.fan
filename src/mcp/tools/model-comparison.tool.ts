@@ -6,8 +6,8 @@ import {
 } from "../../parks/services/model-comparison.service";
 import type { ModelComparisonOriginId } from "../../ml/dto/model-comparison.dto";
 import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
+import { SCORE_REGIONS } from "../../ml/utils/forecast-archive-scoring.util";
 
-const REGIONS = ["ALL", "EU", "NA", "ASIA", "OTHER"] as const;
 const GROUPS = ["live", "today", "planner", "calendar"] as const;
 
 export const modelComparisonTool = defineMcpTool({
@@ -31,7 +31,10 @@ export const modelComparisonTool = defineMcpTool({
       .max(90)
       .default(28)
       .describe("Scored target days pooled"),
-    region: z.enum(REGIONS).default("ALL").describe("Parks of one region"),
+    region: z
+      .enum(SCORE_REGIONS)
+      .default("ALL")
+      .describe("Parks of one region"),
     group: z.enum(GROUPS).optional().describe("Only this group's questions"),
     question: z
       .string()

@@ -1,6 +1,5 @@
 import {
   Body,
-  Controller,
   Get,
   HttpCode,
   HttpStatus,
@@ -9,23 +8,10 @@ import {
   Post,
   Put,
   Query,
-  UseGuards,
-  UseInterceptors,
 } from "@nestjs/common";
-import {
-  ApiOperation,
-  ApiParam,
-  ApiQuery,
-  ApiResponse,
-  ApiSecurity,
-  ApiTags,
-} from "@nestjs/swagger";
-import { AdminAuthGuard } from "../auth/admin-auth.guard";
+import { ApiOperation, ApiParam, ApiQuery, ApiResponse } from "@nestjs/swagger";
 import { AdminMinRole, CurrentAdmin } from "../auth/admin-auth.decorators";
-import {
-  AdminAuditInterceptor,
-  SelfAudited,
-} from "../auth/admin-audit.interceptor";
+import { SelfAudited } from "../auth/admin-audit.interceptor";
 import type { AdminPrincipal } from "../auth/admin-principal";
 import { AdminTicketService } from "./admin-ticket.service";
 import {
@@ -36,6 +22,7 @@ import {
   TicketProductWriteDto,
   TicketValidationDto,
 } from "./dto/ticket-product.dto";
+import { AdminApi } from "../auth/admin-api.decorator";
 
 /**
  * A trip region's ticket catalog in the admin: every product with its rules
@@ -43,11 +30,7 @@ import {
  * published after it. Reads for any admin, writes for editors. Contract:
  * docs/frontend/trip-regions.md#editing-the-catalog.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/content/regions/:region/tickets")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor)
+@AdminApi("admin/content/regions/:region/tickets")
 export class AdminTicketsController {
   constructor(private readonly tickets: AdminTicketService) {}
 

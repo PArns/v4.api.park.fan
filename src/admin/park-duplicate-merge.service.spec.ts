@@ -1,4 +1,4 @@
-import { AdminController } from "./admin.controller";
+import { ParkDuplicateMergeService } from "./park-duplicate-merge.service";
 import {
   DuplicatePair,
   ParkValidatorService,
@@ -16,12 +16,11 @@ import { Park } from "../parks/entities/park.entity";
  * `sharedPoint` pair is the one the issue asks about by name, because it is the
  * first branch that admits a pair whose names score under 0.85.
  *
- * The controller is built by hand rather than through a testing module: its
- * constructor takes fourteen queues and a Redis client this path never touches,
- * and naming the three services it does use keeps the case readable and stops a
- * new constructor argument from silently shifting the wiring.
+ * The service is built by hand rather than through a testing module: naming
+ * the three services it uses keeps the case readable and stops a new
+ * constructor argument from silently shifting the wiring.
  */
-describe("AdminController.mergeDuplicateParks", () => {
+describe("ParkDuplicateMergeService", () => {
   const park = (p: Partial<Park>): Park => ({ ...p }) as Park;
 
   /** The Wet'n'Wild rows, detected by `sharedPoint`: disjoint sources, so no
@@ -103,7 +102,7 @@ describe("AdminController.mergeDuplicateParks", () => {
   let repairDuplicates: jest.Mock;
   let mergeParks: jest.Mock;
   let findDuplicates: jest.Mock;
-  let controller: AdminController;
+  let service: ParkDuplicateMergeService;
 
   const build = (duplicates: DuplicatePair[]) => {
     findDuplicates = jest.fn().mockResolvedValue(duplicates);
@@ -139,23 +138,25 @@ describe("AdminController.mergeDuplicateParks", () => {
         ),
     };
 
-    controller = Object.create(AdminController.prototype) as AdminController;
+    service = Object.create(
+      ParkDuplicateMergeService.prototype,
+    ) as ParkDuplicateMergeService;
     // The real service around the two things it reads, so the read route's
     // winner comes from the same `findDuplicatesWithWinners` production runs.
     const parkValidatorService = Object.assign(
       Object.create(ParkValidatorService.prototype) as ParkValidatorService,
       { findDuplicates, parkRepository },
     );
-    Object.assign(controller, {
+    Object.assign(service, {
       parkValidatorService,
       parkRepairService: { repairDuplicates },
       parkMergeService: { mergeParks },
     });
-    return controller;
+    return service;
   };
 
   it("writes nothing when autoDetect is sent without dryRun:false", async () => {
-    const result = await build([sharedIdPair]).mergeDuplicateParks({
+    const result = await build([sharedIdPair]).merge({
       autoDetect: true,
     });
 
@@ -166,7 +167,7 @@ describe("AdminController.mergeDuplicateParks", () => {
   });
 
   it("does not merge a sharedPoint pair, even with dryRun:false", async () => {
-    const result = await build([sharedPointPair]).mergeDuplicateParks({
+    const result = await build([sharedPointPair]).merge({
       autoDetect: true,
       dryRun: false,
     });
@@ -187,10 +188,10 @@ describe("AdminController.mergeDuplicateParks", () => {
     // Both in one call, because the failure worth guarding against is a gate
     // that refuses everything: a run that merges nothing proves nothing about
     // a run that merges the wrong thing.
-    const result = await build([
-      sharedPointPair,
-      sharedIdPair,
-    ]).mergeDuplicateParks({ autoDetect: true, dryRun: false });
+    const result = await build([sharedPointPair, sharedIdPair]).merge({
+      autoDetect: true,
+      dryRun: false,
+    });
 
     expect(repairDuplicates).toHaveBeenCalledWith([
       { winnerId: ushBullCreek.id, loserId: ushLosAngeles.id },
@@ -220,7 +221,7 @@ describe("AdminController.mergeDuplicateParks", () => {
       errors: [],
     });
 
-    const merged = await merging.mergeDuplicateParks({
+    const merged = await merging.merge({
       park1Id: ushLosAngeles.id,
       park2Id: ushBullCreek.id,
     });
@@ -229,9 +230,9 @@ describe("AdminController.mergeDuplicateParks", () => {
     expect(merged.merged).toBe(1);
     expect(merged.dryRun).toBe(false);
 
-    // Same controller and the same mock, so the call count below is the one
+    // Same service and the same mock, so the call count below is the one
     // from the merge above and nothing else.
-    const preview = await merging.mergeDuplicateParks({
+    const preview = await merging.merge({
       park1Id: ushLosAngeles.id,
       park2Id: ushBullCreek.id,
       dryRun: true,
@@ -251,10 +252,10 @@ describe("AdminController.mergeDuplicateParks", () => {
     // `application/x-www-form-urlencoded` by default — `curl -d dryRun=true`
     // arrives as "true". Under a strict comparison that is not `true`, and the
     // one request that asked for a dry run would have deleted a park.
-    const controller = build([]);
+    const service = build([]);
     mergeParks.mockResolvedValue({ success: true });
 
-    const preview = await controller.mergeDuplicateParks({
+    const preview = await service.merge({
       park1Id: ushLosAngeles.id,
       park2Id: ushBullCreek.id,
       dryRun: "true" as unknown as boolean,
@@ -269,7 +270,7 @@ describe("AdminController.mergeDuplicateParks", () => {
     // parse, `autoDetect: "false"` was truthy and merged everything; a
     // `readBodyFlag` narrowed back to booleans would drop this call into the
     // usage message instead of the branch.
-    const result = await build([sharedIdPair]).mergeDuplicateParks({
+    const result = await build([sharedIdPair]).merge({
       autoDetect: "true" as unknown as boolean,
       dryRun: "false" as unknown as boolean,
     });
@@ -282,7 +283,7 @@ describe("AdminController.mergeDuplicateParks", () => {
   });
 
   it("does not take a string autoDetect as a merge instruction", async () => {
-    const result = await build([sharedIdPair]).mergeDuplicateParks({
+    const result = await build([sharedIdPair]).merge({
       autoDetect: "false" as unknown as boolean,
     });
 
@@ -291,17 +292,17 @@ describe("AdminController.mergeDuplicateParks", () => {
   });
 
   it("refuses a flag it cannot read rather than picking a side", async () => {
-    const controller = build([sharedIdPair]);
+    const service = build([sharedIdPair]);
 
     await expect(
-      controller.mergeDuplicateParks({
+      service.merge({
         autoDetect: true,
         dryRun: "yes" as unknown as boolean,
       }),
     ).rejects.toThrow("dryRun must be a boolean");
 
     await expect(
-      controller.mergeDuplicateParks({
+      service.merge({
         autoDetect: 1 as unknown as boolean,
       }),
     ).rejects.toThrow("autoDetect must be a boolean");
@@ -313,7 +314,7 @@ describe("AdminController.mergeDuplicateParks", () => {
     // The documented exception to the 400 above, pinned so that narrowing the
     // condition to `raw !== undefined` cannot turn a JSON null into a refusal
     // without anything going red.
-    const result = await build([sharedIdPair]).mergeDuplicateParks({
+    const result = await build([sharedIdPair]).merge({
       autoDetect: true,
       dryRun: null as unknown as boolean,
     });
@@ -325,9 +326,9 @@ describe("AdminController.mergeDuplicateParks", () => {
   it("refuses a manual pair of one park in the dry run too", async () => {
     // `mergeParks` rejects one id on both sides. A preview that answers
     // "would be merged" over the same request promises what the write refuses.
-    const controller = build([]);
+    const service = build([]);
 
-    const result = await controller.mergeDuplicateParks({
+    const result = await service.merge({
       park1Id: ushLosAngeles.id,
       park2Id: ushLosAngeles.id,
       dryRun: true,
@@ -339,7 +340,7 @@ describe("AdminController.mergeDuplicateParks", () => {
   });
 
   it("reports an empty catalogue as a dry run rather than as a merge", async () => {
-    const result = await build([]).mergeDuplicateParks({ autoDetect: true });
+    const result = await build([]).merge({ autoDetect: true });
 
     expect(result.message).toBe("No duplicates found");
     expect(result.dryRun).toBe(true);
@@ -359,16 +360,16 @@ describe("AdminController.mergeDuplicateParks", () => {
       wartezeitenEntityId: "universalstudioshollywood",
     });
     const overlapping = pairOf(ushLosAngeles, third, false, "same city");
-    const controller = build([sharedIdPair, overlapping]);
+    const service = build([sharedIdPair, overlapping]);
     (
-      controller as unknown as {
+      service as unknown as {
         parkValidatorService: { getParkRepository: () => { find: jest.Mock } };
       }
     ).parkValidatorService
       .getParkRepository()
       .find.mockResolvedValue([...allParks, third]);
 
-    const result = await controller.mergeDuplicateParks({
+    const result = await service.merge({
       autoDetect: true,
       dryRun: false,
     });
@@ -400,9 +401,9 @@ describe("AdminController.mergeDuplicateParks", () => {
       true,
       "shared queue-times ID",
     );
-    const controller = build([sharedIdPair, secondSharedIdPair]);
+    const service = build([sharedIdPair, secondSharedIdPair]);
     (
-      controller as unknown as {
+      service as unknown as {
         parkValidatorService: { getParkRepository: () => { find: jest.Mock } };
       }
     ).parkValidatorService
@@ -437,7 +438,7 @@ describe("AdminController.mergeDuplicateParks", () => {
       ],
     });
 
-    const result = await controller.mergeDuplicateParks({
+    const result = await service.merge({
       autoDetect: true,
       dryRun: false,
     });
@@ -474,7 +475,7 @@ describe("AdminController.mergeDuplicateParks", () => {
     // The position carries the names, so a verdict list that does not match the
     // plan would print a real deletion under another park's name. This endpoint
     // deletes parks; saying nothing is the safer half of that choice.
-    const controller = build([sharedIdPair]);
+    const service = build([sharedIdPair]);
 
     repairDuplicates.mockResolvedValue(
       repairAnswering([
@@ -487,7 +488,7 @@ describe("AdminController.mergeDuplicateParks", () => {
       ]),
     );
 
-    const result = await controller.mergeDuplicateParks({
+    const result = await service.merge({
       autoDetect: true,
       dryRun: false,
     });
@@ -501,9 +502,9 @@ describe("AdminController.mergeDuplicateParks", () => {
     // A short list is this issue's own bug in a new place: the pair would fall
     // out of `results` and off `merged` with nothing anywhere saying so. The
     // walk therefore goes over `planned`, and a missing verdict is an error.
-    const controller = build([sharedIdPair, sharedPointPair]);
+    const service = build([sharedIdPair, sharedPointPair]);
     (
-      controller as unknown as {
+      service as unknown as {
         parkValidatorService: { getParkRepository: () => { find: jest.Mock } };
       }
     ).parkValidatorService
@@ -514,7 +515,7 @@ describe("AdminController.mergeDuplicateParks", () => {
     // the answer holds nothing at all.
     repairDuplicates.mockResolvedValue(repairAnswering([]));
 
-    const result = await controller.mergeDuplicateParks({
+    const result = await service.merge({
       autoDetect: true,
       dryRun: false,
     });
@@ -534,7 +535,7 @@ describe("AdminController.mergeDuplicateParks", () => {
     // The other direction of the same question. A surplus verdict cannot be
     // named in `results` — there is no plan entry carrying its names — but it
     // claims a merge happened, so it may not pass unmentioned either.
-    const controller = build([sharedIdPair]);
+    const service = build([sharedIdPair]);
 
     repairDuplicates.mockResolvedValue(
       repairAnswering([
@@ -553,7 +554,7 @@ describe("AdminController.mergeDuplicateParks", () => {
       ]),
     );
 
-    const result = await controller.mergeDuplicateParks({
+    const result = await service.merge({
       autoDetect: true,
       dryRun: false,
     });
@@ -571,10 +572,7 @@ describe("AdminController.mergeDuplicateParks", () => {
   });
 
   it("counts the two sets apart on the read route", async () => {
-    const result = await build([
-      sharedPointPair,
-      sharedIdPair,
-    ]).listDuplicateParks();
+    const result = await build([sharedPointPair, sharedIdPair]).list();
 
     expect(result.total).toBe(2);
     expect(result.safe).toBe(1);

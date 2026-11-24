@@ -1,33 +1,21 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Query,
-  UseGuards,
-  UseInterceptors,
-} from "@nestjs/common";
+import { Get, Post, Query } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
-import { ApiOperation, ApiQuery, ApiSecurity, ApiTags } from "@nestjs/swagger";
+import { ApiOperation, ApiQuery } from "@nestjs/swagger";
 import type { Queue } from "bull";
-import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
-import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import {
   WeatherClosureOverview,
   WeatherClosureService,
 } from "../parks/services/weather-closure.service";
+import { AdminApi } from "./auth/admin-api.decorator";
 
 /**
  * The per-ride weather-closure profiles in the admin: which rides cold or
  * snow shuts, how close each is to the 90 % bar the public page needs, and
  * the rebuild that is otherwise Monday's cron. docs/frontend/weather-closure.md.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/weather-closure")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor, new NoCdnCacheInterceptor())
+@AdminApi("admin/weather-closure", new NoCdnCacheInterceptor())
 export class AdminWeatherClosureController {
   constructor(
     private readonly weatherClosure: WeatherClosureService,

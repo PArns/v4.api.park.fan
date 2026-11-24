@@ -3,6 +3,7 @@ import { defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
 import { dryRunInput } from "../mcp-write";
 import { runAdminRoute } from "../admin-route";
 import { AdminController } from "../../admin/admin.controller";
+import { AdminJobsController } from "../../admin/admin-jobs.controller";
 import { AdminSearchConsoleController } from "../../search-console/search-console.controller";
 import type { McpToolContext } from "../mcp-tool";
 import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
@@ -33,70 +34,69 @@ interface Trigger {
 
 import { AdminWeatherClosureController } from "../../admin/admin-weather-closure.controller";
 
-const admin = (ctx: McpToolContext) => ctx.get(AdminController);
+const jobs = (ctx: McpToolContext) => ctx.get(AdminJobsController);
 
 const JOBS = {
   "sync-parks": {
     does: "parks again from every source",
     path: "sync-parks",
-    run: (ctx) => admin(ctx).triggerParkSync(),
+    run: (ctx) => jobs(ctx).triggerParkSync(),
   },
   "fill-schedule-gaps": {
     does: "missing calendar days and their holiday metadata",
     path: "fill-schedule-gaps",
-    run: (ctx) => admin(ctx).triggerScheduleGapFilling(),
+    run: (ctx) => jobs(ctx).triggerScheduleGapFilling(),
   },
   "sync-holidays": {
     does: "school and public holidays",
     path: "sync-holidays",
-    run: (ctx) => admin(ctx).triggerHolidaySync(),
+    run: (ctx) => jobs(ctx).triggerHolidaySync(),
   },
   "enrich-parks": {
     does: "country codes, geocoding and influencing regions",
     path: "enrich-parks",
-    run: (ctx) => admin(ctx).triggerParkEnrichment(),
+    run: (ctx) => jobs(ctx).triggerParkEnrichment(),
   },
   "sync-attraction-details": {
     does: "minimum heights and gets-wet from ThemeParks.wiki; curated values stay",
     path: "sync-attraction-details",
-    run: (ctx) => admin(ctx).triggerAttractionDetailsSync(),
+    run: (ctx) => jobs(ctx).triggerAttractionDetailsSync(),
   },
   "sync-six-flags-heights": {
     does: "missing minimum heights from the Six Flags sites",
     path: "sync-six-flags-heights",
-    run: (ctx) => admin(ctx).triggerSixFlagsHeights(),
+    run: (ctx) => jobs(ctx).triggerSixFlagsHeights(),
   },
   "import-ride-stats": {
     does: "speed, height, length, duration from Wikidata (limit for a trial run)",
     path: "import-ride-stats",
     param: "limit",
-    run: (ctx, { limit }) => admin(ctx).triggerRideStats({ limit }),
+    run: (ctx, { limit }) => jobs(ctx).triggerRideStats({ limit }),
   },
   "sync-efteling-maintenance": {
     does: "Efteling's maintenance calendar into works periods (dryRun shows the diff in the job result)",
     path: "sync-efteling-maintenance",
     param: "dryRun",
     run: (ctx, { dryRun }) =>
-      admin(ctx).triggerEftelingMaintenanceSync({ dryRun }),
+      jobs(ctx).triggerEftelingMaintenanceSync({ dryRun }),
   },
   "publish-ride-profiles": {
     does: "evicts and revalidates parks of ride profiles curated in the last sinceHours (24)",
     path: "publish-ride-profiles",
     param: "sinceHours",
     run: (ctx, { sinceHours }) =>
-      admin(ctx).triggerPublishRideProfiles({ sinceHours }),
+      jobs(ctx).triggerPublishRideProfiles({ sinceHours }),
   },
   "detect-seasonal": {
     does: "which rides are seasonal, normally nightly",
     path: "detect-seasonal",
-    run: (ctx) => admin(ctx).triggerSeasonalDetection(),
+    run: (ctx) => jobs(ctx).triggerSeasonalDetection(),
   },
   "rebuild-downtime": {
     does: "outage intervals, exposure days and profiles over the last days (30)",
     path: "rebuild-downtime",
     param: "days",
-    run: (ctx, { days }) =>
-      admin(ctx).rebuildDowntime(days === undefined ? undefined : String(days)),
+    run: (ctx, { days }) => jobs(ctx).rebuildDowntime(days),
   },
   "rebuild-weather-closure": {
     does: "relearns which rides cold or snow shuts, all parks (normally Mondays 05:45)",
@@ -106,37 +106,37 @@ const JOBS = {
   "aggregate-accuracy-stats": {
     does: "forecast accuracy figures",
     path: "aggregate-accuracy-stats",
-    run: (ctx) => admin(ctx).triggerAccuracyAggregation(),
+    run: (ctx) => jobs(ctx).triggerAccuracyAggregation(),
   },
   "train-ml-model": {
     does: "a CatBoost training run",
     path: "train-ml-model",
-    run: (ctx) => admin(ctx).triggerMLTraining(),
+    run: (ctx) => jobs(ctx).triggerMLTraining(),
   },
   "train-nf": {
     does: "a TFT training run; skipped while one is in flight",
     path: "train-nf",
-    run: (ctx) => admin(ctx).triggerTftTraining(),
+    run: (ctx) => jobs(ctx).triggerTftTraining(),
   },
   "warmup-calendar": {
     does: "the calendar warmup and forecast ring, after a deploy or training that changes forecasts; answers with the running one if a warmup is active",
     path: "warmup-calendar",
-    run: (ctx) => admin(ctx).triggerCalendarWarmup(),
+    run: (ctx) => jobs(ctx).triggerCalendarWarmup(),
   },
   "pcn-train": {
     does: "the PCN intraday models per park",
     path: "pcn/train",
-    run: (ctx) => admin(ctx).triggerPcn("train"),
+    run: (ctx) => jobs(ctx).triggerPcn("train"),
   },
   "pcn-forecast": {
     does: "today's PCN intraday forecasts",
     path: "pcn/forecast",
-    run: (ctx) => admin(ctx).triggerPcn("forecast"),
+    run: (ctx) => jobs(ctx).triggerPcn("forecast"),
   },
   "pcn-score": {
     does: "PCN against CatBoost",
     path: "pcn/score",
-    run: (ctx) => admin(ctx).triggerPcn("score"),
+    run: (ctx) => jobs(ctx).triggerPcn("score"),
   },
   "search-console-import": {
     does: "Google Search Console's last days (once a minute at most)",
@@ -238,17 +238,17 @@ const MAINTENANCE = {
   "flush-cache": {
     does: "deletes the park cache in Redis; queues and sessions stay, the pages refill on their next read",
     path: "flush-cache",
-    run: (ctx) => admin(ctx).flushCache(),
+    run: (ctx) => jobs(ctx).flushCache(),
   },
   "cache-reset": {
     does: "the same flush, then a full rebuild: holidays, parks, rides, wait times",
     path: "cache/reset",
-    run: (ctx) => admin(ctx).resetCache("true"),
+    run: (ctx) => jobs(ctx).resetCache("true"),
   },
   "dedupe-percentile-aggregates": {
     does: "removes duplicate hourly percentile rows, keeping the newest; may decompress old chunks",
     path: "dedupe-percentile-aggregates",
-    run: (ctx) => admin(ctx).triggerDedupePercentileAggregates(),
+    run: (ctx) => jobs(ctx).triggerDedupePercentileAggregates(),
   },
   "backfill-park-day-operation": {
     does: "judges past days for measured operation, fromDate to toDate, optionally one park",
@@ -258,13 +258,13 @@ const MAINTENANCE = {
       toDate,
       ...(parkId && { parkId: parkId.toLowerCase() }),
     }),
-    run: (ctx, body) => admin(ctx).triggerParkDayOperationBackfill(body),
+    run: (ctx, body) => jobs(ctx).triggerParkDayOperationBackfill(body),
   },
   "validate-and-repair-parks": {
     does: "checks every park against Queue-Times and Wartezeiten.app; the dry run reports, false repairs the ids",
     path: "validate-and-repair-parks",
     body: ({ dryRun }) => ({ autoFix: !dryRun }),
-    run: (ctx, body) => admin(ctx).validateAndRepairParks(body),
+    run: (ctx, body) => ctx.get(AdminController).validateAndRepairParks(body),
   },
 } satisfies Record<string, Maintenance>;
 

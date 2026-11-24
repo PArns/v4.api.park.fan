@@ -1,46 +1,30 @@
 import {
   BadRequestException,
   Body,
-  Controller,
   Delete,
   HttpCode,
   HttpStatus,
   Post,
   Query,
   Res,
-  UseGuards,
-  UseInterceptors,
 } from "@nestjs/common";
-import {
-  ApiOperation,
-  ApiQuery,
-  ApiResponse,
-  ApiSecurity,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiOperation, ApiQuery, ApiResponse } from "@nestjs/swagger";
 import type { Response } from "express";
-import { AdminAuthGuard } from "../auth/admin-auth.guard";
 import { AdminMinRole, CurrentAdmin } from "../auth/admin-auth.decorators";
-import {
-  AdminAuditInterceptor,
-  SelfAudited,
-} from "../auth/admin-audit.interceptor";
+import { SelfAudited } from "../auth/admin-audit.interceptor";
 import type { AdminPrincipal } from "../auth/admin-principal";
 import {
   AdminRedirectService,
   type RedirectView,
 } from "./admin-redirect.service";
 import { CreateRedirectDto } from "./dto/redirect.dto";
+import { AdminApi } from "../auth/admin-api.decorator";
 
 /**
  * Redirects from a dead park or ride URL, created from the SEO not-found list
  * (PAR-1233). docs/admin/curation.md#redirects-from-a-dead-path.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/redirects")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor)
+@AdminApi("admin/redirects")
 export class AdminRedirectsController {
   constructor(private readonly redirects: AdminRedirectService) {}
 

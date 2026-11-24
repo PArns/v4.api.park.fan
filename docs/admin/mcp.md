@@ -427,7 +427,8 @@ ones a reader is shown today.
 Curation, merges, retirement, the job triggers, the feedback, the event block list, the data API
 keys and the accounts list. These handlers hold more than a service call (a merge's preview, a
 job's queue options, an API key's audit row), so a tool runs the route's handler itself, from the
-controller Nest already holds (`ctx.get(AdminController)`), with `runAdminRoute`
+controller Nest already holds (`ctx.get(AdminController)`, `ctx.get(AdminJobsController)` for the
+job triggers), with `runAdminRoute`
 (`src/mcp/admin-route.ts`). The body goes through `routeBody` first. The audit row is the
 handler's own where it writes one (curation, ride profiles, redirects, API keys) and otherwise the
 row `AdminAuditInterceptor` writes for that route (`routeAuditEntry`: `job.<path>`, the body with

@@ -1,8 +1,8 @@
-import { AdminController } from "./admin.controller";
+import { AdminJobsController } from "./admin-jobs.controller";
 
 /** The controller with only the queues these triggers touch. */
-function controllerWith(queues: Record<string, unknown>): AdminController {
-  return Object.assign(Object.create(AdminController.prototype), queues);
+function controllerWith(queues: Record<string, unknown>): AdminJobsController {
+  return Object.assign(Object.create(AdminJobsController.prototype), queues);
 }
 
 describe("calendar warmup trigger", () => {

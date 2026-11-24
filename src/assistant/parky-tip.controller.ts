@@ -2,20 +2,13 @@ import {
   BadRequestException,
   Controller,
   Get,
-  NotFoundException,
   Param,
   ParseEnumPipe,
   Query,
   Res,
 } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
-import {
-  ApiOperation,
-  ApiParam,
-  ApiQuery,
-  ApiResponse,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
 import { ApiPermission } from "../api-keys/api-permission.decorator";
 import {
@@ -30,6 +23,7 @@ import {
   ParkyTipService,
   type ParkyTip,
 } from "./parky-tip.service";
+import { ApiParkPath, parkNotFound } from "../parks/park-path";
 
 /** Six hours, the tip's own window, where the park's day lasts that long. */
 const TIP_MAX_AGE_SECONDS = 21_600;
@@ -78,10 +72,7 @@ export class ParkyTipController {
       "writes nothing. Cache: public, max-age=21600, stale-while-revalidate=3600, cut to " +
       "park-local midnight.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "bruhl" })
-  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiParkPath()
   @ApiQuery({
     name: "date",
     required: true,
@@ -134,11 +125,7 @@ export class ParkyTipController {
     const park = await this.moduleRef
       .get(ParksService, { strict: false })
       .findByGeographicPath(continent, country, city, parkSlug);
-    if (!park) {
-      throw new NotFoundException(
-        `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
-      );
-    }
+    if (!park) throw parkNotFound(continent, country, city, parkSlug);
     const today = getCurrentDateInTimezone(park.timezone);
     // A caller whose clock is already past the park's midnight, or not there yet, would keep a
     // sentence counted from one day ("tomorrow …") under the other day's key.

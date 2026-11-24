@@ -7,19 +7,14 @@ import {
   Param,
   Post,
 } from "@nestjs/common";
-import {
-  ApiBody,
-  ApiOperation,
-  ApiParam,
-  ApiResponse,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import {
   PlanOptimizeRequestDto,
   PlanOptimizeResponseDto,
 } from "./dto/plan-optimize.dto";
 import { PlanOptimizeService } from "./plan-optimize.service";
 import { ApiPermission } from "../api-keys/api-permission.decorator";
+import { ApiParkPath } from "../parks/park-path";
 
 /**
  * The trip planner's day optimizer, one route next to `/plan/day`. Its own controller so the parks
@@ -50,10 +45,7 @@ export class PlanOptimizeController {
       "answers that assistant for one choice. Never cached. As on every route, a null field " +
       "is left out of the JSON: a stop without `entryId` is a ride being added.",
   })
-  @ApiParam({ name: "continent", example: "europe" })
-  @ApiParam({ name: "country", example: "germany" })
-  @ApiParam({ name: "city", example: "bruehl" })
-  @ApiParam({ name: "parkSlug", example: "phantasialand" })
+  @ApiParkPath()
   @ApiBody({ type: PlanOptimizeRequestDto })
   @ApiResponse({ status: 200, type: PlanOptimizeResponseDto })
   @ApiResponse({

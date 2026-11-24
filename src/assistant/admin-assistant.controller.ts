@@ -1,6 +1,5 @@
 import {
   Body,
-  Controller,
   Delete,
   Get,
   HttpCode,
@@ -13,17 +12,11 @@ import {
   Post,
   Put,
   Query,
-  UseGuards,
-  UseInterceptors,
 } from "@nestjs/common";
-import { ApiOperation, ApiSecurity, ApiTags } from "@nestjs/swagger";
+import { ApiOperation } from "@nestjs/swagger";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
-import {
-  AdminAuditInterceptor,
-  SelfAudited,
-} from "../admin/auth/admin-audit.interceptor";
+import { SelfAudited } from "../admin/auth/admin-audit.interceptor";
 import {
   AdminMinRole,
   CurrentAdmin,
@@ -43,6 +36,7 @@ import {
 import { FEEDBACK_STATUSES } from "./entities/site-feedback.entity";
 import { AssistantKnowledgeService } from "./assistant-knowledge.service";
 import { knowledgeTopicSchema, knowledgeWriteSchema } from "./knowledge";
+import { AdminApi } from "../admin/auth/admin-api.decorator";
 
 const listQuery = z.object({
   page: z.coerce.number().int().min(1).max(1000).default(1),
@@ -69,11 +63,7 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
  * owners; the key is never sent back, only its masked form, and the audit log
  * redacts `apiKey`.
  */
-@ApiTags("admin")
-@ApiSecurity("admin-auth")
-@Controller("admin/assistant")
-@UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor)
+@AdminApi("admin/assistant")
 export class AdminAssistantController {
   constructor(
     private readonly settings: AssistantSettingsService,

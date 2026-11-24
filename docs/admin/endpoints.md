@@ -6,9 +6,10 @@ the mechanism. Roles, sessions, the shared pass and the login limits: [authentic
 
 **Role** is the minimum (`owner > editor > author > viewer`); `viewer` means any signed-in account,
 because an endpoint without `@AdminMinRole` needs nothing more. Every admin answer is
-`private, no-store`, and every write on `AdminController` and `AdminContentController` is audited
-(`AdminAuditInterceptor`). A **job** row returns as soon as the job is queued; the queue and its cron are
-in [job queues](../architecture/job-queues.md).
+`private, no-store`, and every write on a controller declared with `@AdminApi`
+(`src/admin/auth/admin-api.decorator.ts`) is audited (`AdminAuditInterceptor`). A **job** row
+returns as soon as the job is queued; the queue and its cron are in
+[job queues](../architecture/job-queues.md).
 
 ## Accounts and sessions (`admin/auth`)
 
@@ -66,6 +67,10 @@ rotation in detail: [data API keys](../frontend/api-keys.md).
 | POST   | `api-keys/:id/delete`   | owner | `204`, deletes a revoked key for good, with its request statistics; `409` for a key not yet revoked; audited `api-key.delete`                                                                                          |
 
 ## Sync and background jobs
+
+The job triggers below and the two routes under [Cache](#cache) are `AdminJobsController`
+(`src/admin/admin-jobs.controller.ts`); `weather-closure` is its own controller, and every other
+unprefixed route on this page is `AdminController`.
 
 | Method | Path                                 | Role   | Does                                                                                                                                                                                                                                                                                         |
 | ------ | ------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
