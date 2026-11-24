@@ -260,7 +260,10 @@ baseline, so a blip that reverts in between is never sent and a drift adds up.
 **State and bounds.** The baseline lives in Redis
 (`push:plan-change:<hash(tripId)>:<slug>:<date>`) until three days after the
 date; an evicted one restarts in silence. At most 150 plan days per tick
-(`MAX_PLAN_DAYS_PER_RUN`), each isolated; `/plan/day` comes from its shared
+(`MAX_PLAN_DAYS_PER_RUN`), 31 per trip, trips in random order, 60 s of wall
+clock, each day isolated; nothing at all without the `APNS_*` variables. A ride
+first seen down is not remembered, so a ride opening in the morning is not
+"running again"; `/plan/day` comes from its shared
 quarter-hour cache and is only read for days with rides or shows within the
 show/forecast reach.
 
