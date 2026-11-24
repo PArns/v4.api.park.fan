@@ -276,6 +276,21 @@ describe("rule (c): rides today", () => {
   it("first sight of a down ride is the baseline, not news", () => {
     expect(changes(null, facts({ standby: reading("DOWN") }))).toEqual([]);
   });
+
+  it("does not announce a ride opening in the morning as running again", () => {
+    // Overnight heartbeats carry CLOSED into the opening minutes.
+    const closed = facts({ standby: reading("CLOSED", { isHeartbeat: true }) });
+    const base = nextBaseline(null, closed, day().entries, false);
+    expect(changes(base, facts())).toEqual([]);
+    // Seen open, then down: that one does come back up.
+    const seen = nextBaseline(base, facts(), day().entries, false);
+    const down = facts({ standby: reading("DOWN") });
+    const told = nextBaseline(seen, down, day().entries, true);
+    expect(changes(told, facts())).toContainEqual({
+      type: "ride-up",
+      name: "Taron",
+    });
+  });
 });
 
 describe("rule (d): forecast waits", () => {

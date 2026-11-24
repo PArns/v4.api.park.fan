@@ -368,10 +368,19 @@ export function nextBaseline(
   const merge = <T>(b: Record<string, T> | undefined, c: Record<string, T>) =>
     sent ? { ...keep(b), ...c } : { ...c, ...keep(b) };
   const hours = sent ? (cur.hours ?? base?.hours) : (base?.hours ?? cur.hours);
+  // A ride first seen down is not remembered: overnight heartbeats carry
+  // CLOSED into the opening, and "running again" for every planned ride each
+  // morning (or a ride that opens late) is not news. Only one seen open, then
+  // down, can be announced back up.
+  const rides = Object.fromEntries(
+    Object.entries(cur.rides).filter(
+      ([id, state]) => state === "open" || base?.rides[id] !== undefined,
+    ),
+  );
   return {
     ...(hours !== undefined && { hours }),
     shows: merge(base?.shows, cur.shows),
-    rides: merge(base?.rides, cur.rides),
+    rides: merge(base?.rides, rides),
     waits: merge(base?.waits, cur.waits),
   };
 }
