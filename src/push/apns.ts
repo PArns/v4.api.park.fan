@@ -119,7 +119,8 @@ export type ApnsOutcome = "sent" | "dead" | "failed";
 
 /**
  * What an APNs answer means for the device row: `dead` deletes it (410, or a
- * token Apple says is not one for this app), anything else counts as a failure.
+ * token Apple says is not one for this app); anything else is a failure that
+ * leaves the row alone.
  */
 export function classifyApnsResponse(
   status: number,

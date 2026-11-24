@@ -352,10 +352,12 @@ export class PushService {
       );
       return true;
     }
-    await this.recordFailure(
-      subscription,
-      outcome === "dead" ? { statusCode: 410 } : null,
-    );
+    // Only Apple's verdict on the token is the device's fault. A 403 (our key),
+    // 429 or 5xx (Apple) or a timeout hits every device at once, and counting
+    // it would let one bad hour drop the whole install base with its alerts.
+    if (outcome === "dead") {
+      await this.recordFailure(subscription, { statusCode: 410 });
+    }
     return false;
   }
 

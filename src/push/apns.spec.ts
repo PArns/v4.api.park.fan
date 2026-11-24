@@ -208,14 +208,13 @@ describe("APNs", () => {
       expect(repository.delete).toHaveBeenCalledWith({ id: "dev-1" });
     });
 
-    it("counts any other failure", async () => {
+    it("never blames the row for Apple's or our own bad minute", async () => {
       apns.send.mockResolvedValue("failed");
-      await service.send(device, wait);
-      expect(repository.increment).toHaveBeenCalledWith(
-        { id: "dev-1" },
-        "failureCount",
-        1,
-      );
+      for (let i = 0; i < 10; i++) {
+        await expect(service.send(device, wait)).resolves.toBe(false);
+      }
+      expect(repository.increment).not.toHaveBeenCalled();
+      expect(repository.delete).not.toHaveBeenCalled();
     });
 
     it("keeps `kind` out of a browser's payload", async () => {

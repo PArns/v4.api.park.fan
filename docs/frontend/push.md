@@ -209,7 +209,8 @@ its alerts and follows. Same 429 bucket as subscribe.
   past 64 bytes). Payload: `aps.alert {title, body}` plus `url` (the same
   site-relative path a browser opens) and `kind`.
 - **Dead tokens.** 410, or 400 `BadDeviceToken` / `DeviceTokenNotForTopic`,
-  deletes the row; anything else counts toward `MAX_FAILURES`.
+  deletes the row; anything else (403, 429, 5xx, timeout) leaves it alone —
+  those hit every device at once and are never one device's fault.
 - **No key, no push.** Without all of `APNS_KEY_ID`, `APNS_TEAM_ID`,
   `APNS_BUNDLE_ID`, `APNS_KEY`, `GET /v1/push` answers `apns: false`, registering
   is a 503 and no device is sent anything.
