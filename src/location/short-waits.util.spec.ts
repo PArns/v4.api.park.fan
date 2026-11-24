@@ -8,7 +8,7 @@ import {
   SHORT_WAITS_PER_PARK,
   type ShortWaitCandidatePark,
 } from "./short-waits.util";
-import { WET_RIDE_MIN_FEELS_LIKE_C } from "./wet-ride-weather.util";
+import { WET_RIDE_MIN_FEELS_LIKE_C } from "../parks/utils/wet-ride-weather.util";
 
 function ride(
   id: string,

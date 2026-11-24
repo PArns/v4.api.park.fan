@@ -121,7 +121,7 @@ park payload (`park:integrated:<id>`), the one the park page reads:
   least 15; `waitTime` (rounded to 5, 13 stays 13) has to be at least 10 below it.
 - **Not a wet ride in the cold:** a ride with `mayGetWet: true` is left out while the park's felt
   temperature now (`weather.now.apparentTemperature`, `temperature` where that is missing) is below
-  15 °C (`WET_RIDE_MIN_FEELS_LIKE_C`, `src/location/wet-ride-weather.util.ts`). Its queue is short because nobody wants to sit wet in
+  15 °C (`WET_RIDE_MIN_FEELS_LIKE_C`, [too cold to get wet](./too-cold-to-get-wet.md)). Its queue is short because nobody wants to sit wet in
   the cold, which is no tip. A park without a reading now, and a ride whose `mayGetWet` is `null`,
   keep the ride (PAR-1420).
 - **Order and size:** the biggest gap first, a headliner before a plain ride on a tie, then the nearer
@@ -136,10 +136,9 @@ What a ride in `rides` may not be read as:
   `effectiveStatus`: it never reads `UNKNOWN`, ignores whether the park is open and whether its wait
   times are readable ([effective status](./effective-status.md)).
 - **`CLOSED` can mean "no reading".** Retired rides are left out (`LocationService.findRidesInPark`).
-- **`isHeadliner` is `false` for a ride that gets its riders wet while the park is cold**: the same
-  15 °C felt rule as for `shortWaits`, read from the park's cached payload (`park:integrated:<id>`;
-  a miss keeps the flag). The compass and the headliner list would otherwise send the visitor
-  across the park to it. The ride stays in `rides` (PAR-1420).
+- **`tooColdToGetWet: true`** marks a ride that gets its riders wet while the park feels below 15 °C,
+  read from the park's cached payload; `isHeadliner` stays as it is
+  ([too cold to get wet](./too-cold-to-get-wet.md)).
 - `waitTime` is rounded to 5 and absent without a reading. `crowdLevel` is rated against the ride's
   P50 (P90 when there is none) only while it is `OPERATING` with a wait; `unknown` when the park is not
   ratable, absent otherwise. `analytics` is today's `p50`/`p90`; Swagger's `avgWaitToday` is never

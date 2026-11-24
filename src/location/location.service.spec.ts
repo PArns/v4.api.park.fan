@@ -200,36 +200,29 @@ describe("LocationService", () => {
         redis.get.mockImplementation(() => Promise.resolve(null));
       });
 
-      it("is none while the park is cold, and stays among the rides", async () => {
+      const cold = (list: Awaited<ReturnType<typeof rides>>) =>
+        list
+          .filter((r) => r.tooColdToGetWet)
+          .map((r) => r.id)
+          .sort();
+
+      it("stays a headliner in the cold and says why", async () => {
         withCachedWeather(2.2, -2.1);
 
         const list = await rides();
 
-        expect(
-          list
-            .filter((r) => r.isHeadliner)
-            .map((r) => r.id)
-            .sort(),
-        ).toEqual(["taron", "unknown"]);
-        expect(list.map((r) => r.id).sort()).toEqual([
-          "chiapas",
-          "taron",
-          "unknown",
-        ]);
+        expect(list.every((r) => r.isHeadliner)).toBe(true);
+        expect(cold(list)).toEqual(["chiapas"]);
       });
 
-      it("stays one while it is warm enough", async () => {
+      it("is not marked while it is warm enough", async () => {
         withCachedWeather(22, 21);
 
-        const list = await rides();
-
-        expect(list.every((r) => r.isHeadliner)).toBe(true);
+        expect(cold(await rides())).toEqual([]);
       });
 
-      it("stays one when the park's payload is not cached", async () => {
-        const list = await rides();
-
-        expect(list.every((r) => r.isHeadliner)).toBe(true);
+      it("is not marked when the park's payload is not cached", async () => {
+        expect(cold(await rides())).toEqual([]);
       });
     });
 

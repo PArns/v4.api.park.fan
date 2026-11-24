@@ -4,6 +4,7 @@ import {
   CROWD_LEVEL_VALUES,
   CrowdLevel,
 } from "../../common/types/crowd-level.type";
+import { TOO_COLD_TO_GET_WET_DESCRIPTION } from "../../parks/utils/wet-ride-weather.util";
 
 /**
  * User location coordinates
@@ -64,6 +65,13 @@ export class RideWithDistanceDto {
     example: true,
   })
   isHeadliner: boolean;
+
+  @ApiProperty({
+    description: TOO_COLD_TO_GET_WET_DESCRIPTION,
+    required: false,
+    example: true,
+  })
+  tooColdToGetWet?: true;
 
   @ApiProperty({
     description: "Whether this attraction only operates during certain seasons",

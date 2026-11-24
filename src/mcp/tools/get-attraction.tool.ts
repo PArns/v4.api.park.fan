@@ -94,6 +94,9 @@ export const getAttractionTool = defineMcpTool({
       outage: dto.outage ?? null,
       notRunToday: dto.notRunToday ?? null,
       weatherClosure: dto.weatherClosure ?? null,
+      // Gets its riders wet and the park feels below 15 °C now: still the
+      // ride it is, a headliner included, but no tip right now (PAR-1420).
+      ...(dto.tooColdToGetWet && { tooColdToGetWet: true }),
       // The window's days are park-local, so "running today" is the park's today.
       worksPeriod: dto.worksPeriod
         ? {

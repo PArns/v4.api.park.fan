@@ -32,9 +32,10 @@ import {
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { pickShortWaits } from "./short-waits.util";
 import {
+  cachedParkWeatherNow,
   tooColdToGetWet,
-  type WeatherNowReading,
-} from "./wet-ride-weather.util";
+  wetInTheCold,
+} from "../parks/utils/wet-ride-weather.util";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import {
@@ -267,25 +268,6 @@ export class LocationService {
    * @param userLocation - User coordinates
    * @returns Rides data with park info
    */
-  /**
-   * The park's weather reading now, from its prewarmed `park:integrated`
-   * payload: no query of its own. `null` on a miss or an unreadable entry,
-   * which {@link tooColdToGetWet} reads as no reading.
-   */
-  private async cachedWeatherNow(
-    parkId: string,
-  ): Promise<WeatherNowReading | null> {
-    const raw = await this.redis
-      .get(CacheKeys.parkIntegrated(parkId))
-      .catch(() => null);
-    if (!raw) return null;
-    try {
-      return (JSON.parse(raw) as ParkWithAttractionsDto).weather?.now ?? null;
-    } catch {
-      return null;
-    }
-  }
-
   private async findRidesInPark(
     parkId: string,
     userLocation: GeoCoordinate,
@@ -335,7 +317,7 @@ export class LocationService {
       this.analyticsService.isParkRatable(parkId),
       // Shows are an extra: their failure must not take the rides down.
       this.findShowsInPark(park, userLocation).catch(() => []),
-      this.cachedWeatherNow(parkId),
+      cachedParkWeatherNow(this.redis, parkId),
     ]);
     const cold = tooColdToGetWet(weatherNow);
 
@@ -419,12 +401,10 @@ export class LocationService {
               : null,
           status: queueData?.status || "CLOSED",
           crowdLevel,
-          // A ride that gets its riders wet is no headliner while the park is
-          // too cold for it (PAR-1420): the compass and the headliner list
-          // would send the visitor across the park to it. It stays a ride.
-          isHeadliner:
-            headlinerIds.has(attraction.id) &&
-            !(cold && curated.mayGetWet === true),
+          isHeadliner: headlinerIds.has(attraction.id),
+          // Still a headliner, but too cold to get wet now (PAR-1420): the
+          // compass leaves it out, and the key says why.
+          ...wetInTheCold(curated.mayGetWet, cold),
           isSeasonal,
           seasonMonths,
           isCurrentlyInSeason,

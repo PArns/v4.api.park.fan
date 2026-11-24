@@ -89,6 +89,7 @@ import { withoutRidesInMaintenance } from "../../attractions/utils/curated-out-o
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { partialRunWeekdays } from "../../common/utils/run-weekdays.util";
 import { showtimeEndTime } from "../../shows/showtime-end-time.util";
+import { tooColdToGetWet, wetInTheCold } from "../utils/wet-ride-weather.util";
 
 /**
  * Park Integration Service
@@ -765,6 +766,8 @@ export class ParkIntegrationService {
               )
               .catch(() => new Set<string>())
           : new Set<string>();
+      // `dto.weather` is set above; the same reading for every ride.
+      const cold = tooColdToGetWet(dto.weather?.now);
 
       for (const attraction of dto.attractions) {
         // Get current queue data for this attraction from the bulk result
@@ -1129,6 +1132,8 @@ export class ParkIntegrationService {
 
         // Mark headliner attractions
         attraction.isHeadliner = headlinerIds.has(attraction.id);
+        // Still a headliner, but too cold to get wet now (PAR-1420).
+        Object.assign(attraction, wetInTheCold(attraction.mayGetWet, cold));
 
         // Rope-drop recommendation (from the batched park read).
         const ropeDropStored = ropeDropMap.get(attraction.id);
