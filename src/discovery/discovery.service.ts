@@ -15,7 +15,7 @@ import {
 } from "./dto/country-summary.dto";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { CrowdLevel } from "../common/types/crowd-level.type";
-import { determineCrowdLevel } from "../common/utils/crowd-level.util";
+import { liveHeadline } from "../common/utils/crowd-level.util";
 import {
   GeoStructureDto,
   ContinentDto,
@@ -182,6 +182,8 @@ interface ParkLiveStats {
   // Gated crowd-level label hydrated from the shared park:occupancy cache;
   // "unknown" for thin parks (not ratable). null = no live occupancy yet.
   crowdLevel: CrowdLevel | null;
+  /** When the occupancy reading behind `avgWait` and `crowdLevel` was taken. */
+  updatedAt?: string;
 }
 
 /**
@@ -521,6 +523,7 @@ export class DiscoveryService {
                     (stats.isOpen ? 0 : (stats.silentCount ?? 0)),
                   totalAttractions: stats.totalAttractions,
                   crowdLevel: stats.crowdLevel ?? undefined,
+                  updatedAt: stats.updatedAt,
                 },
               };
 
@@ -686,9 +689,13 @@ export class DiscoveryService {
       });
     }
 
-    // Hydrate crowdLevel from the shared park:occupancy:{id} cache (same
-    // values everywhere else reads from — search, favorites, location).
-    // One MGET regardless of park count; ignored entries stay null.
+    // Hydrate the headline, Ø wait and crowd level, from the shared
+    // park:occupancy:{id} cache: the reading the park payload serves, which
+    // favourites, nearby and search read too. One MGET regardless of park
+    // count. The mean over every ride above stays only where the entry is
+    // cold: it is a different statistic, and Phantasialand read Ø 10 on the
+    // country list beside Ø 20 on its own page. A cold entry leaves
+    // crowdLevel null.
     const parkIds = Array.from(stats.keys());
     if (parkIds.length > 0) {
       const keys = parkIds.map((id) => CacheKeys.parkOccupancy(id));
@@ -700,15 +707,19 @@ export class DiscoveryService {
           const occupancy = JSON.parse(raw) as {
             current?: number;
             crowdLevel?: CrowdLevel;
+            breakdown?: { currentAvgWait?: number };
+            updatedAt?: string;
           };
-          if (typeof occupancy.current === "number") {
-            const s = stats.get(id);
-            // Prefer the gated crowdLevel written by calculateParkOccupancy
-            // ("unknown" for thin parks); fall back to deriving for legacy
-            // cache entries written before the field existed.
-            if (s)
-              s.crowdLevel =
-                occupancy.crowdLevel ?? determineCrowdLevel(occupancy.current);
+          const s = stats.get(id);
+          if (s && typeof occupancy.current === "number") {
+            const headline = liveHeadline({
+              current: occupancy.current,
+              crowdLevel: occupancy.crowdLevel,
+              breakdown: occupancy.breakdown,
+            });
+            s.crowdLevel = headline.crowdLevel;
+            s.avgWait = headline.avgWaitTime;
+            s.updatedAt = occupancy.updatedAt;
           }
         } catch {
           // Malformed cache entry — leave crowdLevel null.

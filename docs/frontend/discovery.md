@@ -32,7 +32,11 @@ statistics cache (`DiscoveryService.hydrateStructure`).
 - **`analytics.statistics` is over the last 30 minutes of readings.** `operatingAttractions` is the
   park's rides minus those whose last reading is not `OPERATING`, so a ride without a reading counts as
   operating; it is 0 while the park is closed. `closedAttractions` counts only rides that read
-  something else, so it is not `total − operating`. `avgWaitTime` is rounded to 5.
+  something else, so it is not `total − operating`.
+- **`avgWaitTime`, `crowdLevel` and `updatedAt` are the park's occupancy reading**
+  ([one reading per park](#one-reading-per-park)). While that reading is cold, `avgWaitTime` falls
+  back to the mean of every ride's last wait, rounded to 5, and `crowdLevel` and `updatedAt` are
+  absent.
 - **Check `liveWaitTimes.available` before showing a number.** For a park we cannot read, the whole
   `analytics` block is an aggregate over nothing ([live wait times](./live-wait-times-availability.md)).
 - **`crowdLevel` is absent when the park's occupancy cache is cold**, which is not `unknown`.
@@ -41,6 +45,20 @@ statistics cache (`DiscoveryService.hydrateStructure`).
   no open park has one.
 - **A country is grouped by its ISO code.** When parks spell the country slug two ways (`fr`,
   `france`), the tree keeps the longer one; a park's own `countrySlug` can differ from its country's.
+
+## One reading per park
+
+A park's Ø wait and crowd level are one occupancy reading (`calculateParkOccupancy`): the headliners'
+current wait, rounded to 5, and its tier against their P50 ([crowd levels](../rules/crowd-levels.md)).
+The park payload measures it when it is built, states it in `analytics.occupancy` and in
+`analytics.statistics.avgWaitTime` / `crowdLevel`, and stores it as `park:occupancy:{id}`. The geo
+tree, favorites, `/v1/discovery/nearby` (both shapes) and search read that entry or the park payload,
+never a statistic of their own (`liveHeadline` in `src/common/utils/crowd-level.util.ts`).
+
+Every answer that carries the pair carries when it was read: `analytics.occupancy.updatedAt` in the
+park payload, `analytics.updatedAt` on the park card and the in-park park, `analytics.statistics.updatedAt`
+in the tree. The answers are cached for different times, so a client that holds one park from
+several of them shows the newest reading, not the newest request.
 
 ## The country summary
 
@@ -86,7 +104,8 @@ GET /v1/discovery/nearby?lat=&lng=&radius=1000&limit=6
   the park-card shape [favorites](./favorites.md) also uses, here with `hasOperatingSchedule`, and the
   rides in them where a wait is short right now (below).
 - **`in_park`** → `{ park, rides[], shows[] }`. `park` carries `status`, `hasOperatingSchedule`,
-  `analytics { avgWaitTime, crowdLevel, operatingAttractions }`, `todaySchedule`, `nextSchedule`.
+  `analytics { avgWaitTime, crowdLevel, operatingAttractions, updatedAt }`, `todaySchedule`,
+  `nextSchedule`.
   `rides` are the park's rides with coordinates, nearest first; a ride without coordinates is left
   out, and so is one whose `isCurrentlyInSeason` is `false`. `shows` is below.
 

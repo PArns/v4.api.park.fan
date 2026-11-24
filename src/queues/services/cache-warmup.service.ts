@@ -985,12 +985,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         try {
           const occupancy =
             await analyticsService.calculateParkOccupancy(parkId);
-          const cacheKey = CacheKeys.parkOccupancy(parkId);
-          await this.redis.setex(
-            cacheKey,
-            5 * 60, // 5 minutes TTL
-            JSON.stringify(occupancy),
-          );
+          await analyticsService.cacheParkOccupancy(parkId, occupancy);
           return true;
         } catch (error) {
           this.logger.warn(

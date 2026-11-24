@@ -25,7 +25,10 @@ import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
-import { rateOrUnknown } from "../../common/utils/crowd-level.util";
+import {
+  liveHeadline,
+  rateOrUnknown,
+} from "../../common/utils/crowd-level.util";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { Redis } from "ioredis";
@@ -1446,6 +1449,20 @@ export class ParkIntegrationService {
           this.analyticsService.getParkPercentilesToday(park.id),
         ]);
 
+        // `statistics` is a snapshot cached for five minutes and `occupancy`
+        // was read just now, so the headline pair comes from the reading this
+        // payload serves. The same reading goes to `park:occupancy` for the
+        // lists to read.
+        const headline = liveHeadline(occupancy);
+        await this.analyticsService
+          .cacheParkOccupancy(park.id, occupancy)
+          .catch((error) =>
+            this.logger.warn(
+              `Failed to cache occupancy for park ${park.id}`,
+              error,
+            ),
+          );
+
         dto.analytics = {
           occupancy: {
             current: occupancy.current,
@@ -1457,14 +1474,14 @@ export class ParkIntegrationService {
             breakdown: occupancy.breakdown,
           },
           statistics: {
-            avgWaitTime: statistics.avgWaitTime,
+            avgWaitTime: headline.avgWaitTime,
             avgWaitToday: statistics.avgWaitToday,
             peakWaitToday: statistics.peakWaitToday,
             peakHour: statistics.peakHour,
             peakHourLocal: statistics.peakHourLocal,
             peakHourConfidence: statistics.peakHourConfidence,
             peakHourSource: statistics.peakHourSource,
-            crowdLevel: statistics.crowdLevel,
+            crowdLevel: headline.crowdLevel,
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
             closedAttractions:
