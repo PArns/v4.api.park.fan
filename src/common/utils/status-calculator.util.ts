@@ -55,9 +55,12 @@ export function isParkOpen(
 
   // Schedule present but park is closed: CLOSED
   // (ignore ride data whenever a schedule exists)
-  const hasSchedule =
-    scheduleEntries.length > 0 &&
-    scheduleEntries.some((s) => s.scheduleType === "OPERATING");
+  // A day the park published as CLOSED is a schedule too: without it, three shut days in a row
+  // (Movie Park, 2026-11-23 to 25) looked like "no schedule" and the rides a feed leaves
+  // OPERATING at 5 min opened the park.
+  const hasSchedule = scheduleEntries.some(
+    (s) => s.scheduleType === "OPERATING" || s.scheduleType === "CLOSED",
+  );
   if (hasSchedule) {
     return false;
   }
