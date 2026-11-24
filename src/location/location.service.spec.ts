@@ -11,6 +11,7 @@ import { PopularityService } from "../popularity/popularity.service";
 import { ShowsService } from "../shows/shows.service";
 import { NearbyRidesDto } from "./dto/nearby-response.dto";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { CacheKeys } from "../common/cache/cache-keys";
 
 /**
  * Coverage for the public surface of LocationService — the "where am I,
@@ -137,6 +138,98 @@ describe("LocationService", () => {
 
       expect(attractionRepo.find).toHaveBeenCalledWith({
         where: { parkId: "p1", retiredAt: IsNull() },
+      });
+    });
+
+    describe("a headliner that gets its riders wet", () => {
+      const attraction = (id: string, mayGetWet: boolean | null) => ({
+        id,
+        name: id,
+        slug: id,
+        parkId: "p1",
+        latitude: 50.7997,
+        longitude: 6.8783,
+        isSeasonal: false,
+        seasonMonths: null,
+        mayGetWet,
+      });
+      const withCachedWeather = (
+        temperature: number,
+        apparentTemperature: number | null,
+      ) =>
+        redis.get.mockImplementation((key: string) =>
+          Promise.resolve(
+            key === CacheKeys.parkIntegrated("p1")
+              ? JSON.stringify({
+                  id: "p1",
+                  weather: {
+                    current: null,
+                    now: {
+                      temperature,
+                      apparentTemperature,
+                      humidity: null,
+                      weatherCode: null,
+                      weatherDescription: null,
+                      isDay: true,
+                    },
+                    forecast: [],
+                  },
+                })
+              : null,
+          ),
+        );
+      const rides = async () => {
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+        return (result.data as NearbyRidesDto).rides;
+      };
+
+      beforeEach(() => {
+        parkRepo.find.mockResolvedValue([phantasialand]);
+        parkRepo.findOne.mockResolvedValue(phantasialand);
+        attractionRepo.find.mockResolvedValueOnce([
+          attraction("chiapas", true),
+          attraction("taron", false),
+          attraction("unknown", null),
+        ]);
+        analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+          new Set(["chiapas", "taron", "unknown"]),
+        );
+      });
+
+      afterEach(() => {
+        redis.get.mockImplementation(() => Promise.resolve(null));
+      });
+
+      it("is none while the park is cold, and stays among the rides", async () => {
+        withCachedWeather(2.2, -2.1);
+
+        const list = await rides();
+
+        expect(
+          list
+            .filter((r) => r.isHeadliner)
+            .map((r) => r.id)
+            .sort(),
+        ).toEqual(["taron", "unknown"]);
+        expect(list.map((r) => r.id).sort()).toEqual([
+          "chiapas",
+          "taron",
+          "unknown",
+        ]);
+      });
+
+      it("stays one while it is warm enough", async () => {
+        withCachedWeather(22, 21);
+
+        const list = await rides();
+
+        expect(list.every((r) => r.isHeadliner)).toBe(true);
+      });
+
+      it("stays one when the park's payload is not cached", async () => {
+        const list = await rides();
+
+        expect(list.every((r) => r.isHeadliner)).toBe(true);
       });
     });
 

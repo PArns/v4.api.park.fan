@@ -6,9 +6,9 @@ import {
   pickShortWaits,
   SHORT_WAITS_LIMIT,
   SHORT_WAITS_PER_PARK,
-  SHORT_WAIT_WET_MIN_FEELS_LIKE_C,
   type ShortWaitCandidatePark,
 } from "./short-waits.util";
+import { WET_RIDE_MIN_FEELS_LIKE_C } from "./wet-ride-weather.util";
 
 function ride(
   id: string,
@@ -187,7 +187,7 @@ describe("pickShortWaits", () => {
 
     it("stays at or above it", () => {
       const result = pickShortWaits([
-        park("p", [chiapas()], weatherNow(SHORT_WAIT_WET_MIN_FEELS_LIKE_C)),
+        park("p", [chiapas()], weatherNow(WET_RIDE_MIN_FEELS_LIKE_C)),
       ]);
 
       expect(result.map((r) => r.id)).toEqual(["chiapas"]);
