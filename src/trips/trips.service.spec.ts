@@ -18,6 +18,7 @@ describe("TripsService", () => {
     endpoint: string;
     tripId: string | null;
     topics: string[];
+    apnsToken?: string | null;
   }>;
   /** True only while the transaction callback is running. */
   let inTransaction: boolean;
@@ -69,7 +70,7 @@ describe("TripsService", () => {
         async (
           entity: unknown,
           where: { tripId: string },
-          patch: { tripId: null; topics: string[] },
+          patch: { tripId: null; topics: unknown },
         ) => {
           if (!inTransaction) throw new Error("update outside the transaction");
           // The entity is checked, not ignored: swapping the two tables round
@@ -82,7 +83,7 @@ describe("TripsService", () => {
           for (const row of subscriptions) {
             if (row.tripId !== where.tripId) continue;
             row.tripId = patch.tripId;
-            row.topics = patch.topics;
+            row.topics = clearTopics(row, patch.topics);
             affected++;
           }
           return { affected };
@@ -116,7 +117,7 @@ describe("TripsService", () => {
             throw new Error("sweep cleared the wrong table");
           }
           return {
-            set: (patch: { tripId: null; topics: string[] }) => ({
+            set: (patch: { tripId: null; topics: unknown }) => ({
               where: () => ({
                 andWhere: () => ({
                   execute: async () => {
@@ -127,7 +128,7 @@ describe("TripsService", () => {
                       if (!row.tripId) continue;
                       if (rows.has(row.tripId)) continue;
                       row.tripId = patch.tripId;
-                      row.topics = patch.topics;
+                      row.topics = clearTopics(row, patch.topics);
                     }
                   },
                 }),
@@ -168,6 +169,18 @@ describe("TripsService", () => {
   });
 
   const plan = () => ({ version: 2, parks: {} });
+
+  /** The fakes' reading of the raw `topics` expression: a browser's go, a device's stay. */
+  function clearTopics(
+    row: { topics: string[]; apnsToken?: string | null },
+    value: unknown,
+  ): string[] {
+    if (typeof value !== "function") return value as string[];
+    expect(value()).toBe(
+      `CASE WHEN "apnsToken" IS NULL THEN '[]'::jsonb ELSE "topics" END`,
+    );
+    return row.apnsToken ? row.topics : [];
+  }
 
   it("gives every trip an unguessable id", async () => {
     const ids = new Set<string>();
@@ -302,6 +315,24 @@ describe("TripsService", () => {
       expect(rows.has(other.id)).toBe(true);
     });
 
+    it("keeps an app install's kinds when it clears its pointer", async () => {
+      const created = await service.create(plan());
+      subscriptions.push({
+        endpoint: "apns:install-1",
+        tripId: created.id,
+        topics: ["ride-wait", "news", "plan-change"],
+        apnsToken: "ab",
+      });
+
+      expect(await service.remove(created.id)).toBe(true);
+
+      // A device's topics are its ride alerts, shows and news too.
+      expect(subscriptions[0]).toMatchObject({
+        tripId: null,
+        topics: ["ride-wait", "news", "plan-change"],
+      });
+    });
+
     it("removes a trip nobody subscribed to", async () => {
       const created = await service.create(plan());
       expect(await service.remove(created.id)).toBe(true);
@@ -409,6 +440,22 @@ describe("TripsService", () => {
       expect(await service.sweepExpired()).toBe(0);
 
       expect(subscriptions[0]).toMatchObject({ tripId: null, topics: [] });
+    });
+
+    it("keeps an app install's kinds when it clears its pointer", async () => {
+      subscriptions.push({
+        endpoint: "apns:install-1",
+        tripId: "aTripSweptLongAgo",
+        topics: ["ride-reopen", "show"],
+        apnsToken: "ab",
+      });
+
+      await service.sweepExpired();
+
+      expect(subscriptions[0]).toMatchObject({
+        tripId: null,
+        topics: ["ride-reopen", "show"],
+      });
     });
 
     it("deletes the trips before it touches the subscriptions", async () => {

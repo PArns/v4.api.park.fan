@@ -125,8 +125,9 @@ export class TripsService {
    * ride alerts and followed shows, which hang off `subscriptionId`. So this
    * does exactly what `PushService.unsubscribe(endpoint, tripId)` does for one
    * endpoint, one level wider: `tripId: null, topics: []` for every subscriber
-   * of this trip. Deleting the row would take a browser's ride alerts with a
-   * plan it has nothing to do with.
+   * of this trip (an app install keeps its `topics`, see `clearedTopics`).
+   * Deleting the row would take a browser's ride alerts with a plan it has
+   * nothing to do with.
    *
    * Both writes in one transaction: a cleared pointer without the delete leaves
    * a plan nobody is told about, and a delete without the clear leaves
@@ -160,7 +161,7 @@ export class TripsService {
       await manager.update(
         PushSubscription,
         { tripId: id },
-        { tripId: null, topics: [] },
+        { tripId: null, topics: TripsService.clearedTopics },
       );
       await manager.delete(Trip, id);
       return true;
@@ -196,7 +197,7 @@ export class TripsService {
         await manager
           .createQueryBuilder()
           .update(PushSubscription)
-          .set({ tripId: null, topics: [] })
+          .set({ tripId: null, topics: TripsService.clearedTopics })
           .where(`"tripId" IS NOT NULL`)
           .andWhere(`"tripId" NOT IN (SELECT id FROM trips)`)
           .execute();
@@ -206,6 +207,14 @@ export class TripsService {
     if (removed > 0) this.logger.log(`Swept ${removed} expired trip(s)`);
     return removed;
   }
+
+  /**
+   * What a cleared pointer leaves in `topics`: a browser's are all trip
+   * topics and go with the trip; an app install's (`apnsToken`) are its whole
+   * choice — ride alerts, shows, news — and stay.
+   */
+  private static readonly clearedTopics = () =>
+    `CASE WHEN "apnsToken" IS NULL THEN '[]'::jsonb ELSE "topics" END`;
 
   /**
    * A new id: 12 random bytes as base64url, so 16 characters and 96 bits.
