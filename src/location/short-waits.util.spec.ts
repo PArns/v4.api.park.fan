@@ -6,6 +6,7 @@ import {
   pickShortWaits,
   SHORT_WAITS_LIMIT,
   SHORT_WAITS_PER_PARK,
+  SHORT_WAIT_WET_MIN_FEELS_LIKE_C,
   type ShortWaitCandidatePark,
 } from "./short-waits.util";
 
@@ -55,6 +56,27 @@ function park(
     } as ParkWithAttractionsDto,
     name: id.toUpperCase(),
     distance,
+  };
+}
+
+/** The park payload's `weather` with only what `pickShortWaits` reads: the reading now. */
+function weatherNow(
+  temperature: number,
+  apparentTemperature: number | null = temperature,
+): Pick<ParkWithAttractionsDto, "weather"> {
+  return {
+    weather: {
+      current: null,
+      now: {
+        temperature,
+        apparentTemperature,
+        humidity: null,
+        weatherCode: null,
+        weatherDescription: null,
+        isDay: true,
+      },
+      forecast: [],
+    },
   };
 }
 
@@ -150,5 +172,61 @@ describe("pickShortWaits", () => {
         SHORT_WAITS_PER_PARK,
       );
     }
+  });
+  describe("a ride that gets its riders wet, in the cold", () => {
+    const chiapas = (overrides: Partial<ParkAttractionDto> = {}) =>
+      ride("chiapas", 5, 40, { mayGetWet: true, ...overrides });
+
+    it("is left out below the felt temperature, and the next ride takes its place", () => {
+      const result = pickShortWaits([
+        park("p", [chiapas(), ride("taron", 16, 41)], weatherNow(2.2, -2.1)),
+      ]);
+
+      expect(result.map((r) => r.id)).toEqual(["taron"]);
+    });
+
+    it("stays at or above it", () => {
+      const result = pickShortWaits([
+        park("p", [chiapas()], weatherNow(SHORT_WAIT_WET_MIN_FEELS_LIKE_C)),
+      ]);
+
+      expect(result.map((r) => r.id)).toEqual(["chiapas"]);
+    });
+
+    it("reads the felt temperature, not the air: 16 °C that feels like 12 is cold", () => {
+      const result = pickShortWaits([
+        park("p", [chiapas()], weatherNow(16, 12)),
+      ]);
+
+      expect(result).toEqual([]);
+    });
+
+    it("falls back to the air temperature where the felt one is missing", () => {
+      const result = pickShortWaits([
+        park("p", [chiapas()], weatherNow(8, null)),
+      ]);
+
+      expect(result).toEqual([]);
+    });
+
+    it("stays without a weather reading, and a ride not known to be wet stays in the cold", () => {
+      const result = pickShortWaits([
+        park("warm-unknown", [chiapas()]),
+        park(
+          "cold",
+          [
+            ride("unknown", 5, 40, { mayGetWet: null }),
+            ride("dry", 5, 40, { mayGetWet: false }),
+          ],
+          weatherNow(2),
+        ),
+      ]);
+
+      expect(result.map((r) => r.id).sort()).toEqual([
+        "chiapas",
+        "dry",
+        "unknown",
+      ]);
+    });
   });
 });

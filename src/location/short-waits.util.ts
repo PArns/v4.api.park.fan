@@ -18,10 +18,32 @@ export const SHORT_WAIT_MIN_TYPICAL = 15;
 export const SHORT_WAIT_MIN_SAVING = 10;
 
 /**
+ * Below this felt temperature (°C) at the park, a ride that gets its riders
+ * wet is no tip however short its queue: the queue is short because nobody
+ * wants to sit wet in the cold (PAR-1420).
+ */
+export const SHORT_WAIT_WET_MIN_FEELS_LIKE_C = 15;
+
+/**
  * The two ratings `getComparisonText` gives a wait at or below 60 % of the
  * baseline, so the list agrees with the badge the park page shows for the ride.
  */
 const SHORT_COMPARISONS = new Set(["much_lower", "lower"]);
+
+/**
+ * Whether a park is too cold right now for a ride that gets its riders wet:
+ * its felt temperature (`weather.now.apparentTemperature`, the air temperature
+ * where that is missing) is below {@link SHORT_WAIT_WET_MIN_FEELS_LIKE_C}. A
+ * park without a reading is not, so a missing reading never hides a ride.
+ */
+function tooColdToGetWet(integrated: ParkWithAttractionsDto): boolean {
+  const now = integrated.weather?.now;
+  if (!now) return false;
+  const feelsLike = now.apparentTemperature ?? now.temperature;
+  return (
+    typeof feelsLike === "number" && feelsLike < SHORT_WAIT_WET_MIN_FEELS_LIKE_C
+  );
+}
 
 /** A nearby park with its cached live payload, as `findNearbyParks` has it. */
 export interface ShortWaitCandidatePark {
@@ -49,10 +71,12 @@ export function pickShortWaits(
   for (const { integrated, name, distance } of parks) {
     if (integrated.status !== "OPERATING") continue;
     if (integrated.liveWaitTimes?.available === false) continue;
+    const cold = tooColdToGetWet(integrated);
 
     for (const attraction of integrated.attractions ?? []) {
       if (attraction.effectiveStatus !== "OPERATING") continue;
       if (attraction.isCurrentlyInSeason === false) continue;
+      if (cold && attraction.mayGetWet === true) continue;
       if (
         !attraction.comparison ||
         !SHORT_COMPARISONS.has(attraction.comparison)

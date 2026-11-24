@@ -119,6 +119,11 @@ park payload (`park:integrated:<id>`), the one the park page reads:
   `baseline`, and a `comparison` of `lower` or `much_lower` (at most 60 % of the baseline, the same
   rating the park page's badge shows). `typicalWait` is the `baseline` rounded to 5 and has to be at
   least 15; `waitTime` (rounded to 5, 13 stays 13) has to be at least 10 below it.
+- **Not a wet ride in the cold:** a ride with `mayGetWet: true` is left out while the park's felt
+  temperature now (`weather.now.apparentTemperature`, `temperature` where that is missing) is below
+  15 °C (`SHORT_WAIT_WET_MIN_FEELS_LIKE_C`). Its queue is short because nobody wants to sit wet in
+  the cold, which is no tip. A park without a reading now, and a ride whose `mayGetWet` is `null`,
+  keep the ride (PAR-1420).
 - **Order and size:** the biggest gap first, a headliner before a plain ride on a tie, then the nearer
   park; at most three per park and five in all. Empty when nothing qualifies.
 
