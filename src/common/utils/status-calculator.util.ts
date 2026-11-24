@@ -1,4 +1,5 @@
 import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
+import { isDecisiveScheduleRow } from "./schedule-window.sql";
 
 /**
  * Interface for ride status data used in fallback logic
@@ -57,10 +58,8 @@ export function isParkOpen(
   // (ignore ride data whenever a schedule exists)
   // A day the park published as CLOSED is a schedule too: without it, three shut days in a row
   // (Movie Park, 2026-11-23 to 25) looked like "no schedule" and the rides a feed leaves
-  // OPERATING at 5 min opened the park.
-  const hasSchedule = scheduleEntries.some(
-    (s) => s.scheduleType === "OPERATING" || s.scheduleType === "CLOSED",
-  );
+  // OPERATING at 5 min opened the park. Same rule as the SQL in discovery and analytics.
+  const hasSchedule = scheduleEntries.some(isDecisiveScheduleRow);
   if (hasSchedule) {
     return false;
   }

@@ -30,6 +30,22 @@ describe("isParkOpen", () => {
     expect(isParkOpen([open])).toBe(true);
   });
 
+  it("opens a park inside an OPERATING window even with CLOSED days around it", () => {
+    const now = Date.now();
+    const open = entry(
+      "OPERATING",
+      new Date(now - 60 * 60 * 1000),
+      new Date(now + 60 * 60 * 1000),
+    );
+    expect(isParkOpen([entry("CLOSED"), open], [])).toBe(true);
+  });
+
+  it("does not let gap-fill UNKNOWN or event-only rows silence the rides", () => {
+    for (const type of ["UNKNOWN", "EXTRA_HOURS", "TICKETED_EVENT", "INFO"]) {
+      expect(isParkOpen([entry(type)], placeholderRides)).toBe(true);
+    }
+  });
+
   it("falls back to the rides only for a park with no schedule at all", () => {
     expect(isParkOpen([], placeholderRides)).toBe(true);
     expect(isParkOpen([], [])).toBe(false);
