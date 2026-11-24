@@ -148,7 +148,9 @@ export class NearbyParkInfoDto {
   hasOperatingSchedule: boolean;
 
   @ApiProperty({
-    description: "Park analytics",
+    description:
+      "Park analytics. `updatedAt` (ISO 8601) is when the occupancy reading " +
+      "behind `avgWaitTime` and `crowdLevel` was taken.",
     required: false,
     nullable: true,
   })
@@ -156,6 +158,7 @@ export class NearbyParkInfoDto {
     avgWaitTime?: number;
     crowdLevel?: string;
     operatingAttractions?: number;
+    updatedAt?: string;
   };
 
   @ApiProperty({ description: "Park timezone", example: "Europe/Berlin" })

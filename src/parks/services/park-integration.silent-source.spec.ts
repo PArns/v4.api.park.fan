@@ -84,6 +84,7 @@ describe("ParkIntegrationService › a source that stopped measuring", () => {
         activeAttractions: 1,
       },
     }),
+    cacheParkOccupancy: jest.fn().mockResolvedValue(undefined),
     getParkStatistics: jest.fn().mockResolvedValue(statistics),
     getParkPercentilesToday: jest
       .fn()
@@ -379,6 +380,27 @@ describe("ParkIntegrationService › a source that stopped measuring", () => {
     expect(dto.analytics?.statistics.totalAttractions).toBe(3);
     expect(dto.analytics?.statistics.operatingAttractions).toBe(1);
     expect(dto.analytics?.statistics.closedAttractions).toBe(1);
+  });
+
+  it("states the headline from the occupancy it serves, not the statistics snapshot", async () => {
+    // The statistics snapshot is cached for five minutes; this one was taken
+    // before the queues fell from 25 to 15.
+    analyticsService.getParkStatistics.mockResolvedValueOnce({
+      ...statistics,
+      avgWaitTime: 25,
+      crowdLevel: "moderate",
+    });
+
+    const dto = await buildResponse(buildPark(threeRides()));
+
+    expect(dto.analytics?.occupancy?.breakdown?.currentAvgWait).toBe(15);
+    expect(dto.analytics?.statistics.avgWaitTime).toBe(15);
+    expect(dto.analytics?.statistics.crowdLevel).toBe("low");
+    // The lists read `park:occupancy`, so the same reading goes there.
+    expect(analyticsService.cacheParkOccupancy).toHaveBeenCalledWith(
+      "park-billund",
+      expect.objectContaining({ breakdown: expect.anything() }),
+    );
   });
 
   it("stays quiet while the silence is still inside the threshold", async () => {

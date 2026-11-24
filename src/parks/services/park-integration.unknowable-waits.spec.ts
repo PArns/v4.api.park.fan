@@ -85,6 +85,7 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
 
   const analyticsService = {
     calculateParkOccupancy: jest.fn().mockResolvedValue(noDataOccupancy),
+    cacheParkOccupancy: jest.fn().mockResolvedValue(undefined),
     getParkStatistics: jest.fn().mockResolvedValue(emptySetStatistics),
     getParkPercentilesToday: jest
       .fn()

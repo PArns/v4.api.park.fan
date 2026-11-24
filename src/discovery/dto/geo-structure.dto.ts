@@ -94,6 +94,12 @@ export class ParkReferenceDto {
       closedAttractions: number;
       totalAttractions: number;
       crowdLevel?: CrowdLevel;
+      /**
+       * When the occupancy reading behind `avgWaitTime` and `crowdLevel` was
+       * taken (ISO 8601); absent while the park's occupancy cache is cold. A
+       * client holding the same park from several answers shows the newest.
+       */
+      updatedAt?: string;
     };
   };
 

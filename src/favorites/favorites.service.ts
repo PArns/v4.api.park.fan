@@ -430,6 +430,7 @@ export class FavoritesService {
         avgWaitTime?: number;
         crowdLevel: string;
         occupancy?: number;
+        updatedAt?: string;
       };
       todaySchedule?: {
         openingTime: string;
@@ -496,6 +497,7 @@ export class FavoritesService {
                   occupancy.crowdLevel ??
                   this.analyticsService.determineCrowdLevel(occupancy.current),
                 occupancy: waitsReadable ? occupancy.current : undefined,
+                updatedAt: occupancy.updatedAt,
               }
             : undefined,
           todaySchedule: formatTodaySchedule(todaySchedule),
@@ -554,6 +556,7 @@ export class FavoritesService {
                   integrated.analytics.occupancy?.breakdown?.currentAvgWait,
                 crowdLevel: integrated.analytics.statistics?.crowdLevel,
                 occupancy: integrated.analytics.occupancy?.current,
+                updatedAt: integrated.analytics.occupancy?.updatedAt,
               }
             : undefined,
           url: integrated.url || null,

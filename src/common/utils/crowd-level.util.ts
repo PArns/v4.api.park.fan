@@ -21,6 +21,28 @@ export function determineCrowdLevel(occupancy: number): CrowdLevel {
 }
 
 /**
+ * A park's live headline, its Ø wait and crowd level, from ONE occupancy
+ * reading (`calculateParkOccupancy`, or its `park:occupancy` entry). Every
+ * payload that states the pair takes it from here, and from the reading it
+ * serves beside it: two readings minutes apart put "Ø 25 min" on the park page
+ * and "20 min" on the favourites card of the same park at the same moment,
+ * and a mean over every ride put "Ø 10 min" on the country list beside both.
+ */
+export function liveHeadline(occupancy: {
+  current: number;
+  crowdLevel?: CrowdLevel;
+  breakdown?: { currentAvgWait?: number };
+}): { avgWaitTime: number; crowdLevel: CrowdLevel } {
+  return {
+    avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+    // The gated rating: re-deriving it from `current` bypasses the
+    // ratability check ("unknown" for a thin park). The fallback is for an
+    // entry written before the field existed.
+    crowdLevel: occupancy.crowdLevel ?? determineCrowdLevel(occupancy.current),
+  };
+}
+
+/**
  * Rate a numerator against a typical-day-peak baseline, returning `unknown`
  * ("keine Prognose") when the baseline is missing/non-positive — which on the
  * typical-day-peak surfaces means the park is not ratable (NULL typicalDayPeak,

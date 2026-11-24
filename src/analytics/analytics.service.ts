@@ -75,7 +75,10 @@ import {
   RUN_WEEKDAYS_WINDOW_DAYS,
   runWeekdays,
 } from "../common/utils/run-weekdays.util";
-import { determineCrowdLevel } from "../common/utils/crowd-level.util";
+import {
+  determineCrowdLevel,
+  liveHeadline,
+} from "../common/utils/crowd-level.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { subDays } from "date-fns";
 import { getWeekendDaysForCountry } from "../date-features/constants/weekend-rules.constant";
@@ -1877,21 +1880,16 @@ export class AnalyticsService {
       );
     }
 
+    const headline = liveHeadline(occupancy);
     const statsDto: ParkStatisticsDto = {
-      // Use UNIFIED Smart Logic from calculateParkOccupancy
-      avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+      avgWaitTime: headline.avgWaitTime,
       avgWaitToday,
       peakWaitToday,
       peakHour: peakHourIso,
       peakHourLocal: displayPeakHour,
       peakHourConfidence: peakHourConfidence(peakHourSource),
       peakHourSource,
-      // Prefer the rating calculateParkOccupancy already gated: deriving it
-      // again from the raw percentage bypassed the ratability check, so a
-      // thin park that reads "unknown" everywhere else still surfaced a
-      // made-up level here — and this is the field the park page renders.
-      crowdLevel:
-        occupancy.crowdLevel ?? this.getParkCrowdLevel(occupancy.current),
+      crowdLevel: headline.crowdLevel,
       totalAttractions,
       operatingAttractions,
       // The remainder of the total and BOTH other counts. Derived as
@@ -3840,6 +3838,23 @@ export class AnalyticsService {
    */
   public getParkCrowdLevel(occupancy: number): CrowdLevel {
     return this.determineCrowdLevel(occupancy);
+  }
+
+  /**
+   * Stores a reading as the park's `park:occupancy` entry, the one discovery,
+   * search and the batch paths read. The park payload stores the reading it
+   * computed too, so the lists say what the park page says rather than the
+   * reading of the previous warmup run.
+   */
+  public async cacheParkOccupancy(
+    parkId: string,
+    occupancy: OccupancyDto,
+  ): Promise<void> {
+    await this.redis.setex(
+      CacheKeys.parkOccupancy(parkId),
+      5 * 60,
+      JSON.stringify(occupancy),
+    );
   }
 
   /**

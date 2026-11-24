@@ -14,6 +14,7 @@ import {
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import { formatTodaySchedule } from "../../common/utils/schedule.util";
+import { liveHeadline } from "../../common/utils/crowd-level.util";
 import { fromZonedTime } from "date-fns-tz";
 
 /**
@@ -191,6 +192,7 @@ export class ParkEnrichmentService {
     const stats = statisticsMap.get(park.id);
 
     if (occupancy) {
+      const headline = liveHeadline(occupancy);
       dto.analytics = {
         occupancy: {
           current: occupancy.current,
@@ -201,18 +203,14 @@ export class ParkEnrichmentService {
           updatedAt: occupancy.updatedAt,
         },
         statistics: {
-          avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+          avgWaitTime: headline.avgWaitTime,
           avgWaitToday: stats?.avgWaitToday || 0,
           peakWaitToday: stats?.peakWaitToday || 0,
           peakHour: stats?.peakHour || null,
           peakHourLocal: stats?.peakHourLocal || null,
           peakHourConfidence: stats?.peakHourConfidence ?? 0,
           peakHourSource: stats?.peakHourSource ?? null,
-          // Gated at the source (calculateParkOccupancy): "unknown" for a thin
-          // park (not ratable). Legacy fallback derives from current.
-          crowdLevel:
-            occupancy.crowdLevel ??
-            this.analyticsService.determineCrowdLevel(occupancy.current),
+          crowdLevel: headline.crowdLevel,
           totalAttractions: stats?.totalAttractions || 0,
           operatingAttractions: stats?.operatingAttractions || 0,
           closedAttractions: stats?.closedAttractions || 0,

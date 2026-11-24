@@ -21,6 +21,7 @@ import {
 } from "../common/utils/distance.util";
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
+import { liveHeadline } from "../common/utils/crowd-level.util";
 import {
   NearbyResponseDto,
   NearbyRidesDto,
@@ -321,9 +322,18 @@ export class LocationService {
     ]);
     const cold = tooColdToGetWet(weatherNow);
 
-    const parkAnalytics = await this.analyticsService
-      .getParkStatistics(parkId, park.timezone, startTime)
-      .catch(() => null);
+    const [parkAnalytics, occupancy] = await Promise.all([
+      this.analyticsService
+        .getParkStatistics(parkId, park.timezone, startTime)
+        .catch(() => null),
+      this.analyticsService
+        .getBatchParkOccupancy([parkId])
+        .then((occupancies) => occupancies.get(parkId))
+        .catch(() => undefined),
+    ]);
+    // The reading the park payload stored, not the five-minute statistics
+    // snapshot: the in-park card sits next to the favourites and the park page.
+    const headline = occupancy ? liveHeadline(occupancy) : null;
 
     const parkStatus = statusMap.get(parkId) || "CLOSED";
 
@@ -441,9 +451,10 @@ export class LocationService {
       hasOperatingSchedule: parkHasOperatingSchedule,
       analytics: parkAnalytics
         ? {
-            avgWaitTime: parkAnalytics.avgWaitTime,
-            crowdLevel: parkAnalytics.crowdLevel,
+            avgWaitTime: headline?.avgWaitTime ?? parkAnalytics.avgWaitTime,
+            crowdLevel: headline?.crowdLevel ?? parkAnalytics.crowdLevel,
             operatingAttractions: parkAnalytics.operatingAttractions,
+            updatedAt: occupancy?.updatedAt,
           }
         : undefined,
       timezone: park.timezone,
@@ -636,6 +647,7 @@ export class LocationService {
                   integrated.analytics.occupancy?.breakdown?.currentAvgWait,
                 crowdLevel: integrated.analytics.statistics?.crowdLevel,
                 occupancy: integrated.analytics.occupancy?.current,
+                updatedAt: integrated.analytics.occupancy?.updatedAt,
               }
             : undefined,
           url: integrated.url || buildParkUrl(park) || null,
@@ -693,6 +705,7 @@ export class LocationService {
                 occupancy.crowdLevel ??
                 this.analyticsService.determineCrowdLevel(occupancy.current),
               occupancy: waitsReadable ? occupancy.current : undefined,
+              updatedAt: occupancy.updatedAt,
             }
           : undefined,
         url: buildParkUrl(park) || null,

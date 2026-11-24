@@ -73,7 +73,10 @@ export class ParkWithDistanceDto {
   operatingAttractions: number;
 
   @ApiProperty({
-    description: "Park analytics",
+    description:
+      "Park analytics. `updatedAt` (ISO 8601) is when the occupancy reading " +
+      "behind `avgWaitTime` and `crowdLevel` was taken; a client holding the " +
+      "same park from several answers shows the newest.",
     required: false,
     nullable: true,
   })
@@ -81,6 +84,7 @@ export class ParkWithDistanceDto {
     avgWaitTime?: number;
     crowdLevel?: string;
     occupancy?: number;
+    updatedAt?: string;
   };
 
   @ApiProperty({

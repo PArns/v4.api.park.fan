@@ -193,4 +193,47 @@ describe("DiscoveryService Deduplication", () => {
     expect(byId.get("3")).toBe(0);
     expect(result.attractionCount).toBe(42);
   });
+
+  it("states a park's Ø wait from its occupancy reading, the park page's figure", async () => {
+    const park = (id: string) => ({
+      id,
+      name: `Park ${id}`,
+      slug: `park-${id}`,
+      continent: "Europe",
+      continentSlug: "europe",
+      country: "Germany",
+      countrySlug: "germany",
+      countryCode: "DE",
+      city: "bruehl",
+      citySlug: "bruehl",
+      attractions: [],
+    });
+    mockRedis.get.mockResolvedValue(null);
+    mockParkRepository.find.mockResolvedValue([park("1"), park("2")]);
+    // The mean over every ride, walk-ons and all: 10 at both parks.
+    mockParkRepository.query.mockResolvedValueOnce([
+      { id: "1", is_open: true, avg_wait: "9.6", total_attractions: "35" },
+      { id: "2", is_open: true, avg_wait: "9.6", total_attractions: "20" },
+    ]);
+    // Park 1 has a reading; park 2's entry is cold.
+    mockRedis.mget.mockResolvedValueOnce([
+      JSON.stringify({
+        current: 67,
+        crowdLevel: "low",
+        breakdown: { currentAvgWait: 20 },
+      }),
+      null,
+    ]);
+
+    const result = await service.getGeoStructure();
+    const parks = result.continents.flatMap((c) =>
+      c.countries.flatMap((co) => co.cities.flatMap((ci) => ci.parks)),
+    );
+    const byId = new Map(parks.map((p) => [p.id, p.analytics?.statistics]));
+
+    expect(byId.get("1")?.avgWaitTime).toBe(20);
+    expect(byId.get("1")?.crowdLevel).toBe("low");
+    // Cold: the ride mean stays, with no level.
+    expect(byId.get("2")?.avgWaitTime).toBe(10);
+  });
 });
