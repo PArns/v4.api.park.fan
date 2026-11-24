@@ -1,5 +1,6 @@
 import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { ApnsClient } from "./apns";
 import { NotFoundException } from "@nestjs/common";
 import { In } from "typeorm";
 import { PushService } from "./push.service";
@@ -79,6 +80,7 @@ describe("PushService", () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         PushService,
+        ApnsClient,
         {
           provide: getRepositoryToken(PushSubscription),
           useValue: Object.assign(repositoryFake, {

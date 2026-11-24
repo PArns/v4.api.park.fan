@@ -8,6 +8,8 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
 import { isPushConfigured } from "../../push/push-config";
+import { isApnsConfigured } from "../../push/apns";
+import { NewsPushService } from "../services/news-push.service";
 import {
   dueNotifications,
   isMorningPlanDue,
@@ -123,6 +125,7 @@ export class PushNotificationProcessor {
     private readonly showFollowsService: ShowFollowsService,
     private readonly showsService: ShowsService,
     private readonly rainSoon: RainSoonPushService,
+    private readonly newsPush: NewsPushService,
     private readonly parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
@@ -153,7 +156,7 @@ export class PushNotificationProcessor {
   async handleDue(_job: Job): Promise<void> {
     // No keypair, no work. Checked here as well as at the subscribe endpoint
     // because a deploy can lose its configuration without losing its table.
-    if (!isPushConfigured()) return;
+    if (!isPushConfigured() && !isApnsConfigured()) return;
 
     const started = Date.now();
     // Isolated, like `WaitTimesProcessor` isolates one park's failure from
@@ -165,18 +168,19 @@ export class PushNotificationProcessor {
     // halves touch unrelated tables and neither result depends on the
     // other, so awaiting them one after another only ever cost wall-clock
     // time on a five-minute cron with no other reason to serialize them.
-    const [tripSent, showSent, rainSent] = await Promise.all([
+    const [tripSent, showSent, rainSent, newsSent] = await Promise.all([
       this.runHalf("trip", () => this.handleTripNotifications(started)),
       this.runHalf("show-follow", () =>
         this.handleShowFollowNotifications(started),
       ),
       this.runHalf("rain-soon", () => this.rainSoon.run(started)),
+      this.runHalf("news", () => this.newsPush.run(started)),
     ]);
 
-    const sent = tripSent + showSent + rainSent;
+    const sent = tripSent + showSent + rainSent + newsSent;
     if (sent > 0) {
       this.logger.log(
-        `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow, ${rainSent} rain-soon) in ${Date.now() - started}ms`,
+        `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow, ${rainSent} rain-soon, ${newsSent} news) in ${Date.now() - started}ms`,
       );
     }
   }

@@ -184,6 +184,50 @@ unfollows idempotently. At most 100 per subscription, 60 writes an hour per addr
 { "title": "In 30 Min.: Feuerwerk", "body": "20:30 Uhr, Europa-Park", "url": "/parks/europe/germany/rust/europa-park#shows", "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z" }
 ```
 
+## iOS app (APNs, `/v1/push/devices`)
+
+The app has no browser endpoint and no account. It registers its **install**:
+`POST /v1/push/devices` with `{ installId (UUID), token (APNs hex), kinds,
+newsParks?, locale?, timezone? }` → 200 `{ endpoint, kinds, newsParks }`. The row
+is an ordinary `push_subscriptions` row with `endpoint = apns:<installId>`,
+`apnsToken` set and empty web keys, so the app then calls
+`/v1/push/ride-alerts` and `/v1/push/show-follows` with that `endpoint` exactly as
+a browser does, and every trigger above reaches it. The install id, not the
+token, is the identity: a rotated token keeps the alerts. A token registered by
+another install (a restore onto a new phone) moves, so one phone never gets a
+banner twice. `DELETE /v1/push/devices { installId }` forgets the install with
+its alerts and follows. Same 429 bucket as subscribe.
+
+- **The device chooses, the server enforces.** `kinds` is the device's whole
+  choice and replaces what was stored: `ride-wait`, `ride-reopen`, `show`,
+  `news`, plus the trip topics. `PushService.send` drops any message whose kind
+  (`pushKindOf`: its `kind`, else its tag prefix) the device did not choose, for
+  every producer. An empty list keeps the alerts and sends nothing.
+- **Transport.** `src/push/apns.ts`: ES256 provider token (refreshed every 50
+  minutes), HTTP/2 to `api.push.apple.com` (`APNS_PRODUCTION=false`: sandbox),
+  `apns-expiration` 15 minutes like the web TTL, the tag as collapse id (hashed
+  past 64 bytes). Payload: `aps.alert {title, body}` plus `url` (the same
+  site-relative path a browser opens) and `kind`.
+- **Dead tokens.** 410, or 400 `BadDeviceToken` / `DeviceTokenNotForTopic`,
+  deletes the row; anything else counts toward `MAX_FAILURES`.
+- **No key, no push.** Without all of `APNS_KEY_ID`, `APNS_TEAM_ID`,
+  `APNS_BUNDLE_ID`, `APNS_KEY`, `GET /v1/push` answers `apns: false`, registering
+  is a 503 and no device is sent anything.
+
+### `news` — a new post in the news export
+
+`NewsPushService`, a fourth half of the five-minute job, for devices with
+`news`. It reads `<NEWS_EXPORT_BASE>/news/<locale>.json` (the file the app
+itself reads, so a post is announced when the app can open it) for each locale
+that has readers. A slug first added to the Redis set `push:news:seen:<locale>`
+(no TTL, so never evicted) is new; a missing set is filled silently, and a post
+published more than 6 hours ago is never announced. `newsParks` narrows to posts
+about those parks (geo paths, else park slugs). Quiet hours drop it.
+
+```json
+{ "title": "Europa-Park startet in den Winter", "body": "<teaser>", "url": "/news/europa-park-wintersaison-2026", "tag": "news:europa-park-wintersaison-2026" }
+```
+
 ## Quiet hours
 
 **Nothing is sent between 23:00 and 07:00 in the subscriber's own timezone** (the
@@ -212,4 +256,5 @@ Berlin puts a 21:00 block at 03:00. 22:00–08:00 was rejected: a park open unti
 - A subscription is deleted the first time a push service answers 404 or 410, and
   after 8 consecutive other failures (`MAX_FAILURES`, reset on success).
   `ride_alerts` and `show_follows` cascade with it in the database.
-- Configuration: `VAPID_*` and `PUSH_ENDPOINT_HOSTS` in `.env.example`.
+- Configuration: `VAPID_*`, `PUSH_ENDPOINT_HOSTS`, `APNS_*` and
+  `NEWS_EXPORT_BASE` in `.env.example`.

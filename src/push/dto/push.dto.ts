@@ -1,12 +1,15 @@
 import { ApiProperty } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
   IsArray,
   IsOptional,
   IsString,
+  IsUUID,
+  Matches,
   MaxLength,
   IsNotEmpty,
 } from "class-validator";
-import { PUSH_TOPICS } from "../push-config";
+import { DEVICE_PUSH_KINDS, PUSH_TOPICS } from "../push-config";
 
 /**
  * The subscribe body.
@@ -159,4 +162,92 @@ export class PushStatusDto {
 
   @ApiProperty({ enum: PUSH_TOPICS, isArray: true })
   topics: string[];
+
+  @ApiProperty({
+    description:
+      "Whether this deploy can send to the iOS app (an APNs key is " +
+      "configured). False: the app must not offer its switches.",
+  })
+  apns: boolean;
+
+  @ApiProperty({ enum: DEVICE_PUSH_KINDS, isArray: true })
+  deviceKinds: string[];
+}
+
+/**
+ * An iOS app install. No account: `installId` is a random UUID the app keeps
+ * in its own storage and the identity of the row (`apns:<installId>`), the
+ * same bearer role the endpoint URL plays for a browser.
+ */
+export class PushDeviceDto {
+  @ApiProperty({ description: "The app's random install id (UUID)." })
+  @IsUUID()
+  installId: string;
+
+  @ApiProperty({ description: "The APNs device token, hex." })
+  @IsString()
+  @Matches(/^[0-9a-fA-F]{64,200}$/)
+  token: string;
+
+  @ApiProperty({
+    description:
+      "Every kind the device wants, its whole current choice: replaces what " +
+      "was stored. Unknown kinds are dropped; empty means nothing is sent " +
+      "while alerts and follows stay stored.",
+    enum: DEVICE_PUSH_KINDS,
+    isArray: true,
+  })
+  @IsArray()
+  @ArrayMaxSize(32)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  kinds: string[];
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description:
+      "News only about these parks (API geo paths); omitted or null for all news.",
+    example: ["europe/germany/rust/europa-park"],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsString({ each: true })
+  @MaxLength(200, { each: true })
+  newsParks?: string[] | null;
+
+  @ApiProperty({ required: false, example: "de" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  locale?: string;
+
+  @ApiProperty({ required: false, example: "Europe/Berlin" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  timezone?: string;
+}
+
+export class PushDeviceRemoveDto {
+  @ApiProperty({ description: "The install id to forget." })
+  @IsUUID()
+  installId: string;
+}
+
+export class PushDeviceResponseDto {
+  @ApiProperty({
+    description:
+      "The identity to send as `endpoint` to `/v1/push/ride-alerts` and " +
+      "`/v1/push/show-follows`.",
+    example: "apns:6f1c…",
+  })
+  endpoint: string;
+
+  @ApiProperty({ enum: DEVICE_PUSH_KINDS, isArray: true })
+  kinds: string[];
+
+  @ApiProperty({ nullable: true, type: [String] })
+  newsParks: string[] | null;
 }

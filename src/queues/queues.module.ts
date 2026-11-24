@@ -34,6 +34,7 @@ import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstru
 import { WeatherClosureProcessor } from "./processors/weather-closure.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { RainSoonPushService } from "./services/rain-soon-push.service";
+import { NewsPushService } from "./services/news-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { AssistantMaintenanceProcessor } from "./processors/assistant-maintenance.processor";
 import { SiteAnalyticsProcessor } from "./processors/site-analytics.processor";
@@ -208,6 +209,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     WeatherClosureProcessor, // Weekly cold/snow closure profiles (PAR-1414)
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     RainSoonPushService, // …and its `rain-soon` half
+    NewsPushService, // …and its `news` half
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     AssistantMaintenanceProcessor, // Nightly retention of the assistant's chats
     SiteAnalyticsProcessor, // Site statistic: visitors snapshot, retention

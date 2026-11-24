@@ -138,3 +138,47 @@ export function isAllowedPushEndpoint(url: URL): boolean {
     (allowed) => host === allowed || host.endsWith(`.${allowed}`),
   );
 }
+
+/**
+ * What an iOS device can switch on, one switch each in the app's settings.
+ *
+ * The device's choice is stored in the row's `topics` (the trip topics keep
+ * their names) and enforced in `PushService.send`: a kind the device did not
+ * choose is never sent to it. Web rows are not gated this way; nothing here
+ * changes for a browser.
+ *
+ * - `ride-wait` / `ride-reopen` — its ride alerts, by alert kind.
+ * - `show` — its followed shows.
+ * - `news` — a new news post (`NewsPushService`).
+ * - the trip topics, for a device that stores a plan.
+ */
+export const DEVICE_PUSH_KINDS = [
+  "ride-wait",
+  "ride-reopen",
+  "show",
+  "news",
+  ...PUSH_TOPICS,
+] as const;
+export type DevicePushKind = (typeof DEVICE_PUSH_KINDS)[number];
+
+export function isDevicePushKind(value: unknown): value is DevicePushKind {
+  return (
+    typeof value === "string" &&
+    (DEVICE_PUSH_KINDS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Which kind a message is: its own `kind`, else the prefix of its tag (every
+ * producer's dedupe key starts with it). `null` for anything unknown, which a
+ * device is then never sent.
+ */
+export function pushKindOf(message: {
+  kind?: string;
+  tag: string;
+}): DevicePushKind | null {
+  if (message.kind) return isDevicePushKind(message.kind) ? message.kind : null;
+  const prefix = message.tag.split(":")[0];
+  if (prefix === "show-start") return "show";
+  return isDevicePushKind(prefix) ? prefix : null;
+}

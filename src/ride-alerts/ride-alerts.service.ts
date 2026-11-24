@@ -608,11 +608,17 @@ export class RideAlertsService {
       };
       const message =
         "waitTime" in trigger
-          ? writeRideAlertMessage(
-              { ...copy, waitTime: trigger.waitTime },
-              subscription.locale,
-            )
-          : writeRideReopenMessage(copy, subscription.locale);
+          ? {
+              ...writeRideAlertMessage(
+                { ...copy, waitTime: trigger.waitTime },
+                subscription.locale,
+              ),
+              kind: "ride-wait" as const,
+            }
+          : {
+              ...writeRideReopenMessage(copy, subscription.locale),
+              kind: "ride-reopen" as const,
+            };
       const sent = await this.pushService.send(subscription, message);
       if (!sent) {
         // Delivery failed (push service having a bad minute, or a dead

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { PushController } from "./push.controller";
 import { PushService } from "./push.service";
+import { ApnsClient } from "./apns";
 import { PushFollowWriteRateLimitService } from "./push-follow-write-rate-limit.service";
 import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { PushSubscription } from "./entities/push-subscription.entity";
@@ -27,6 +28,7 @@ import { RedisModule } from "../common/redis/redis.module";
   controllers: [PushController],
   providers: [
     PushService,
+    ApnsClient,
     PushFollowWriteRateLimitService,
     PushFollowAccessGuard,
   ],

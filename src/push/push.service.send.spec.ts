@@ -2,6 +2,7 @@ import * as webpush from "web-push";
 import { Repository } from "typeorm";
 import { PushService } from "./push.service";
 import { PushSubscription } from "./entities/push-subscription.entity";
+import { ApnsClient } from "./apns";
 
 jest.mock("web-push", () => ({ sendNotification: jest.fn() }));
 
@@ -62,6 +63,7 @@ describe("PushService.send — writes the outcome without resurrecting the row",
     };
     service = new PushService(
       repository as unknown as Repository<PushSubscription>,
+      new ApnsClient(),
     );
   });
   afterAll(() => {

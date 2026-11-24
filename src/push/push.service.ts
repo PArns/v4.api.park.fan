@@ -7,8 +7,16 @@ import { Trip } from "../trips/entities/trip.entity";
 import {
   getVapidConfig,
   isPushConfigured,
+  pushKindOf,
+  type DevicePushKind,
   type PushTopic,
 } from "./push-config";
+import { ApnsClient, buildApnsRequest, isApnsConfigured } from "./apns";
+
+/** A device's identity in `push_subscriptions.endpoint`: never a URL, so no web route accepts it. */
+export function deviceEndpoint(installId: string): string {
+  return `apns:${installId}`;
+}
 
 /**
  * What a browser hands over when the visitor says yes.
@@ -53,6 +61,11 @@ export interface PushMessage {
    * at once, every one of them about a moment that has passed.
    */
   tag: string;
+  /**
+   * Which `DEVICE_PUSH_KINDS` entry this is, when the tag prefix cannot say
+   * (`ride-alert:` is both a wait and a reopen alert). Never sent to a browser.
+   */
+  kind?: DevicePushKind;
 }
 
 /**
@@ -82,6 +95,7 @@ export class PushService {
   constructor(
     @InjectRepository(PushSubscription)
     private readonly repository: Repository<PushSubscription>,
+    private readonly apns: ApnsClient,
   ) {}
 
   /**
@@ -270,16 +284,20 @@ export class PushService {
     subscription: PushSubscription,
     message: PushMessage,
   ): Promise<boolean> {
+    if (subscription.apnsToken) return this.sendToDevice(subscription, message);
+
     const vapid = getVapidConfig();
     if (!vapid) return false;
 
+    // `kind` is for device gating; a browser's payload stays what it was.
+    const { kind: _kind, ...payload } = message;
     try {
       await webpush.sendNotification(
         {
           endpoint: subscription.endpoint,
           keys: { p256dh: subscription.p256dh, auth: subscription.auth },
         },
-        JSON.stringify(message),
+        JSON.stringify(payload),
         {
           vapidDetails: {
             subject: vapid.subject,
@@ -305,6 +323,91 @@ export class PushService {
       await this.recordFailure(subscription, error);
       return false;
     }
+  }
+
+  /**
+   * Send to an iOS device, if it switched this kind on.
+   *
+   * The gate is here, where every producer passes, so a kind the device
+   * switched off can never reach it — whichever job decided to send.
+   * Unconfigured APNs is a plain `false` with no bookkeeping: the row is not
+   * at fault.
+   */
+  private async sendToDevice(
+    subscription: PushSubscription,
+    message: PushMessage,
+  ): Promise<boolean> {
+    const kind = pushKindOf(message);
+    if (!kind || !subscription.topics?.includes(kind)) return false;
+    if (!isApnsConfigured()) return false;
+
+    const outcome = await this.apns.send(
+      subscription.apnsToken as string,
+      buildApnsRequest(message, kind, Date.now()),
+    );
+    if (outcome === "sent") {
+      await this.repository.update(
+        { id: subscription.id },
+        { failureCount: 0, lastNotifiedAt: new Date() },
+      );
+      return true;
+    }
+    await this.recordFailure(
+      subscription,
+      outcome === "dead" ? { statusCode: 410 } : null,
+    );
+    return false;
+  }
+
+  /**
+   * Store an app install: an upsert on `apns:<installId>`.
+   *
+   * `kinds` and `newsParks` are the device's whole current choice and replace
+   * what was stored (the app sends them on every change); the trip pointer is
+   * left alone, like `subscribe` does for a browser.
+   */
+  async registerDevice(input: {
+    installId: string;
+    token: string;
+    kinds: DevicePushKind[];
+    newsParks: string[] | null;
+    locale?: string;
+    timezone?: string | null;
+  }): Promise<PushSubscription | null> {
+    if (!isApnsConfigured()) return null;
+    const endpoint = deviceEndpoint(input.installId);
+    const row =
+      (await this.repository.findOne({ where: { endpoint } })) ??
+      this.repository.create({ endpoint, tripId: null, p256dh: "", auth: "" });
+    // A token moved to another install (restore onto a new phone) is not two
+    // devices: the older row would receive the same banners twice.
+    await this.repository.delete({
+      apnsToken: input.token,
+      endpoint: Not(endpoint),
+    });
+    row.apnsToken = input.token;
+    row.topics = input.kinds;
+    row.newsParks = input.newsParks;
+    if (input.locale !== undefined) row.locale = input.locale;
+    if (input.timezone !== undefined) row.timezone = input.timezone;
+    row.failureCount = 0;
+    return this.repository.save(row);
+  }
+
+  /** Forget an install and, by cascade, its alerts and follows. Idempotent. */
+  async removeDevice(installId: string): Promise<void> {
+    await this.repository.delete({ endpoint: deviceEndpoint(installId) });
+  }
+
+  /** Devices with `news` switched on, for `NewsPushService`. */
+  async devicesWithNews(): Promise<PushSubscription[]> {
+    return this.repository
+      .createQueryBuilder("s")
+      .where("s.apnsToken IS NOT NULL")
+      .andWhere("s.topics @> CAST(:topics AS jsonb)", {
+        topics: JSON.stringify(["news"]),
+      })
+      .getMany();
   }
 
   /**

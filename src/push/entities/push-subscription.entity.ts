@@ -51,6 +51,24 @@ export class PushSubscription {
   auth: string;
 
   /**
+   * The APNs device token of an iOS app install, hex; `null` for a browser.
+   *
+   * Set, the row is a device: its `endpoint` is `apns:<installId>` (stable
+   * across token rotations, so alerts survive one), `p256dh`/`auth` are empty,
+   * `topics` holds the kinds it switched on, and `PushService.send` goes to
+   * APNs instead of web push.
+   */
+  @Column({ type: "varchar", length: 200, nullable: true })
+  apnsToken: string | null;
+
+  /**
+   * A device's news narrowing: the park geo paths whose news it wants, or
+   * `null` for all news. Only read for rows with `news` in `topics`.
+   */
+  @Column({ type: "jsonb", nullable: true })
+  newsParks: string[] | null;
+
+  /**
    * Which trip this browser wants to hear about, if any.
    *
    * Nullable: a browser that only follows a show or a ride's wait time has no

@@ -7,6 +7,7 @@ import { ShowFollowsService } from "../../show-follows/show-follows.service";
 import { ShowsService } from "../../shows/shows.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RainSoonPushService } from "../services/rain-soon-push.service";
+import { NewsPushService } from "../services/news-push.service";
 import { ParksService } from "../../parks/parks.service";
 
 /**
@@ -130,6 +131,10 @@ describe("PushNotificationProcessor", () => {
         { provide: ShowFollowsService, useValue: showFollowsService },
         { provide: ShowsService, useValue: showsService },
         { provide: RainSoonPushService, useValue: rainSoon },
+        {
+          provide: NewsPushService,
+          useValue: { run: jest.fn().mockResolvedValue(0) },
+        },
         { provide: ParksService, useValue: parksService },
         { provide: REDIS_CLIENT, useValue: redis },
       ],

@@ -18,6 +18,8 @@ import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.inter
 import { PushService } from "./push.service";
 import { TripsService } from "../trips/trips.service";
 import {
+  DEVICE_PUSH_KINDS,
+  isDevicePushKind,
   PUSH_TOPICS,
   getVapidConfig,
   isAllowedPushEndpoint,
@@ -25,7 +27,11 @@ import {
   isPushTopic,
   type PushTopic,
 } from "./push-config";
+import { isApnsConfigured } from "./apns";
 import {
+  PushDeviceDto,
+  PushDeviceRemoveDto,
+  PushDeviceResponseDto,
   PushStatusDto,
   PushSubscribeDto,
   PushUnsubscribeDto,
@@ -72,7 +78,64 @@ export class PushController {
       // signature against, and the browser cannot subscribe without it.
       ...(vapid ? { publicKey: vapid.publicKey } : {}),
       topics: [...PUSH_TOPICS],
+      apns: isApnsConfigured(),
+      deviceKinds: [...DEVICE_PUSH_KINDS],
     };
+  }
+
+  @Post("devices")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Register an iOS app install, with what it wants pushed",
+    description:
+      "An upsert on the install id. Sent on every token change and every " +
+      "change of the device's push choice; `kinds` and `newsParks` replace " +
+      "what was stored. A kind not listed is never sent to the device.",
+  })
+  @ApiResponse({ status: 200, type: PushDeviceResponseDto })
+  @ApiResponse({ status: 503, description: "No APNs key on this deploy." })
+  async registerDevice(
+    @Body() body: PushDeviceDto,
+    @Req() request: Request,
+  ): Promise<PushDeviceResponseDto> {
+    if (!isApnsConfigured()) {
+      throw new HttpException(
+        "Push to the app is not configured on this deploy",
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    await this.writeAccess.writeGuard(request, "subscription");
+    const stored = await this.pushService.registerDevice({
+      installId: body.installId.toLowerCase(),
+      token: body.token.toLowerCase(),
+      kinds: [...new Set(body.kinds.filter(isDevicePushKind))],
+      newsParks: body.newsParks ?? null,
+      locale:
+        body.locale === undefined ? undefined : normalizeLocale(body.locale),
+      timezone: normalizeTimezone(body.timezone),
+    });
+    if (!stored) {
+      throw new HttpException(
+        "Push to the app is not configured on this deploy",
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    return {
+      endpoint: stored.endpoint,
+      kinds: stored.topics,
+      newsParks: stored.newsParks,
+    };
+  }
+
+  @Delete("devices")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "Forget an iOS app install, with its alerts and follows",
+    description: "Idempotent.",
+  })
+  @ApiResponse({ status: 204, description: "Gone, or was never there." })
+  async removeDevice(@Body() body: PushDeviceRemoveDto): Promise<void> {
+    await this.pushService.removeDevice(body.installId.toLowerCase());
   }
 
   @Post("subscriptions")
