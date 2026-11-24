@@ -4,6 +4,7 @@ import { LessThan, Repository } from "typeorm";
 import { randomBytes } from "crypto";
 import { Trip } from "./entities/trip.entity";
 import { PushSubscription } from "../push/entities/push-subscription.entity";
+import { readParks } from "../push/notification-planner";
 
 /**
  * Reading and writing a stored plan.
@@ -189,6 +190,7 @@ export class TripsService {
    * no NULL and `NOT IN` is safe.
    */
   async sweepExpired(): Promise<number> {
+    await this.expireDevicePlans();
     const removed = await this.tripRepository.manager.transaction(
       async (manager) => {
         const result = await manager.delete(Trip, {
@@ -207,6 +209,43 @@ export class TripsService {
     if (removed > 0) this.logger.log(`Swept ${removed} expired trip(s)`);
     return removed;
   }
+
+  /**
+   * A plan only app installs point at (no browser does) ends
+   * `DEVICE_PLAN_GRACE_DAYS` after its last plan day instead of 400 days after
+   * its last write: the app keeps its own copy, and nothing else reads it then.
+   * Only ever moves `expiresAt` earlier; the delete below does the rest. A
+   * write pushes it out again and the next sweep shortens it again.
+   */
+  private async expireDevicePlans(): Promise<void> {
+    const rows: Array<{ id: string; payload: unknown; expiresAt: Date }> =
+      await this.tripRepository.manager.query(
+        `SELECT t.id, t.payload, t."expiresAt" FROM trips t
+          WHERE t.id IN (SELECT "tripId" FROM push_subscriptions
+                          WHERE "tripId" IS NOT NULL
+                          GROUP BY "tripId"
+                         HAVING bool_and("apnsToken" IS NOT NULL))`,
+      );
+    for (const row of rows) {
+      const last = readParks(row.payload)
+        .flatMap((park) => Object.keys(park.days))
+        .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+        .sort()
+        .pop();
+      if (!last) continue;
+      const until =
+        Date.parse(`${last}T00:00:00Z`) +
+        (1 + TripsService.DEVICE_PLAN_GRACE_DAYS) * 86_400_000;
+      if (Number.isFinite(until) && until < new Date(row.expiresAt).getTime()) {
+        await this.tripRepository.update(
+          { id: row.id },
+          { expiresAt: new Date(until) },
+        );
+      }
+    }
+  }
+
+  private static readonly DEVICE_PLAN_GRACE_DAYS = 7;
 
   /**
    * What a cleared pointer leaves in `topics`: a browser's are all trip

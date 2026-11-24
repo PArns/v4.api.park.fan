@@ -27,13 +27,17 @@ There are no visitor accounts, so knowing the id is the whole authorisation.
   document.
 - **Expiry.** A trip lives 400 days from its last write; the daily `trip-sweep-cron`
   removes the rest. An expired trip reads as absent (404) on every verb, whether or
-  not the sweep has run.
+  not the sweep has run. A trip that only app installs link (`tripId` on
+  `POST /v1/push/devices`, no browser) instead ends 7 days after its last plan day:
+  the sweep moves `expiresAt` earlier, never later, and a write moves it out again
+  until the next sweep. After that the id is a 404 and the app has to start a new trip.
 - **Delete exists so switching push off makes a plan gone, not unreachable** — the
   browser forgets the id at that moment, and anyone who kept it could otherwise read
   and overwrite the plan for the rest of its 400 days. Deleting also clears `tripId`
   on every push subscription pointing at the trip, in the same transaction, and
   **keeps those rows**: a subscription belongs to the browser and also carries its
   ride alerts and followed shows. The sweep clears dangling pointers the same way.
+  A browser's `topics` are cleared with the pointer; an app install keeps its kinds.
 - Both writers lock the row (`SELECT … FOR UPDATE`) and take `trips` before
   `push_subscriptions`: the first stops an in-flight `PUT` from resurrecting a
   just-deleted plan, the second stops the delete and the sweep deadlocking.

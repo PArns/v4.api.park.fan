@@ -30,6 +30,7 @@ describe("TripsService", () => {
     update: jest.Mock;
     delete: jest.Mock;
     createQueryBuilder: jest.Mock;
+    query: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -108,6 +109,13 @@ describe("TripsService", () => {
           return { affected };
         },
       ),
+      // The device-plan select: trips with a subscriber, none of them a browser.
+      query: jest.fn(async () =>
+        [...rows.values()].filter((trip) => {
+          const subs = subscriptions.filter((r) => r.tripId === trip.id);
+          return subs.length > 0 && subs.every((r) => r.apnsToken);
+        }),
+      ),
       // The sweep's pointer clear is one set-based statement, so the fake
       // reproduces its predicate rather than its SQL: every subscription whose
       // `tripId` no longer resolves to a row in `trips`.
@@ -159,6 +167,12 @@ describe("TripsService", () => {
               return rows.get(where.id) ?? null;
             }),
             delete: jest.fn(async () => ({ affected: 0 })),
+            update: jest.fn(
+              async ({ id }: { id: string }, patch: Partial<Trip>) => {
+                const row = rows.get(id);
+                if (row) Object.assign(row, patch);
+              },
+            ),
             manager,
           },
         },
@@ -456,6 +470,52 @@ describe("TripsService", () => {
         tripId: null,
         topics: ["ride-reopen", "show"],
       });
+    });
+
+    it("ends a plan only app installs point at a week after its last day", async () => {
+      const DAY = 86_400_000;
+      const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+      const withDays = (...dates: string[]) => ({
+        version: 2,
+        parks: {
+          p: {
+            slug: "p",
+            days: Object.fromEntries(dates.map((d) => [d, { date: d }])),
+          },
+        },
+      });
+      const past = await service.create(
+        withDays(iso(Date.now() - 20 * DAY), iso(Date.now() - 9 * DAY)),
+      );
+      const recent = await service.create(withDays(iso(Date.now() - 2 * DAY)));
+      const shared = await service.create(withDays(iso(Date.now() - 20 * DAY)));
+      const device = (tripId: string, n: number) => ({
+        endpoint: `apns:${n}`,
+        tripId,
+        topics: ["plan-change"],
+        apnsToken: "ab",
+      });
+      subscriptions.push(
+        device(past.id, 1),
+        device(recent.id, 2),
+        device(shared.id, 3),
+        // A browser on the same plan keeps the 400 days.
+        { endpoint: "https://push.example/a", tripId: shared.id, topics: [] },
+      );
+
+      expect(await service.sweepExpired()).toBe(1);
+
+      expect(rows.has(past.id)).toBe(false);
+      expect(subscriptions[0]).toMatchObject({
+        tripId: null,
+        topics: ["plan-change"],
+      });
+      expect(rows.get(recent.id)!.expiresAt.getTime()).toBeLessThan(
+        Date.now() + 7 * DAY,
+      );
+      expect(rows.get(shared.id)!.expiresAt.getTime()).toBeGreaterThan(
+        Date.now() + 399 * DAY,
+      );
     });
 
     it("deletes the trips before it touches the subscriptions", async () => {
