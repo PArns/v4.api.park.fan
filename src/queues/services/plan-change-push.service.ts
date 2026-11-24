@@ -19,6 +19,7 @@ import {
   type PlanDayToWatch,
   type StandbyReading,
 } from "../../push/plan-change";
+import { isApnsConfigured } from "../../push/apns";
 import { writePlanChangeMessage } from "../../push/push-messages";
 import { isWithinQuietHours } from "../../push/quiet-hours";
 import { PushSubscription } from "../../push/entities/push-subscription.entity";
@@ -51,9 +52,13 @@ interface StoredBaseline {
 export class PlanChangePushService {
   private readonly logger = new Logger(PlanChangePushService.name);
 
-  // shortcut: the first N plan days in row order per tick; rotate a cursor
-  // when the warning below ever shows in the logs.
+  // shortcut: N plan days per tick, trips in random order so none starves;
+  // rotate a cursor when the warning below shows in the logs every tick.
   static readonly MAX_PLAN_DAYS_PER_RUN = 150;
+  /** One trip's share of a tick, nearest days first: a 60-park plan cannot take it all. */
+  static readonly MAX_PLAN_DAYS_PER_TRIP = 31;
+  /** Wall-clock cap: the tick also sends `next-up`, which cannot wait for this half. */
+  static readonly MAX_RUN_MS = 60_000;
   /** A standby row older than this says nothing about now. */
   private static readonly STATUS_WINDOW_MINUTES = 6 * 60;
 
@@ -67,6 +72,9 @@ export class PlanChangePushService {
   ) {}
 
   async run(nowMs: number): Promise<number> {
+    // Without APNs nothing can be sent, and a baseline only moves on a send.
+    if (!isApnsConfigured()) return 0;
+    const startedMs = Date.now();
     const devices =
       await this.pushService.devicesWithTripAndKind("plan-change");
     if (devices.length === 0) return 0;
@@ -80,17 +88,25 @@ export class PlanChangePushService {
     const parks = new Map<string, Promise<Park | null>>();
     let budget = PlanChangePushService.MAX_PLAN_DAYS_PER_RUN;
     let sent = 0;
-    for (const [tripId, subscriptions] of byTrip) {
-      if (budget <= 0) {
+    const spent = () =>
+      budget <= 0 || Date.now() - startedMs > PlanChangePushService.MAX_RUN_MS;
+    const trips = [...byTrip].sort(() => Math.random() - 0.5);
+    for (const [tripId, subscriptions] of trips) {
+      if (spent()) {
         this.logger.warn(
-          `plan-change: day budget spent, ${byTrip.size} trip(s) watched`,
+          `plan-change: tick budget spent, ${byTrip.size} trip(s) watched`,
         );
         break;
       }
       const trip = await this.tripsService.find(tripId).catch(() => null);
       if (!trip) continue;
-      for (const day of planDaysToWatch(trip.payload, nowMs)) {
-        if (budget-- <= 0) break;
+      const days = planDaysToWatch(trip.payload, nowMs).slice(
+        0,
+        PlanChangePushService.MAX_PLAN_DAYS_PER_TRIP,
+      );
+      for (const day of days) {
+        if (spent()) break;
+        budget--;
         try {
           sent += await this.checkDay(tripId, day, subscriptions, parks, nowMs);
         } catch (error) {
