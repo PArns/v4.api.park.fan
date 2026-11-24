@@ -35,6 +35,7 @@ import { WeatherClosureProcessor } from "./processors/weather-closure.processor"
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { NewsPushService } from "./services/news-push.service";
+import { PlanChangePushService } from "./services/plan-change-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { AssistantMaintenanceProcessor } from "./processors/assistant-maintenance.processor";
 import { SiteAnalyticsProcessor } from "./processors/site-analytics.processor";
@@ -210,6 +211,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     RainSoonPushService, // …and its `rain-soon` half
     NewsPushService, // …and its `news` half
+    PlanChangePushService, // …and its `plan-change` half
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     AssistantMaintenanceProcessor, // Nightly retention of the assistant's chats
     SiteAnalyticsProcessor, // Site statistic: visitors snapshot, retention

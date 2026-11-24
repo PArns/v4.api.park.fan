@@ -44,6 +44,7 @@ import {
 } from "../../common/utils/date.util";
 import { PushSubscription } from "../../push/entities/push-subscription.entity";
 import { RainSoonPushService } from "../services/rain-soon-push.service";
+import { PlanChangePushService } from "../services/plan-change-push.service";
 
 /**
  * The job that decides whose phone buzzes.
@@ -126,6 +127,7 @@ export class PushNotificationProcessor {
     private readonly showsService: ShowsService,
     private readonly rainSoon: RainSoonPushService,
     private readonly newsPush: NewsPushService,
+    private readonly planChange: PlanChangePushService,
     private readonly parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
@@ -168,19 +170,21 @@ export class PushNotificationProcessor {
     // halves touch unrelated tables and neither result depends on the
     // other, so awaiting them one after another only ever cost wall-clock
     // time on a five-minute cron with no other reason to serialize them.
-    const [tripSent, showSent, rainSent, newsSent] = await Promise.all([
-      this.runHalf("trip", () => this.handleTripNotifications(started)),
-      this.runHalf("show-follow", () =>
-        this.handleShowFollowNotifications(started),
-      ),
-      this.runHalf("rain-soon", () => this.rainSoon.run(started)),
-      this.runHalf("news", () => this.newsPush.run(started)),
-    ]);
+    const [tripSent, showSent, rainSent, newsSent, planSent] =
+      await Promise.all([
+        this.runHalf("trip", () => this.handleTripNotifications(started)),
+        this.runHalf("show-follow", () =>
+          this.handleShowFollowNotifications(started),
+        ),
+        this.runHalf("rain-soon", () => this.rainSoon.run(started)),
+        this.runHalf("news", () => this.newsPush.run(started)),
+        this.runHalf("plan-change", () => this.planChange.run(started)),
+      ]);
 
-    const sent = tripSent + showSent + rainSent + newsSent;
+    const sent = tripSent + showSent + rainSent + newsSent + planSent;
     if (sent > 0) {
       this.logger.log(
-        `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow, ${rainSent} rain-soon, ${newsSent} news) in ${Date.now() - started}ms`,
+        `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow, ${rainSent} rain-soon, ${newsSent} news, ${planSent} plan-change) in ${Date.now() - started}ms`,
       );
     }
   }

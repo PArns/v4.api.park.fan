@@ -51,11 +51,12 @@ export interface PlannedNotification {
   url: string;
 }
 
-interface PlanEntry {
+export interface PlanEntry {
   id: string;
   startMinute: number;
   attractionName?: string;
   attractionSlug?: string;
+  showSlug?: string;
   done?: boolean;
   custom?: { label?: string };
 }
@@ -276,7 +277,7 @@ export function isMorningPlanDue(
   return nowMs >= sendAtMs && nowMs < openingMs;
 }
 
-interface PlanPark {
+export interface PlanPark {
   slug: string;
   name: string;
   timezone: string | null;
@@ -291,7 +292,7 @@ interface PlanPark {
  * over: one trip written by a browser extension, an old planner version, or a
  * half-finished migration must not stop the job notifying everybody else.
  */
-function readParks(payload: unknown): PlanPark[] {
+export function readParks(payload: unknown): PlanPark[] {
   if (!isObject(payload)) return [];
   const parks = payload.parks;
   if (!isObject(parks)) return [];
@@ -352,7 +353,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Park-local minutes since midnight as `HH:mm`, past midnight folded back. */
-function formatMinute(minute: number): string {
+export function formatMinute(minute: number): string {
   const wrapped = ((Math.round(minute) % 1440) + 1440) % 1440;
   const hh = String(Math.floor(wrapped / 60)).padStart(2, "0");
   const mm = String(wrapped % 60).padStart(2, "0");

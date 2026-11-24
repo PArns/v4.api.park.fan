@@ -1,4 +1,5 @@
 import type { PushMessage } from "./push.service";
+import type { PlanChange } from "./plan-change";
 
 /**
  * What a notification says, in the six languages this site publishes.
@@ -304,4 +305,216 @@ export function writeMorningPlanMessage(
     url: notification.url,
     tag: notification.dedupeKey,
   };
+}
+
+/** What a `plan-change` digest needs. */
+export interface PlanChangeCopy {
+  dedupeKey: string;
+  parkName: string;
+  /** The plan day, park-local `yyyy-MM-dd`. */
+  date: string;
+  isToday: boolean;
+  changes: PlanChange[];
+  url: string;
+}
+
+interface PlanChangeWords {
+  title: (park: string, day: string) => string;
+  today: string;
+  more: (n: number) => string;
+  line: (c: PlanChange) => string;
+}
+
+const PLAN_CHANGE_WORDS: Record<string, PlanChangeWords> = {
+  de: {
+    title: (p, d) => `Dein Plan: ${p}, ${d}`,
+    today: "heute",
+    more: (n) => `und ${n} weitere Änderung${n === 1 ? "" : "en"}`,
+    line: (c) => {
+      switch (c.type) {
+        case "hours":
+          return c.from === "closed"
+            ? `Doch geöffnet: ${c.to} Uhr`
+            : `Öffnungszeiten jetzt ${c.to} Uhr (vorher ${c.from})`;
+        case "closed":
+          return "Der Park hat an diesem Tag geschlossen";
+        case "show-moved":
+          return `${c.name} jetzt um ${c.to} Uhr`;
+        case "show-cancelled":
+          return `${c.name} fällt aus`;
+        case "ride-down":
+          return `${c.name} ist gerade außer Betrieb`;
+        case "ride-up":
+          return `${c.name} fährt wieder`;
+        case "wait":
+          return `${c.name} um ${c.at} Uhr: jetzt etwa ${c.to} Min. statt ${c.from}`;
+      }
+    },
+  },
+  en: {
+    title: (p, d) => `Your plan: ${p}, ${d}`,
+    today: "today",
+    more: (n) => `and ${n} more change${n === 1 ? "" : "s"}`,
+    line: (c) => {
+      switch (c.type) {
+        case "hours":
+          return c.from === "closed"
+            ? `Open after all: ${c.to}`
+            : `Hours now ${c.to} (were ${c.from})`;
+        case "closed":
+          return "The park is closed that day";
+        case "show-moved":
+          return `${c.name} now at ${c.to}`;
+        case "show-cancelled":
+          return `${c.name} is cancelled`;
+        case "ride-down":
+          return `${c.name} is down right now`;
+        case "ride-up":
+          return `${c.name} is running again`;
+        case "wait":
+          return `${c.name} at ${c.at}: now about ${c.to} min instead of ${c.from}`;
+      }
+    },
+  },
+  nl: {
+    title: (p, d) => `Je plan: ${p}, ${d}`,
+    today: "vandaag",
+    more: (n) => `en nog ${n} wijziging${n === 1 ? "" : "en"}`,
+    line: (c) => {
+      switch (c.type) {
+        case "hours":
+          return c.from === "closed"
+            ? `Toch open: ${c.to}`
+            : `Openingstijden nu ${c.to} (was ${c.from})`;
+        case "closed":
+          return "Het park is die dag gesloten";
+        case "show-moved":
+          return `${c.name} nu om ${c.to}`;
+        case "show-cancelled":
+          return `${c.name} gaat niet door`;
+        case "ride-down":
+          return `${c.name} is nu buiten bedrijf`;
+        case "ride-up":
+          return `${c.name} draait weer`;
+        case "wait":
+          return `${c.name} om ${c.at}: nu ongeveer ${c.to} min. in plaats van ${c.from}`;
+      }
+    },
+  },
+  fr: {
+    title: (p, d) => `Ton plan : ${p}, ${d}`,
+    today: "aujourd’hui",
+    more: (n) =>
+      `et ${n} autre${n === 1 ? "" : "s"} changement${n === 1 ? "" : "s"}`,
+    line: (c) => {
+      switch (c.type) {
+        case "hours":
+          return c.from === "closed"
+            ? `Finalement ouvert : ${c.to}`
+            : `Horaires désormais ${c.to} (avant ${c.from})`;
+        case "closed":
+          return "Le parc est fermé ce jour-là";
+        case "show-moved":
+          return `${c.name} désormais à ${c.to}`;
+        case "show-cancelled":
+          return `${c.name} est annulé`;
+        case "ride-down":
+          return `${c.name} est à l’arrêt`;
+        case "ride-up":
+          return `${c.name} fonctionne à nouveau`;
+        case "wait":
+          return `${c.name} à ${c.at} : environ ${c.to} min au lieu de ${c.from}`;
+      }
+    },
+  },
+  es: {
+    title: (p, d) => `Tu plan: ${p}, ${d}`,
+    today: "hoy",
+    more: (n) => `y ${n} cambio${n === 1 ? "" : "s"} más`,
+    line: (c) => {
+      switch (c.type) {
+        case "hours":
+          return c.from === "closed"
+            ? `Abre al final: ${c.to}`
+            : `Horario ahora ${c.to} (antes ${c.from})`;
+        case "closed":
+          return "El parque cierra ese día";
+        case "show-moved":
+          return `${c.name} ahora a las ${c.to}`;
+        case "show-cancelled":
+          return `${c.name} se cancela`;
+        case "ride-down":
+          return `${c.name} está parada ahora mismo`;
+        case "ride-up":
+          return `${c.name} vuelve a funcionar`;
+        case "wait":
+          return `${c.name} a las ${c.at}: ahora unos ${c.to} min en vez de ${c.from}`;
+      }
+    },
+  },
+  it: {
+    title: (p, d) => `Il tuo piano: ${p}, ${d}`,
+    today: "oggi",
+    more: (n) => `e ${n} altr${n === 1 ? "a modifica" : "e modifiche"}`,
+    line: (c) => {
+      switch (c.type) {
+        case "hours":
+          return c.from === "closed"
+            ? `Aperto comunque: ${c.to}`
+            : `Orari ora ${c.to} (prima ${c.from})`;
+        case "closed":
+          return "Il parco è chiuso quel giorno";
+        case "show-moved":
+          return `${c.name} ora alle ${c.to}`;
+        case "show-cancelled":
+          return `${c.name} è annullato`;
+        case "ride-down":
+          return `${c.name} è ferma in questo momento`;
+        case "ride-up":
+          return `${c.name} funziona di nuovo`;
+        case "wait":
+          return `${c.name} alle ${c.at}: ora circa ${c.to} min invece di ${c.from}`;
+      }
+    },
+  },
+};
+
+/** How many changes a digest names before it says how many more there are. */
+export const PLAN_CHANGE_MAX_LINES = 3;
+
+/**
+ * One `plan-change` digest, written for one subscriber: the park and day as
+ * title, one line per change, the rest counted.
+ */
+export function writePlanChangeMessage(
+  copy: PlanChangeCopy,
+  locale: string,
+): PushMessage {
+  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
+  const words = PLAN_CHANGE_WORDS[base] ?? PLAN_CHANGE_WORDS.en;
+  const day = copy.isToday ? words.today : shortDate(copy.date, base);
+  const lines = copy.changes.slice(0, PLAN_CHANGE_MAX_LINES).map(words.line);
+  const rest = copy.changes.length - lines.length;
+  if (rest > 0) lines.push(words.more(rest));
+  return {
+    title: words.title(copy.parkName, day),
+    body: lines.join("\n"),
+    url: copy.url,
+    tag: copy.dedupeKey,
+    kind: "plan-change",
+  };
+}
+
+/** `Sa., 28.11.` in the subscriber's language; the date is a calendar day, so read in UTC. */
+function shortDate(date: string, locale: string): string {
+  try {
+    return new Intl.DateTimeFormat(PLAN_CHANGE_WORDS[locale] ? locale : "en", {
+      weekday: "short",
+      day: "numeric",
+      month: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${date}T12:00:00Z`));
+  } catch {
+    return date;
+  }
 }

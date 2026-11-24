@@ -1,6 +1,7 @@
 import { Test } from "@nestjs/testing";
 import { Logger } from "@nestjs/common";
 import { PushNotificationProcessor } from "./push-notification.processor";
+import { PlanChangePushService } from "../services/plan-change-push.service";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
@@ -133,6 +134,10 @@ describe("PushNotificationProcessor", () => {
         { provide: RainSoonPushService, useValue: rainSoon },
         {
           provide: NewsPushService,
+          useValue: { run: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: PlanChangePushService,
           useValue: { run: jest.fn().mockResolvedValue(0) },
         },
         { provide: ParksService, useValue: parksService },

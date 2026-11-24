@@ -1,7 +1,7 @@
 # Web push (`/v1/push`, `/v1/push/ride-alerts`, `/v1/push/show-follows`)
 
 The push contract: asking whether push works, subscribing a browser, the topics
-(`next-up`, `rain-soon`, `morning-plan`), ride alerts, followed shows, quiet hours,
+(`next-up`, `rain-soon`, `morning-plan`; `plan-change` for the app), ride alerts, followed shows, quiet hours,
 and how subscriptions die. One `push_subscriptions` row per browser serves every
 feature. Stored plans themselves are in [trips](./trips.md), which also owns the
 per-address rate-limit rule and the 429 shape every route here shares.
@@ -200,7 +200,7 @@ its alerts and follows. Same 429 bucket as subscribe.
 
 - **The device chooses, the server enforces.** `kinds` is the device's whole
   choice and replaces what was stored: `ride-wait`, `ride-reopen`, `show`,
-  `news`, plus the trip topics. `PushService.send` drops any message whose kind
+  `news`, `plan-change`, plus the trip topics. `PushService.send` drops any message whose kind
   (`pushKindOf`: its `kind`, else its tag prefix) the device did not choose, for
   every producer. An empty list keeps the alerts and sends nothing.
 - **Transport.** `src/push/apns.ts`: ES256 provider token (refreshed every 50
@@ -227,6 +227,45 @@ about those parks (geo paths, else park slugs). Quiet hours drop it.
 
 ```json
 { "title": "Europa-Park startet in den Winter", "body": "<teaser>", "url": "/news/europa-park-wintersaison-2026", "tag": "news:europa-park-wintersaison-2026" }
+```
+
+### `plan-change` — something a stored plan was built around changed
+
+`PlanChangePushService`, a fifth half of the five-minute job, **for devices
+only**: rows with an `apnsToken`, a `tripId` and the kind. The website has no
+switch or wording for it, so it is not a `PUSH_TOPICS` entry. A device links its
+plan by sending `tripId` on `POST /v1/push/devices` (omitted keeps, `null`
+clears, an unknown or expired id is a 404, checked under the trip's row lock like
+`subscribe`). The plan is the ordinary `/v1/trips` payload; the linked device also
+receives `next-up` and `morning-plan` for it when it chose those kinds.
+
+Each plan day from the park's today up to 120 days out is compared with a
+**baseline**: what the device last heard (the facts when watching started, then
+the facts of each sent digest). Rules (`src/push/plan-change.ts`):
+
+| rule      | what changes                                                                                                   | when read                       |
+| --------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| hours     | earliest OPERATING opening / latest closing of the day moves, or the day turns `CLOSED` (or back)              | every watched day               |
+| shows     | a planned performance is no longer in the day's `scheduled` times (nearest time named), or a scheduled show drops out of a still-scheduled day (cancelled) | today; a projection says nothing |
+| rides     | a planned, not yet ridden ride goes from running to not running or back (reopen-alert reading: any non-OPERATING standby row is down, only a fresh non-heartbeat OPERATING row is open) | today, while the park is open |
+| waits     | the `/plan/day` forecast at the planned slot moves by ≥ 15 min **and** ≥ 30 %                                  | up to 7 days out                |
+
+Unknown on either side says nothing (a first sight is the baseline), except a
+show first seen away from its planned time. A digest names at most three
+changes and counts the rest. **Pacing**: the first digest of a day goes at once,
+then at most one every 30 minutes, and one holding only wait changes at most
+every 3 hours. A change not sent (pacing, quiet hours) stays pending against the
+baseline, so a blip that reverts in between is never sent and a drift adds up.
+
+**State and bounds.** The baseline lives in Redis
+(`push:plan-change:<hash(tripId)>:<slug>:<date>`) until three days after the
+date; an evicted one restarts in silence. At most 150 plan days per tick
+(`MAX_PLAN_DAYS_PER_RUN`), each isolated; `/plan/day` comes from its shared
+quarter-hour cache and is only read for days with rides or shows within the
+show/forecast reach.
+
+```json
+{ "title": "Dein Plan: Phantasialand, Sa., 17.10.", "body": "Öffnungszeiten jetzt 09:00–17:00 Uhr (vorher 09:00–18:00)\nTaron ist gerade außer Betrieb", "url": "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17", "tag": "plan-change:phantasialand:2026-10-17", "kind": "plan-change" }
 ```
 
 ## Quiet hours
