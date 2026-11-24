@@ -27,6 +27,9 @@ const BUCKETS = {
   feedbackAddress: { max: 20, windowSeconds: 24 * 60 * 60 },
   rating: { max: 60, windowSeconds: 60 * 60 },
   session: { max: 10, windowSeconds: 60 * 60 },
+  // Per data key, the native app's sessions without Turnstile: every install shares the one key,
+  // so this is a ceiling for the whole app, a circuit breaker should the key leak.
+  keySession: { max: 2000, windowSeconds: 60 * 60 },
 } as const;
 
 type Bucket = keyof typeof BUCKETS;
@@ -45,19 +48,21 @@ export class AssistantRateLimitService {
 
   /**
    * Counts the event in every bucket named and refuses when one is full. `who` is a session id
-   * (`{ session }`) for chats, ratings and feedback, or an address (`{ ip }`) for issuing sessions,
-   * where an IPv6 address counts as its /64.
+   * (`{ session }`) for chats, ratings and feedback, an address (`{ ip }`) for issuing sessions,
+   * where an IPv6 address counts as its /64, or a data key's id (`{ key }`) for the app's sessions.
    */
   async check(
-    who: { session: string } | { ip: string | null },
+    who: { session: string } | { ip: string | null } | { key: string },
     ...buckets: Bucket[]
   ): Promise<RateLimitVerdict> {
     const id =
       "session" in who
         ? `s:${who.session}`
-        : who.ip
-          ? `ip:${addressBucket(who.ip) ?? who.ip}`
-          : null;
+        : "key" in who
+          ? `k:${who.key}`
+          : who.ip
+            ? `ip:${addressBucket(who.ip) ?? who.ip}`
+            : null;
     // No address, no shared bucket: see TripWriteRateLimitService.check.
     if (!id) return { allowed: true, retryAfterSeconds: 0 };
     let verdict: RateLimitVerdict = { allowed: true, retryAfterSeconds: 0 };

@@ -293,9 +293,13 @@ export const riddenSnapshotSchema = lenientList(z.uuid(), RIDDEN_SNAPSHOT_MAX);
 /** The token `POST /v1/assistant/session` hands out after the challenge. */
 const sessionToken = z.string().max(200);
 
-/** The challenge's answer: a solved Turnstile token. */
+/**
+ * The challenge's answer: a solved Turnstile token, the browser's way. Without one the request
+ * must present a data key carrying `assistant.chat` (park.fan's native app), which the controller
+ * checks instead.
+ */
 export const sessionRequestSchema = z.strictObject({
-  turnstileToken: z.string().min(1).max(2048),
+  turnstileToken: z.string().min(1).max(2048).optional(),
 });
 
 /**

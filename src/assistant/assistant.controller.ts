@@ -36,6 +36,12 @@ import {
   sessionRequestSchema,
 } from "./assistant.schemas";
 import { OpenRoute } from "../api-keys/api-permission.decorator";
+import { ModuleRef } from "@nestjs/core";
+import {
+  apiKeyStore,
+  authorizeApiRequest,
+  type ForecastRequest,
+} from "../api-keys/forecast-access.guard";
 
 /** Parses a body with zod; a refusal names the fields, never echoes the input. */
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -58,7 +64,8 @@ function parse<T>(schema: z.ZodType<T>, body: unknown): T {
  *
  * Every write needs a session token from `POST session`, which takes a solved
  * Turnstile challenge: a script cannot spend Anthropic tokens or fill the
- * feedback table by posting to these URLs.
+ * feedback table by posting to these URLs. park.fan's native app, which cannot
+ * solve one, presents a data key carrying `assistant.chat` instead.
  */
 @ApiTags("assistant")
 @OpenRoute("Parky, park.fan's chat; a Turnstile session guards it")
@@ -70,6 +77,7 @@ export class AssistantController {
     private readonly records: AssistantRecordsService,
     private readonly rateLimit: AssistantRateLimitService,
     private readonly challenge: AssistantChallengeService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   @Get("config")
@@ -87,21 +95,24 @@ export class AssistantController {
     summary: "Trade a solved Turnstile challenge for a session token",
     description:
       "The token is valid for two hours and counts the limits per session; " +
-      "chat, rating and feedback refuse a request without it (401).",
+      "chat, rating and feedback refuse a request without it (401). " +
+      "Without `turnstileToken` the request must present a data key carrying " +
+      "`assistant.chat` in `X-API-Key` (park.fan's native app): 401 without one, " +
+      "403 `api-key-permission-missing` for a key without the permission.",
   })
   @ApiResponse(RATE_LIMITED_RESPONSE)
   async session(
     @Body() body: unknown,
     @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<{ sessionToken: string; expiresInSeconds: number }> {
     const { turnstileToken } = parse(sessionRequestSchema, body);
     refuseOverLimit(
       await this.rateLimit.check({ ip: getRateLimitIp(request) }, "session"),
     );
-    const opened = await this.challenge.open(
-      turnstileToken,
-      getRateLimitIp(request),
-    );
+    const opened = turnstileToken
+      ? await this.challenge.open(turnstileToken, getRateLimitIp(request))
+      : await this.openForKey(request, response);
     if (opened === "off") {
       throw new HttpException("off", HttpStatus.SERVICE_UNAVAILABLE);
     }
@@ -112,6 +123,28 @@ export class AssistantController {
       sessionToken: opened.token,
       expiresInSeconds: SESSION_TTL_SECONDS,
     };
+  }
+
+  /**
+   * The app's way in: the data key's own check (`authorizeApiRequest`: unknown, revoked or
+   * expired keys, the permission, the key's hourly allowance), then the app-wide ceiling per key.
+   */
+  private async openForKey(
+    request: Request,
+    response: Response,
+  ): Promise<{ token: string } | "off"> {
+    const forecastRequest = request as unknown as ForecastRequest;
+    await authorizeApiRequest(
+      apiKeyStore(this.moduleRef),
+      forecastRequest,
+      response,
+      { permission: "assistant.chat", parkRequired: false },
+    );
+    // The throttle bypass key carries no key id; it is park.fan's own server, never an app.
+    const keyId = forecastRequest.apiKey?.id;
+    if (!keyId) throw new HttpException("challenge", HttpStatus.UNAUTHORIZED);
+    refuseOverLimit(await this.rateLimit.check({ key: keyId }, "keySession"));
+    return this.challenge.openForKey();
   }
 
   @Post("chat")

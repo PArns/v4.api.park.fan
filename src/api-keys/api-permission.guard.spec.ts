@@ -5,6 +5,7 @@ import {
 } from "./forecast-access.guard";
 import {
   API_PERMISSIONS,
+  LEGACY_KEY_PERMISSIONS,
   effectivePermissions,
   grantedPermissions,
   withheldPaths,
@@ -143,9 +144,9 @@ describe("authorizeApiRequest", () => {
     });
   });
 
-  it("reads a key from before permissions as holding every permission", async () => {
+  it("reads a key from before permissions as holding every permission but Parky's chat", async () => {
     const { apiKeys, response } = setup();
-    for (const permission of API_PERMISSIONS) {
+    for (const permission of LEGACY_KEY_PERMISSIONS) {
       await expect(
         authorizeApiRequest(
           apiKeys as never,
@@ -155,6 +156,17 @@ describe("authorizeApiRequest", () => {
         ),
       ).resolves.toBeUndefined();
     }
+  });
+
+  it("never opens Parky's chat to a key from before permissions", async () => {
+    const { apiKeys, response } = setup();
+    const refused = await authorizeApiRequest(
+      apiKeys as never,
+      request({ "x-api-key": LEGACY }),
+      response as never,
+      { permission: "assistant.chat" },
+    ).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(ForbiddenException);
   });
 
   it("opens the internal routes only to park.fan's own key", async () => {

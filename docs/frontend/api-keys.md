@@ -13,28 +13,29 @@ Without a key a caller reads the live wait times and nothing else
 Every other public route needs a data key that carries the route's permission. A key carries a
 list of permissions, granted one by one or a group at a time:
 
-| Group     | Permission             | Opens                                                                                                         |
-| --------- | ---------------------- | ------------------------------------------------------------------------------------------------------------- |
-| live      | `live.waits`           | `/wait-times`; open without a key                                                                             |
-| live      | `live.schedule`        | `/schedule`; `schedule`, show times and opening hours in the park and ride detail                             |
-| live      | `live.weather`         | `/weather`, `/weather/forecast`, `/weather/nowcast`; `weather` in the park detail                             |
-| parks     | `parks.directory`      | `/v1/parks` lists, `/popular`, `/v1/discovery/**`, `/v1/search`, `/v1/sitemap/attractions`                    |
-| parks     | `parks.details`        | the park detail `…/{park}`, `/v1/favorites`                                                                   |
-| parks     | `parks.seasons`        | `…/{park}/seasons`; the season and maintenance fields of the park and ride detail                             |
-| rides     | `rides.details`        | `…/{park}/attractions`, the ride detail; heights, single rider, virtual queue, coordinates in the park detail |
-| rides     | `rides.profiles`       | `rideProfile` (manufacturer, figures, elements); `/v1/glossary/terms/**`                                      |
-| stats     | `stats.live`           | crowd level, occupancy, trend, the comparison with a typical day                                              |
-| stats     | `stats.history`        | `/stats`, `/stats/hourly`, `/stats/day`; history, rope drop, downtime; implies `stats.typical-waits`          |
-| stats     | `stats.typical-waits`  | `typicalWaits` and `isHeadliner` in the park and ride detail; no route of its own                             |
-| stats     | `stats.platform`       | `/v1/analytics/{realtime,geo-live,ticker,best-times}`, `/v1/page-views/top`                                   |
-| stats     | `stats.accuracy`       | `/v1/ml/accuracy/system`, `/v1/trip-regions/{region}/accuracy`, `predictionAccuracy`                          |
-| forecasts | `forecasts.crowd`      | `/calendar`, `/best-days`, `/predictions/yearly`, `/parky-tip`; a region's `/calendar`, `/best-days`, `/when` |
-| forecasts | `forecasts.waits`      | `?forecast=true`: `bestVisitTimes`, `hourlyForecast`, the forecast in a day curve                             |
-| planner   | `planner.day`          | `/plan/day`, `POST /plan/optimize`                                                                            |
-| planner   | `planner.trip`         | a region's `/plan` and `/plan/ideas`                                                                          |
-| travel    | `travel.regions`       | `/v1/trip-regions`, `/v1/trip-regions/{region}`                                                               |
-| travel    | `travel.tickets`       | a region's `/tickets`                                                                                         |
-| travel    | `travel.school-breaks` | a region's `/school-breaks`                                                                                   |
+| Group     | Permission             | Opens                                                                                                           |
+| --------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| live      | `live.waits`           | `/wait-times`; open without a key                                                                               |
+| live      | `live.schedule`        | `/schedule`; `schedule`, show times and opening hours in the park and ride detail                               |
+| live      | `live.weather`         | `/weather`, `/weather/forecast`, `/weather/nowcast`; `weather` in the park detail                               |
+| parks     | `parks.directory`      | `/v1/parks` lists, `/popular`, `/v1/discovery/**`, `/v1/search`, `/v1/sitemap/attractions`                      |
+| parks     | `parks.details`        | the park detail `…/{park}`, `/v1/favorites`                                                                     |
+| parks     | `parks.seasons`        | `…/{park}/seasons`; the season and maintenance fields of the park and ride detail                               |
+| rides     | `rides.details`        | `…/{park}/attractions`, the ride detail; heights, single rider, virtual queue, coordinates in the park detail   |
+| rides     | `rides.profiles`       | `rideProfile` (manufacturer, figures, elements); `/v1/glossary/terms/**`                                        |
+| stats     | `stats.live`           | crowd level, occupancy, trend, the comparison with a typical day                                                |
+| stats     | `stats.history`        | `/stats`, `/stats/hourly`, `/stats/day`; history, rope drop, downtime; implies `stats.typical-waits`            |
+| stats     | `stats.typical-waits`  | `typicalWaits` and `isHeadliner` in the park and ride detail; no route of its own                               |
+| stats     | `stats.platform`       | `/v1/analytics/{realtime,geo-live,ticker,best-times}`, `/v1/page-views/top`                                     |
+| stats     | `stats.accuracy`       | `/v1/ml/accuracy/system`, `/v1/trip-regions/{region}/accuracy`, `predictionAccuracy`                            |
+| forecasts | `forecasts.crowd`      | `/calendar`, `/best-days`, `/predictions/yearly`, `/parky-tip`; a region's `/calendar`, `/best-days`, `/when`   |
+| forecasts | `forecasts.waits`      | `?forecast=true`: `bestVisitTimes`, `hourlyForecast`, the forecast in a day curve                               |
+| planner   | `planner.day`          | `/plan/day`, `POST /plan/optimize`                                                                              |
+| planner   | `planner.trip`         | a region's `/plan` and `/plan/ideas`                                                                            |
+| travel    | `travel.regions`       | `/v1/trip-regions`, `/v1/trip-regions/{region}`                                                                 |
+| travel    | `travel.tickets`       | a region's `/tickets`                                                                                           |
+| travel    | `travel.school-breaks` | a region's `/school-breaks`                                                                                     |
+| assistant | `assistant.chat`       | `POST /v1/assistant/session` without Turnstile: Parky's chat for park.fan's native app; not held by legacy keys |
 
 `GET /v1/api-keys/permissions` serves the catalog with a description of each, and
 `GET /v1/api-keys/verify` names the permissions of the key it checks.
@@ -58,7 +59,8 @@ list of permissions, granted one by one or a group at a time:
   revoked or past its end date is refused on `/wait-times` too.
 - **Legacy keys.** A key issued before permissions has `permissions = null` and reads every
   permission (`LEGACY_KEY_PERMISSIONS`), so no key lost a route on the day permissions arrived. The
-  admin shows it as legacy until it gets a list.
+  admin shows it as legacy until it gets a list. `assistant.chat`, which came later and costs
+  Anthropic tokens, is the one exception: a legacy key never holds it.
 - **`internal`.** park.fan's own key (`usage: internal`) holds every permission whatever its list
   says, plus `internal`, which the ML monitoring routes and `/v1/parks/debug/missing-geocode`
   need and nobody else gets. The throttle bypass key counts as the same while it still opens data

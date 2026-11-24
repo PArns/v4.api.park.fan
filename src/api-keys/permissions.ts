@@ -35,6 +35,7 @@ export const API_PERMISSIONS = [
   "travel.regions",
   "travel.tickets",
   "travel.school-breaks",
+  "assistant.chat",
 ] as const;
 export type ApiPermission = (typeof API_PERMISSIONS)[number];
 
@@ -99,6 +100,11 @@ export const API_PERMISSION_GROUPS: readonly ApiPermissionGroup[] = [
     label: "Travel data",
     permissions: ["travel.regions", "travel.tickets", "travel.school-breaks"],
   },
+  {
+    id: "assistant",
+    label: "Parky",
+    permissions: ["assistant.chat"],
+  },
 ];
 
 /** What each permission opens, in English, for the catalog route and Swagger. */
@@ -140,6 +146,8 @@ export const API_PERMISSION_DESCRIPTIONS: Record<ApiPermission, string> = {
     "Trip regions with their parks, groups, hotel areas and travel times.",
   "travel.tickets": "A trip region's ticket catalog.",
   "travel.school-breaks": "School breaks of the visitors' home regions.",
+  "assistant.chat":
+    "A Parky chat session without the browser's Turnstile challenge (`POST /v1/assistant/session` with the key and no token), for park.fan's own native app. Chat, rating and feedback then run on the session as in the browser.",
 };
 
 /** What a caller without a key may read. */
@@ -151,9 +159,11 @@ export const KEYLESS_ACCESS: ReadonlySet<string> = new Set(KEYLESS_PERMISSIONS);
 /**
  * What a key issued before permissions existed reads: everything that was
  * open then, plus forecasts and the planner, which such a key opened. The
- * admin shows these keys as legacy so they get an explicit list.
+ * admin shows these keys as legacy so they get an explicit list. Not Parky's
+ * chat: no such key ever opened it, and every chat costs Anthropic tokens.
  */
-export const LEGACY_KEY_PERMISSIONS: readonly ApiPermission[] = API_PERMISSIONS;
+export const LEGACY_KEY_PERMISSIONS: readonly ApiPermission[] =
+  API_PERMISSIONS.filter((permission) => permission !== "assistant.chat");
 
 /**
  * Permissions a wider one brings along: whoever may read the whole measured

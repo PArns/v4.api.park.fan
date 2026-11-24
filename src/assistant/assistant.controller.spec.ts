@@ -1,4 +1,6 @@
 import type { Request, Response } from "express";
+import type { ModuleRef } from "@nestjs/core";
+import { ApiKeyService } from "../api-keys/api-key.service";
 import { AssistantController } from "./assistant.controller";
 import { AssistantRateLimitService } from "./assistant-rate-limit.service";
 import type { AssistantChatService } from "./assistant-chat.service";
@@ -84,6 +86,7 @@ describe("AssistantController.ask, junk and pauses", () => {
       {} as AssistantRecordsService,
       rateLimit,
       challenge,
+      {} as ModuleRef,
     );
     const ask = async (message: string) => {
       const { response, sent } = fakeResponse();
@@ -135,6 +138,7 @@ describe("AssistantController.ask, after Parky ended a chat", () => {
       {} as AssistantRecordsService,
       rateLimit,
       { session: () => "session-1" } as unknown as AssistantChallengeService,
+      {} as ModuleRef,
     );
     const ask = async () => {
       const { response, sent } = fakeResponse();
@@ -194,6 +198,7 @@ describe("AssistantController.ask, the short window and Parky's offers", () => {
       {} as AssistantRecordsService,
       rateLimit,
       { session: () => "session-1" } as unknown as AssistantChallengeService,
+      {} as ModuleRef,
     );
     const ask = async (message: string, conversationId?: string) => {
       const { response, sent } = fakeResponse();
@@ -269,5 +274,114 @@ describe("AssistantRateLimitService, the short window", () => {
     const ask = () => limiter.check({ session: "session-1" }, "chatShort");
     for (let i = 0; i < 3; i++) expect((await ask()).allowed).toBe(true);
     expect(await ask()).toEqual({ allowed: false, retryAfterSeconds: 30 });
+  });
+});
+
+describe("AssistantController.session, the app's way in with a data key", () => {
+  const APP_KEY = `pfk_${"a".repeat(43)}`;
+  const PLAIN_KEY = `pfk_${"b".repeat(43)}`;
+
+  function setup() {
+    const rateLimit = new AssistantRateLimitService(fakeRedis() as never);
+    const keys: Record<string, unknown> = {
+      [APP_KEY]: {
+        id: "key-app",
+        usage: "internal",
+        requestsPerHour: null,
+        allowedParkIds: null,
+        permissions: ["live.waits"],
+        expiresAt: null,
+      },
+      [PLAIN_KEY]: {
+        id: "key-plain",
+        usage: "standard",
+        requestsPerHour: 1000,
+        allowedParkIds: null,
+        permissions: ["live.waits", "parks.details"],
+        expiresAt: null,
+      },
+    };
+    const store = {
+      lookup: jest.fn((presented: string) =>
+        Promise.resolve(
+          keys[presented]
+            ? { status: "active", key: keys[presented] }
+            : { status: "unknown" },
+        ),
+      ),
+      countRequest: jest.fn().mockResolvedValue(null),
+    };
+    const moduleRef = {
+      get: (token: unknown) => (token === ApiKeyService ? store : undefined),
+    } as unknown as ModuleRef;
+    const challenge = {
+      open: jest.fn().mockResolvedValue({ token: "browser-token" }),
+      openForKey: jest.fn().mockReturnValue({ token: "app-token" }),
+    };
+    const controller = new AssistantController(
+      {} as AssistantSettingsService,
+      {} as AssistantChatService,
+      {} as AssistantRecordsService,
+      rateLimit,
+      challenge as unknown as AssistantChallengeService,
+      moduleRef,
+    );
+    const open = (body: unknown, headers: Record<string, string> = {}) =>
+      controller.session(
+        body,
+        {
+          headers,
+          socket: { remoteAddress: "203.0.113.9" },
+        } as unknown as Request,
+        fakeResponse().response,
+      );
+    return { open, challenge, rateLimit, store };
+  }
+
+  it("issues a session without Turnstile to a key carrying assistant.chat", async () => {
+    const { open, challenge } = setup();
+    await expect(open({}, { "x-api-key": APP_KEY })).resolves.toEqual({
+      sessionToken: "app-token",
+      expiresInSeconds: 7200,
+    });
+    expect(challenge.open).not.toHaveBeenCalled();
+  });
+
+  it("refuses a key without the permission, and a request with neither token nor key", async () => {
+    const { open, challenge } = setup();
+    await expect(open({}, { "x-api-key": PLAIN_KEY })).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(open({})).rejects.toMatchObject({ status: 401 });
+    await expect(
+      open({}, { "x-api-key": `pfk_${"z".repeat(43)}` }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(challenge.openForKey).not.toHaveBeenCalled();
+  });
+
+  it("keeps the browser's Turnstile path as it was, key or not", async () => {
+    const { open, challenge } = setup();
+    await expect(
+      open({ turnstileToken: "solved" }, { "x-api-key": PLAIN_KEY }),
+    ).resolves.toMatchObject({ sessionToken: "browser-token" });
+    expect(challenge.open).toHaveBeenCalledWith("solved", expect.anything());
+    expect(challenge.openForKey).not.toHaveBeenCalled();
+  });
+
+  it("still counts sessions per address, and caps them per key", async () => {
+    const { open } = setup();
+    for (let i = 0; i < 10; i++) {
+      await open({}, { "x-api-key": APP_KEY });
+    }
+    await expect(open({}, { "x-api-key": APP_KEY })).rejects.toMatchObject({
+      status: 429,
+    });
+    const limiter = new AssistantRateLimitService(fakeRedis() as never);
+    for (let i = 0; i < 2000; i++) {
+      await limiter.check({ key: "key-app" }, "keySession");
+    }
+    expect(
+      (await limiter.check({ key: "key-app" }, "keySession")).allowed,
+    ).toBe(false);
   });
 });

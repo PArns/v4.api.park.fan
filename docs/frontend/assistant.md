@@ -11,6 +11,7 @@ park.fan's `docs/features/assistant.md`.
 | --------------------------------------------------- | ----------------- | ------------------------------------------------------------ |
 | `GET /v1/assistant/config`                          | park.fan's server | `{ enabled, rolloutPercent }`, a minute at the edge          |
 | `POST /v1/assistant/session`                        | browser (CORS)    | a solved Turnstile token in, a session token out             |
+| `POST /v1/assistant/session` without a token        | park.fan's app    | a data key with `assistant.chat` in, a session token out     |
 | `POST /v1/assistant/chat`                           | browser           | one question, answered as server-sent events                 |
 | `POST /v1/assistant/rating`                         | browser           | 👍/👎 for one answer                                         |
 | `POST /v1/assistant/feedback`                       | browser           | feedback about the site                                      |
@@ -32,6 +33,19 @@ with Cloudflare, including the action. The token (`assistant-session.util.ts`) i
 work. A chat can only be continued, rated or have feedback filed under it by the session that
 started it (`sessionHash`), so a leaked chat id shows nobody else's history and rates nothing; form
 feedback naming another session's chat is kept, unlinked.
+
+**park.fan's native app** cannot solve Turnstile. It sends `POST session` with an empty body `{}`
+and its data key in `X-API-Key`; the key must carry `assistant.chat`. The key goes through the
+data routes' own check (`authorizeApiRequest`): unknown, revoked or expired is 401, a key without
+the permission 403 `api-key-permission-missing`, and a counted key spends one request of its hourly
+allowance. The address limit of 10 sessions an hour applies as for a browser, and each key may
+open at most 2,000 sessions an hour (`keySession`), a ceiling for every install of the app
+together should the key leak. The session is then the browser's: chat, rating, feedback, every
+limit and the abuse handling count per session as above, and the config's switch and share apply
+(the app buckets its users against `rolloutPercent` as the widget does). A request with
+`turnstileToken` takes the browser's path whatever key it carries. `assistant.chat` is granted
+like any permission; park.fan's own `internal` keys hold it by their usage, keys from before
+permissions (`LEGACY_KEY_PERMISSIONS`) do not.
 
 ## The chat
 
