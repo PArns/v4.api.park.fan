@@ -33,5 +33,11 @@ What reads it:
 - **`shortWaits`** of discovery leaves such a ride out, by the same rule (`pickShortWaits`).
 - **Parky** gets it on `get_ride`, on `get_park_live`'s longest waits and on the rows of
   `show_card` kind rides. The prompt lets him name the ride as a headliner, never as a walk-on, a
-  short wait or a tip without saying it is too cold to get soaked ([assistant](./assistant.md)).
-- **The frontend** leaves it off the compass's headliners and off Parky's walk-on stamps and lines.
+  short wait, a rope-drop ride or a tip without saying it is too cold to get soaked
+  ([assistant](./assistant.md)).
+- **The frontend** leaves it off the compass's headliners, Parky's walk-on stamps and lines, and
+  the park page's rope-drop picks and badges.
+
+`ropeDropHeadliners` and each ride's `ropeDrop` are not filtered here: the park page renders them
+from a snapshot that can be a day old, while the key comes with its five-minute poll, so the page
+drops a cold ride itself and picks it up again when it warms.
