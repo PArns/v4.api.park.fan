@@ -10,6 +10,8 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RainSoonPushService } from "../services/rain-soon-push.service";
 import { NewsPushService } from "../services/news-push.service";
 import { ParksService } from "../../parks/parks.service";
+import { PlanDayService } from "../../parks/services/plan-day.service";
+import { cachedPlanDay } from "../../parks/services/plan-day-cache";
 
 /**
  * The two halves of `handleDue` are unrelated (a trip topic vs. a followed
@@ -17,6 +19,11 @@ import { ParksService } from "../../parks/parks.service";
  * so the property worth pinning is that neither can silently swallow or
  * duplicate the other's work when both fire in the same tick.
  */
+jest.mock("../../parks/services/plan-day-cache", () => ({
+  cachedPlanDay: jest.fn(),
+}));
+const planDay = cachedPlanDay as jest.Mock;
+
 describe("PushNotificationProcessor", () => {
   const withVapid = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const before = {
@@ -142,6 +149,7 @@ describe("PushNotificationProcessor", () => {
         },
         { provide: ParksService, useValue: parksService },
         { provide: REDIS_CLIENT, useValue: redis },
+        { provide: PlanDayService, useValue: {} },
       ],
     }).compile();
 
@@ -1025,11 +1033,20 @@ describe("PushNotificationProcessor", () => {
       parksService.findByGeographicPath.mockResolvedValue({
         id: "park-1",
         slug: "phantasialand",
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "bruehl",
         timezone: "Europe/Berlin",
       });
       parksService.getScheduleForDate.mockResolvedValue([
         { scheduleType: "OPERATING", openingTime: OPENING },
       ]);
+      planDay.mockReset().mockResolvedValue({
+        context: {
+          crowdLevel: "low",
+          weather: { tempMax: 14.2, rainChance: 20 },
+        },
+      });
     });
 
     it("sends once, 60 minutes before opening, and not again on the next tick", async () => {
@@ -1037,13 +1054,33 @@ describe("PushNotificationProcessor", () => {
         await processor.handleDue({} as never);
         expect(pushService.send).toHaveBeenCalledTimes(1);
         const [, message] = pushService.send.mock.calls[0];
-        expect(message.title).toBe("Phantasialand öffnet um 08:30 Uhr");
-        expect(message.body).toBe("09:30 Taron\n10:00 Black Mamba");
-        expect(message.tag).toBe("morning-plan:phantasialand:2026-10-17");
+        // Intl writes the space before a unit as a (narrow) no-break space.
+        message.body = message.body.replace(/[\u00a0\u202f]/g, " ");
+        expect(message).toEqual({
+          title: "Phantasialand öffnet um 08:30 Uhr",
+          subtitle: "Guten Morgen",
+          body: "Andrang niedrig, bis 14 °C, 20 % Regenrisiko. Zuerst Taron um 09:30 Uhr, dann Black Mamba.",
+          url: "/parks/europe/germany/bruehl/phantasialand",
+          tag: "morning-plan:phantasialand:2026-10-17",
+          photo: "europe/germany/bruehl/phantasialand",
+          // Worthless once the gates are open.
+          expiresAtMs: OPENING.getTime(),
+          threadId: "phantasialand:2026-10-17",
+        });
 
         jest.spyOn(Date, "now").mockReturnValue(MORNING + 5 * 60_000);
         await processor.handleDue({} as never);
         expect(pushService.send).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("still sends, with the plan alone, when the day's facts cannot be read", async () => {
+      planDay.mockRejectedValue(new Error("no forecast"));
+      await withVapid(async () => {
+        await processor.handleDue({} as never);
+        expect(pushService.send.mock.calls[0][1].body).toBe(
+          "Zuerst Taron um 09:30 Uhr, dann Black Mamba.",
+        );
       });
     });
 

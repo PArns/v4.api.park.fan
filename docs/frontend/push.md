@@ -26,12 +26,12 @@ was stored untouched. Only a value actually sent is validated and stored: `tripI
 must name a trip that exists, `topics` must contain at least one topic this deploy
 sends. Sending a `timezone` that cannot be used does clear it.
 
-| status | when                                                                                                       |
-| ------ | ---------------------------------------------------------------------------------------------------------- |
-| 503    | no VAPID keypair                                                                                           |
-| 404    | `tripId` sent but names no trip                                                                            |
-| 400    | the endpoint is not an https URL **at a known push service**, or `topics` sent with no known topic left    |
-| 429    | more than 60 subscription writes an hour from this address (own bucket)                                    |
+| status | when                                                                                                    |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| 503    | no VAPID keypair                                                                                        |
+| 404    | `tripId` sent but names no trip                                                                         |
+| 400    | the endpoint is not an https URL **at a known push service**, or `topics` sent with no known topic left |
+| 429    | more than 60 subscription writes an hour from this address (own bucket)                                 |
 
 Known push services are FCM, Mozilla, WNS and Apple (`src/push/push-config.ts`),
 extensible through `PUSH_ENDPOINT_HOSTS`. The check is security, not tidiness: the
@@ -49,10 +49,37 @@ show branch below; ride alerts run elsewhere.
 
 Every message is written in the **subscriber's** language (de, en, nl, fr, es, it;
 anything else English), because the job has no request to read a language from.
+All texts follow one pattern (`src/push/push-messages.ts`): the **title** is the
+thing and the number or time that decides ("Taron: 15 Min."), never the kind's
+name; a long name is cut so the number stays (`fit`, 32 characters with the pictogram). The **place**
+is a line of its own: `aps.alert.subtitle` on a device, the first line of `body`
+in a browser, whose payload stays `{ title, body, url, tag }`. The **body** is the
+reason or the next number. No exclamation mark; times are the park's clock.
+The examples below are the browser's payload; what a device gets on top is in
+[the device payload](#the-device-payload).
 The `tag` is load-bearing: a phone in a pocket for two hours surfaces one banner,
 not four about moments that have passed. A sent event leaves a Redis marker
 (`push:sent:<hash(endpoint)>:<hash(key)>`, 45 minutes) as the first dedupe; the
 device's `tag` is the second.
+
+**One pictogram per kind** leads the title, the same in all six languages, for
+browsers and devices alike (`PUSH_PICTOGRAMS` in `src/push/push-config.ts`, put
+on in `PushService.send`): a stack is then read by its first character. It
+leads the title and not the subtitle because the title is the one line every
+surface shows. Each is a single code point that is an emoji without a variation
+selector; a text carries no other emoji, which `push-messages.spec.ts` pins.
+
+| kind          | pictogram | kind                           | pictogram |
+| ------------- | --------- | ------------------------------ | --------- |
+| `ride-wait`   | ⏳        | `plan-change`                  | 🔄        |
+| `ride-reopen` | ✅        | `morning-plan`                 | 🌅        |
+| `next-up`     | 🎢        | `news`                         | 📰        |
+| `show`        | 🎭        | `guides`                       | 📖        |
+| `rain-soon`   | ☔        | the app's own reminder (local) | 🚶        |
+
+**Parky speaks in three subtitles** and nowhere else: "Guten Morgen" on the
+morning plan, "Parky hat Neues für dich" on news and "Parky hat einen neuen
+Guide" on guides (each in the reader's language).
 
 ### `next-up` — the next block of a stored plan
 
@@ -61,8 +88,15 @@ Sent 10–20 minutes before a block starts (`LEAD_MIN`/`LEAD_MAX_MIN`,
 missed run costs nothing.
 
 ```json
-{ "title": "In 10 Min.: Taron", "body": "14:30 Uhr, Phantasialand", "url": "/", "tag": "next-up:phantasialand:2026-10-17:e17:870" }
+{
+  "title": "🎢 Taron in 10 Min.",
+  "body": "Phantasialand\nGeplant für 14:30 Uhr.",
+  "url": "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17",
+  "tag": "next-up:phantasialand:2026-10-17:e17:870"
+}
 ```
+
+The `url` is the plan day (`/` for a plan whose park has no `geo`).
 
 ### `morning-plan` — the day's plan before the park opens (PAR-895)
 
@@ -73,12 +107,21 @@ has at least one named entry for the park's today. The opening is the earliest
 `OPERATING` schedule entry of that day (`ParksService.getScheduleForDate`), the park
 resolved through the plan's `geo` path; no `geo`, zone, schedule or `openingTime`
 means no message. Names come from the stored payload (`attractionName`, or a custom
-block's `label`); nothing is resolved server-side. Its marker lives 12 hours
+block's `label`); nothing is resolved server-side. The body's first sentence is the
+day as `/plan/day` reads it (`context.crowdLevel`, `weather.tempMax`,
+`weather.rainChance`; each left out when unknown, the whole sentence when that read
+fails), its second the first two entries. "Guten Morgen" is the one greeting any
+message carries. Its marker lives 12 hours
 (the window can be an hour wide); a subscriber in quiet hours gets no marker and is
 tried again on later ticks.
 
 ```json
-{ "title": "Phantasialand öffnet um 09:00 Uhr", "body": "09:30 Taron\n10:00 Black Mamba", "url": "/parks/europe/germany/bruehl/phantasialand", "tag": "morning-plan:phantasialand:2026-10-17" }
+{
+  "title": "🌅 Phantasialand öffnet um 09:00 Uhr",
+  "body": "Guten Morgen\nAndrang niedrig, bis 14 °C, 20 % Regenrisiko. Zuerst Taron um 09:30 Uhr, dann Black Mamba.",
+  "url": "/parks/europe/germany/bruehl/phantasialand",
+  "tag": "morning-plan:phantasialand:2026-10-17"
+}
 ```
 
 ### `rain-soon` — rain is about to reach a park (PAR-848)
@@ -108,8 +151,16 @@ or a ride alert on one of its rides. A plan names parks by slug plus `geo`
   rides.
 
 ```json
-{ "title": "Regen ab etwa 14:20 Uhr", "body": "Phantasialand. Überdacht und offen: Maus au Chocolat (15 Min.), Fly (20 Min.)", "url": "/parks/europe/germany/bruehl/phantasialand", "tag": "rain-soon:<parkId>:2026-10-17:<startMs>" }
+{
+  "title": "☔ Regen ab etwa 14:20 Uhr",
+  "body": "Phantasialand\nÜberdacht und offen: Maus au Chocolat (15 Min.), Fly (20 Min.)",
+  "url": "/parks/europe/germany/bruehl/phantasialand",
+  "tag": "rain-soon:<parkId>:2026-10-17"
+}
 ```
+
+The tag is one per park and park day, so the warning of a second front replaces
+the first on the screen.
 
 The frontend switches for `rain-soon` and `morning-plan` are open tickets (PAR-849,
 PAR-896).
@@ -121,7 +172,7 @@ A browser watches a ride, independent of any trip.
 - `GET ?endpoint=` lists a browser's alerts (a missing `endpoint` is a 400, never
   "any subscription"). `POST { endpoint, attractionId, thresholdMinutes }` upserts
   a **wait alert** (1–240 min) → 200 with the alert. `POST { endpoint,
-  attractionId, kind: "reopen" }` upserts a **reopen alert** (`thresholdMinutes`
+attractionId, kind: "reopen" }` upserts a **reopen alert** (`thresholdMinutes`
   ignored and `null`). One alert per ride and browser: sending the other kind
   replaces it. `DELETE { endpoint, attractionId }` removes one, idempotently.
 - At most 100 alerts per subscription (`MAX_RIDE_ALERTS_PER_SUBSCRIPTION`), 60
@@ -143,7 +194,9 @@ and alerts to the pure `diffRideAlerts` (`src/ride-alerts/ride-alert-transitions
 - **Wait alerts** dedupe with an `armed` column, not Redis: the next reading under
   the threshold fires and disarms; the alert re-arms when the wait rises back to the
   threshold or above, or when a park-local day boundary passes (a ride closed
-  overnight produces no reading to re-arm it).
+  overnight produces no reading to re-arm it). The same alert notifies at most every
+  30 minutes (`WAIT_ALERT_GAP_MS`): a queue hovering at the threshold stays armed and
+  fires once the gap has passed and the wait is still under it.
 - **Reopen alerts** read the status, never the wait. `armed` means "last seen not
   operating". The first fresh (15 min), non-heartbeat `OPERATING` reading in season
   fires and the alert is **spent** — it never re-arms (or every morning would send
@@ -153,8 +206,15 @@ and alerts to the pure `diffRideAlerts` (`src/ride-alerts/ride-alert-transitions
   not operating now. Out of season reads as not operating. No day-boundary re-arm.
 
 ```json
-{ "title": "Taron: nur noch 15 Min.", "body": "Phantasialand", "url": "/parks/europe/germany/bruehl/phantasialand/taron", "tag": "ride-alert:3f2c…" }
+{
+  "title": "⏳ Taron: 15 Min.",
+  "body": "Phantasialand\nUnter deiner Grenze von 20 Min.",
+  "url": "/parks/europe/germany/bruehl/phantasialand/taron",
+  "tag": "ride-alert:3f2c…"
+}
 ```
+
+A reopen alert is "Taron ist wieder offen" with the park as its body.
 
 ## Followed shows (`/v1/push/show-follows`)
 
@@ -181,7 +241,12 @@ unfollows idempotently. At most 100 per subscription, 60 writes an hour per addr
   fires only for its own performance. Dedupe key: the showtime's ISO string.
 
 ```json
-{ "title": "In 30 Min.: Feuerwerk", "body": "20:30 Uhr, Europa-Park", "url": "/parks/europe/germany/rust/europa-park#shows", "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z" }
+{
+  "title": "🎭 Feuerwerk in 30 Min.",
+  "body": "Europa-Park\nBeginn 20:30 Uhr.",
+  "url": "/parks/europe/germany/rust/europa-park#shows",
+  "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z"
+}
 ```
 
 ## iOS app (APNs, `/v1/push/devices`)
@@ -205,14 +270,13 @@ its alerts and follows. Same 429 bucket as subscribe.
   every producer. An empty list keeps the alerts and sends nothing.
 - **Transport.** `src/push/apns.ts`: ES256 provider token (made new every 50
   minutes, never within 20, for both environments), HTTP/2 with one connection
-  per environment, `apns-expiration` 15 minutes like the web TTL, the tag as
-  collapse id (hashed past 64 bytes). Payload: `aps.alert {title, body}` plus
-  `url` (the same site-relative path a browser opens) and `kind`.
+  per environment, the tag as collapse id (hashed past 64 bytes). What the
+  request carries per kind is [the device payload](#the-device-payload).
 - **Both environments, no setting.** A token works only where it was issued:
   the sandbox (`api.sandbox.push.apple.com`) for a build installed from Xcode,
   production (`api.push.apple.com`) for TestFlight and the App Store; the other
   answers 400 `BadDeviceToken`. The app may say which with `environment:
-  "sandbox" | "production"` at registration (its `aps-environment`
+"sandbox" | "production"` at registration (its `aps-environment`
   entitlement: `development` is the sandbox). A row without one
   (`push_subscriptions.apnsEnvironment` null: an older app, or a new token
   sent without the field) is tried in production first; `BadDeviceToken` there
@@ -250,7 +314,7 @@ name it by `fingerprint`, the first 8 hex characters of the SHA-256 over its
 public key. Routes and roles: [admin endpoints](../admin/endpoints.md#push-to-the-ios-app-adminpushapns).
 
 - **Upload** (`PUT key`, JSON `{ content, filename?, keyId?, teamId?,
-  bundleId? }`): `content` is the file's text. The key id comes from the file
+bundleId? }`): `content` is the file's text. The key id comes from the file
   name unless sent (ten capitals or digits; 400 asking for it when neither has
   one), `teamId` defaults to `KC5QAXDX94`, `bundleId` to `fan.park.app`. Stored
   only when the text holds a PKCS#8 EC P-256 private key that signs a provider
@@ -287,7 +351,13 @@ published more than 6 hours ago is never announced. `newsParks` narrows to posts
 about those parks (geo paths, else park slugs). Quiet hours drop it.
 
 ```json
-{ "title": "Europa-Park startet in den Winter", "body": "<teaser>", "url": "/news/europa-park-wintersaison-2026", "tag": "news:europa-park-wintersaison-2026" }
+{
+  "title": "📰 Europa-Park startet in den Winter",
+  "subtitle": "Parky hat Neues für dich",
+  "body": "<teaser>",
+  "url": "/news/europa-park-wintersaison-2026",
+  "tag": "news:europa-park-wintersaison-2026"
+}
 ```
 
 ### `guides` — a new guide in the guides export
@@ -310,7 +380,13 @@ never sends the kind is unaffected.
   the two.
 
 ```json
-{ "title": "Die Freizeitpark-Packliste", "body": "<teaser>", "url": "/blog/freizeitpark-packliste", "tag": "guides:freizeitpark-packliste" }
+{
+  "title": "📖 Die Freizeitpark-Packliste",
+  "subtitle": "Parky hat einen neuen Guide",
+  "body": "<teaser>",
+  "url": "/blog/freizeitpark-packliste",
+  "tag": "guides:freizeitpark-packliste"
+}
 ```
 
 ### `plan-change` — something a stored plan was built around changed
@@ -327,16 +403,17 @@ Each plan day from the park's today up to 120 days out is compared with a
 **baseline**: what the device last heard (the facts when watching started, then
 the facts of each sent digest). Rules (`src/push/plan-change.ts`):
 
-| rule      | what changes                                                                                                   | when read                       |
-| --------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| hours     | earliest OPERATING opening / latest closing of the day moves, or the day turns `CLOSED` (or back)              | every watched day               |
-| shows     | a planned performance is no longer in the day's `scheduled` times (nearest time named), or a scheduled show drops out of a still-scheduled day (cancelled) | today; a projection says nothing |
-| rides     | a planned, not yet ridden ride goes from running to not running or back (reopen-alert reading: any non-OPERATING standby row is down, only a fresh non-heartbeat OPERATING row is open) | today, while the park is open |
-| waits     | the `/plan/day` forecast at the planned slot moves by ≥ 15 min **and** ≥ 30 %                                  | up to 7 days out                |
+| rule  | what changes                                                                                                                                                                            | when read                        |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| hours | earliest OPERATING opening / latest closing of the day moves, or the day turns `CLOSED` (or back)                                                                                       | every watched day                |
+| shows | a planned performance is no longer in the day's `scheduled` times (nearest time named), or a scheduled show drops out of a still-scheduled day (cancelled)                              | today; a projection says nothing |
+| rides | a planned, not yet ridden ride goes from running to not running or back (reopen-alert reading: any non-OPERATING standby row is down, only a fresh non-heartbeat OPERATING row is open) | today, while the park is open    |
+| waits | the `/plan/day` forecast at the planned slot moves by ≥ 15 min **and** ≥ 30 %                                                                                                           | up to 7 days out                 |
 
 Unknown on either side says nothing (a first sight is the baseline), except a
 show first seen away from its planned time. A digest names at most three
-changes and counts the rest. **Pacing**: the first digest of a day goes at once,
+changes and counts the rest: the first change is the title, whose plan and
+which day the subtitle, the others the body, one per line. **Pacing**: the first digest of a day goes at once,
 then at most one every 30 minutes, and one holding only wait changes at most
 every 3 hours. A change not sent (pacing, quiet hours) stays pending against the
 baseline, so a blip that reverts in between is never sent and a drift adds up.
@@ -352,8 +429,89 @@ quarter-hour cache and is only read for days with rides or shows within the
 show/forecast reach.
 
 ```json
-{ "title": "Dein Plan: Phantasialand, Sa., 17.10.", "body": "Öffnungszeiten jetzt 09:00–17:00 Uhr (vorher 09:00–18:00)\nTaron ist gerade außer Betrieb", "url": "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17", "tag": "plan-change:phantasialand:2026-10-17", "kind": "plan-change" }
+{
+  "title": "🔄 Öffnungszeiten jetzt 09:00–17:00 Uhr (vorher 09:00–18:00)",
+  "subtitle": "Dein Plan · Phantasialand, Sa., 17.10.",
+  "body": "Taron ist gerade außer Betrieb",
+  "url": "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17",
+  "tag": "plan-change:phantasialand:2026-10-17",
+  "kind": "plan-change"
+}
 ```
+
+### The device payload
+
+`buildApnsRequest` (`src/push/apns.ts`) writes one request per message from the
+table `APNS_KINDS`; `apns.spec.ts` pins every row. Limits are Apple's: the
+payload at most 4 KB (4096 bytes; a longer one loses the end of its body, never
+its title), the collapse id at most 64 bytes.
+
+```json
+{
+  "aps": {
+    "alert": {
+      "title": "⏳ Taron: 15 Min.",
+      "subtitle": "Phantasialand",
+      "body": "Unter deiner Grenze von 20 Min."
+    },
+    "sound": "default",
+    "thread-id": "phantasialand:2026-10-17",
+    "interruption-level": "time-sensitive",
+    "relevance-score": 0.9,
+    "category": "RIDE_WAIT",
+    "mutable-content": 1,
+    "target-content-id": "/parks/europe/germany/bruehl/phantasialand/taron"
+  },
+  "attractionId": "3f2c…",
+  "url": "/parks/europe/germany/bruehl/phantasialand/taron",
+  "kind": "ride-wait",
+  "image": "https://media.park.fan/taron/01/ab12cd34-1200.webp"
+}
+```
+
+| kind           | level          | relevance | category       | priority | expires                             | thread          | photo     | custom keys                       |
+| -------------- | -------------- | --------- | -------------- | -------- | ----------------------------------- | --------------- | --------- | --------------------------------- |
+| `ride-wait`    | time-sensitive | 0.9       | `RIDE_WAIT`    | 10       | 10 min                              | `<park>:<date>` | the ride  | `attractionId`                    |
+| `ride-reopen`  | time-sensitive | 0.8       | `RIDE_REOPEN`  | 10       | 20 min                              | `<park>:<date>` | the ride  | `attractionId`                    |
+| `next-up`      | time-sensitive | 1.0       | `NEXT_UP`      | 10       | the block's start                   | `<park>:<date>` | the ride  | `entry`, `date`, `park`?, `ride`? |
+| `show`         | time-sensitive | 0.8       | `SHOW`         | 10       | the performance's start             | `<park>:<date>` | none      |                                   |
+| `rain-soon`    | time-sensitive | 0.7       | `RAIN_SOON`    | 10       | the rain's start                    | `<park>:<date>` | none      |                                   |
+| `plan-change`  | active         | 0.6       | `PLAN_CHANGE`  | 10       | 1 h for today, 24 h for a later day | `<park>:<date>` | none      | `park`, `date`                    |
+| `morning-plan` | active         | 0.5       | `MORNING_PLAN` | 10       | the park's opening                  | `<park>:<date>` | the park  |                                   |
+| `news`         | passive        | 0.2       | `NEWS`         | 5        | 12 h                                | `news`          | the cover |                                   |
+| `guides`       | passive        | 0.1       | `GUIDE`        | 5        | 12 h                                | `guides`        | the cover |                                   |
+
+- **Level.** Time-sensitive breaks through a Focus and the scheduled summary, so
+  only what the visitor asked for by name and what happens in the park within the
+  hour gets it (Apple: "an event that's happening now or will happen within an
+  hour", never marketing). A plan change can be about a day weeks away: `active`.
+  News and guides never light the screen: `passive`, no `sound`, priority 5. The
+  app needs the entitlement `com.apple.developer.usernotifications.time-sensitive`;
+  a build without it shows these as ordinary notifications.
+- **A device's share.** At most 8 time-sensitive notifications per device in 12
+  hours (`TIME_SENSITIVE_CAP`, counted in the process's memory); the next ones are
+  sent as `active`, never dropped.
+- **Expiry** (`apns-expiration`) is when the message stops being true, at least a
+  minute ahead so Apple stores it for a phone in a tunnel. A producer sets it with
+  `PushMessage.expiresAtMs`; the column is the kind's own otherwise.
+- **Thread** (`thread-id`): one stack per park and park day (`<parkSlug>:<yyyy-MM-dd>`,
+  the park's date), so a visit's alerts, plan and weather sit together; news and
+  guides stack by kind. `summary-arg` is not sent: Apple deprecated it with iOS 15.
+- **Collapse id** is the tag: a wait alert replaces the same alert's older banner,
+  a plan-change digest the same day's, a rain warning the same park day's.
+- **Photo.** A producer names a ride's or park's geo path or a cover's image id
+  (`PushMessage.photo`); `src/push/push-media.ts` resolves it against the media
+  bucket's `index.json` (kept 30 minutes, a failed read retried after 5) to the
+  first width from 1000 px up. A photo whose credit has to be shown
+  (`attribution: true`) is not sent. With a photo the payload carries `image` and
+  `mutable-content: 1`, and the app's Notification Service Extension attaches it;
+  the files are WebP, which Apple does not list for attachments (JPEG, GIF, PNG,
+  10 MB), so the extension converts. `PUSH_IMAGES=false` sends none.
+- **Categories** name the action buttons the app registers; a build that registers
+  none shows none. The custom keys are what the actions need: `attractionId` for
+  "Alarm aus" (`DELETE /v1/push/ride-alerts`), `entry`/`park`/`ride`/`date` for
+  the plan's actions.
+- **An older app** ignores every key it does not know and keeps routing by `url`.
 
 ## Quiet hours
 

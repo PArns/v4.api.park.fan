@@ -19,9 +19,13 @@ import {
 } from "../../push/notification-planner";
 import { isWithinQuietHours } from "../../push/quiet-hours";
 import {
+  parkDayThread,
   writeMessage,
   writeMorningPlanMessage,
 } from "../../push/push-messages";
+import { photoKeyOf } from "../../push/push-media";
+import { cachedPlanDay } from "../../parks/services/plan-day-cache";
+import { PlanDayService } from "../../parks/services/plan-day.service";
 import { Park } from "../../parks/entities/park.entity";
 import { ParksService } from "../../parks/parks.service";
 import { ScheduleType } from "../../parks/entities/schedule-entry.entity";
@@ -81,6 +85,10 @@ interface MorningParkFacts {
   park: Park;
   timezone: string;
   openingMs: number | null;
+  /** The day as `/plan/day` reads it; each absent when that read says nothing. */
+  crowdLevel?: string | null;
+  tempMax?: number | null;
+  rainChance?: number | null;
 }
 
 @Processor("push-notifications")
@@ -130,6 +138,7 @@ export class PushNotificationProcessor {
     private readonly planChange: PlanChangePushService,
     private readonly parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly planDayService: PlanDayService,
   ) {}
 
   /**
@@ -350,7 +359,14 @@ export class PushNotificationProcessor {
           parkName: plan.name,
           opensAt: formatInParkTime(openingMs, plan.timezone),
           entries: plan.entries,
+          crowdLevel: facts.crowdLevel,
+          tempMax: facts.tempMax,
+          rainChance: facts.rainChance,
           url: frontendParkPath(park) ?? "/",
+          photo: photoKeyOf(frontendParkPath(park) ?? ""),
+          // After the gates open the summary is an interruption.
+          expiresAtMs: openingMs,
+          threadId: parkDayThread(plan.slug, plan.today),
         };
         for (const subscription of pending) {
           const ok = await this.pushService.send(
@@ -412,6 +428,23 @@ export class PushNotificationProcessor {
         timezone: park.timezone,
         openingMs: openings.length > 0 ? Math.min(...openings) : null,
       };
+      // Only for a day that opens, and never the reason the message fails.
+      if (facts.openingMs !== null) {
+        const context = await cachedPlanDay(
+          this.redis,
+          this.planDayService,
+          park,
+          plan.today,
+        )
+          .then((day) => day.context)
+          .catch(() => null);
+        const weather = context?.weather;
+        const number = (value: unknown) =>
+          typeof value === "number" && Number.isFinite(value) ? value : null;
+        facts.crowdLevel = context?.crowdLevel ?? null;
+        facts.tempMax = number(weather?.tempMax);
+        facts.rainChance = number(weather?.rainChance);
+      }
     }
     if (this.morningFacts.size > 500) this.morningFacts.clear();
     this.morningFacts.set(key, {

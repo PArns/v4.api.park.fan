@@ -168,37 +168,133 @@ export interface ApnsRequest {
   body: string;
 }
 
+/** How a kind is delivered to a device. `docs/frontend/push.md` has the reasons. */
+export interface ApnsKind {
+  /** `aps.interruption-level`. Only `time-sensitive` breaks through a Focus. */
+  level: "passive" | "active" | "time-sensitive";
+  /** `aps.relevance-score`: which of the app's notifications a summary features. */
+  relevance: number;
+  /** `aps.category`: the action buttons the app registers under this name. */
+  category: string;
+  /** Seconds APNs may hold it for a phone that is offline, unless the message says when it ends. */
+  ttl: number;
+}
+
 /**
- * One notification as APNs wants it. `url` and `kind` sit beside `aps`: the
- * app routes a tap by `url` (the same site-relative path the web opens).
+ * Time-sensitive is for what happens in the park within the hour and the
+ * visitor asked for by name (Apple's rule: "an event that's happening now or
+ * will happen within an hour", never marketing). A changed plan is `active`:
+ * it may be about a day weeks away. News and guides are `passive`: they never
+ * light the screen, so they may also wait half a day for a phone to come back.
+ */
+export const APNS_KINDS: Record<string, ApnsKind> = {
+  "ride-wait": level("time-sensitive", 0.9, "RIDE_WAIT", 10 * 60),
+  "ride-reopen": level("time-sensitive", 0.8, "RIDE_REOPEN", 20 * 60),
+  "next-up": level("time-sensitive", 1, "NEXT_UP", 15 * 60),
+  show: level("time-sensitive", 0.8, "SHOW", 15 * 60),
+  "rain-soon": level("time-sensitive", 0.7, "RAIN_SOON", 15 * 60),
+  "plan-change": level("active", 0.6, "PLAN_CHANGE", 60 * 60),
+  "morning-plan": level("active", 0.5, "MORNING_PLAN", 60 * 60),
+  news: level("passive", 0.2, "NEWS", 12 * 60 * 60),
+  guides: level("passive", 0.1, "GUIDE", 12 * 60 * 60),
+};
+
+function level(
+  level: ApnsKind["level"],
+  relevance: number,
+  category: string,
+  ttl: number,
+): ApnsKind {
+  return { level, relevance, category, ttl };
+}
+
+/** The admin's test message and anything unknown: an ordinary alert. */
+const PLAIN_KIND = level("active", 0.5, "", 15 * 60);
+
+/**
+ * At most this many time-sensitive notifications per device in the window;
+ * the next ones arrive as `active` (`PushService.mayInterrupt`).
+ */
+export const TIME_SENSITIVE_CAP = 8;
+export const TIME_SENSITIVE_WINDOW_MS = 12 * 60 * 60_000;
+
+/** Apple refuses a payload over 4 KB (4096 bytes). */
+export const APNS_MAX_PAYLOAD_BYTES = 4096;
+
+export interface ApnsExtras {
+  /** The photo's URL for the app's service extension (`mutable-content`), if one was found. */
+  image?: string | null;
+  /** Deliver a time-sensitive kind as `active`: the device had its share today. */
+  calm?: boolean;
+}
+
+/**
+ * One notification as APNs wants it. `url`, `kind`, `image` and the message's
+ * `data` sit beside `aps`: the app routes a tap by `url` (the same
+ * site-relative path the web opens). Every key beyond title and body is one an
+ * app that does not know it ignores.
  */
 export function buildApnsRequest(
   message: PushMessage,
   kind: string,
   nowMs: number,
+  extras: ApnsExtras = {},
 ): ApnsRequest {
+  const rules = APNS_KINDS[kind] ?? PLAIN_KIND;
+  const interruption =
+    extras.calm && rules.level === "time-sensitive" ? "active" : rules.level;
   // Apple caps the collapse id at 64 bytes; a sha256 hex is exactly that.
   const collapseId =
     Buffer.byteLength(message.tag) <= 64
       ? message.tag
       : createHash("sha256").update(message.tag).digest("hex");
+  // A notification about a moment is worthless after it. Never 0 ("try once,
+  // do not store"): a phone in a tunnel for a minute would lose it.
+  const expiresMs = Math.max(
+    message.expiresAtMs ?? nowMs + rules.ttl * 1000,
+    nowMs + 60_000,
+  );
+  const body = (text: string) =>
+    JSON.stringify({
+      aps: {
+        alert: {
+          title: message.title,
+          ...(message.subtitle ? { subtitle: message.subtitle } : {}),
+          body: text,
+        },
+        // A passive notification makes no sound; sending none says so.
+        ...(interruption === "passive" ? {} : { sound: "default" }),
+        "thread-id": message.threadId ?? kind,
+        "interruption-level": interruption,
+        "relevance-score": rules.relevance,
+        ...(rules.category ? { category: rules.category } : {}),
+        ...(extras.image ? { "mutable-content": 1 } : {}),
+        "target-content-id": message.url,
+      },
+      ...message.data,
+      url: message.url,
+      kind,
+      ...(extras.image ? { image: extras.image } : {}),
+    });
+  const chars = [...message.body];
+  let json = body(message.body);
+  // Titles and teasers are other people's text; only the body may give way.
+  for (
+    let keep = chars.length;
+    Buffer.byteLength(json) > APNS_MAX_PAYLOAD_BYTES && keep > 0;
+  ) {
+    keep = Math.floor(keep / 2);
+    json = body(keep ? `${chars.slice(0, keep).join("")}…` : "");
+  }
   return {
     headers: {
       "apns-push-type": "alert",
-      "apns-priority": "10",
-      // The web's TTL: a notification about the next minutes is worthless later.
-      "apns-expiration": String(Math.floor(nowMs / 1000) + 900),
+      // 5 lets the phone pick the moment; right for what nobody waits for.
+      "apns-priority": interruption === "passive" ? "5" : "10",
+      "apns-expiration": String(Math.floor(expiresMs / 1000)),
       "apns-collapse-id": collapseId,
     },
-    body: JSON.stringify({
-      aps: {
-        alert: { title: message.title, body: message.body },
-        sound: "default",
-        "thread-id": kind,
-      },
-      url: message.url,
-      kind,
-    }),
+    body: json,
   };
 }
 

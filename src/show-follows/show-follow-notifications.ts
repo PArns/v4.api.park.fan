@@ -150,6 +150,8 @@ export function dueShowNotifications(
         inMinutes: Math.round(leadMin / 5) * 5,
         atTime,
         url: show.url,
+        expiresAtMs: startMs,
+        threadId: `${show.url.split(/[?#]/)[0].split("/").pop()}:${formatInTimeZone(new Date(nowMs), show.timezone, "yyyy-MM-dd")}`,
       });
     }
   }

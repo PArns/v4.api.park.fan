@@ -40,7 +40,32 @@ export interface NewsExportPost {
   publishedAt: string;
   parks?: string[];
   parkSlugs?: string[];
+  /** An image id of the media index, or null. */
+  cover?: string | null;
 }
+
+/**
+ * The line under a post's title, in Parky's voice: who is telling, and for a
+ * guide that it is one. Calm, `du`, no promise about the post.
+ */
+const PARKY_SAYS: Record<PostFeed["kind"], Record<string, string>> = {
+  news: {
+    de: "Parky hat Neues für dich",
+    en: "Parky has news for you",
+    nl: "Parky heeft nieuws voor je",
+    fr: "Parky a du nouveau pour toi",
+    es: "Parky tiene novedades para ti",
+    it: "Parky ha novità per te",
+  },
+  guides: {
+    de: "Parky hat einen neuen Guide",
+    en: "Parky has a new guide",
+    nl: "Parky heeft een nieuwe gids",
+    fr: "Parky a un nouveau guide",
+    es: "Parky tiene una guía nueva",
+    it: "Parky ha una nuova guida",
+  },
+};
 
 export function newsLocaleOf(locale: string): string {
   const base = locale.split("-")[0]?.toLowerCase() ?? "en";
@@ -63,10 +88,13 @@ export function wantsNewsPost(
 export function writeNewsMessage(
   post: NewsExportPost,
   feed: PostFeed = POST_FEEDS[0],
+  locale = "en",
 ): PushMessage {
   return {
     title: post.title,
+    subtitle: PARKY_SAYS[feed.kind][newsLocaleOf(locale)],
     body: post.teaser ?? "",
+    ...(typeof post.cover === "string" ? { photo: post.cover } : {}),
     url: `${feed.path}${post.slug}`,
     tag: `${feed.kind}:${post.slug}`,
     kind: feed.kind,
@@ -149,7 +177,7 @@ export class NewsPushService {
       const age = nowMs - Date.parse(post.publishedAt);
       if (!(age >= 0 && age <= NEWS_MAX_AGE_MS)) continue;
 
-      const message = writeNewsMessage(post, feed);
+      const message = writeNewsMessage(post, feed, locale);
       const due = readers.filter(
         (d) =>
           (!feed.narrowed || wantsNewsPost(d.newsParks, post)) &&

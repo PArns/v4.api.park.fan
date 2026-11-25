@@ -176,6 +176,45 @@ export function isDevicePushKind(value: unknown): value is DevicePushKind {
 }
 
 /**
+ * One fixed pictogram per kind, the same in every language, so a stack is read
+ * by its first character (the owner's decision, against the brand's "no emoji"
+ * for notifications only). Each is one code point that is an emoji without a
+ * variation selector: no ZWJ sequence, no skin tone, nothing a system renders
+ * as two glyphs. `PUSH_PICTOGRAM_LOCAL` is the app's own reminder to set off,
+ * listed here so the set stays one.
+ */
+export const PUSH_PICTOGRAMS: Record<DevicePushKind, string> = {
+  "ride-wait": "⏳",
+  "ride-reopen": "✅",
+  "next-up": "🎢",
+  show: "🎭",
+  "rain-soon": "☔",
+  "plan-change": "🔄",
+  "morning-plan": "🌅",
+  news: "📰",
+  guides: "📖",
+};
+export const PUSH_PICTOGRAM_LOCAL = "🚶";
+
+/** What the pictogram and its space take of a title's width, in characters. */
+export const PUSH_PICTOGRAM_CHARS = 3;
+
+/**
+ * The message with its kind's pictogram leading the title: there, not in the
+ * subtitle, because the title is the one line every surface shows (a watch's
+ * short look, a browser, a collapsed stack). One rule for devices and
+ * browsers. Unknown kind, unchanged message.
+ */
+export function withPictogram<
+  T extends { title: string; kind?: string; tag: string },
+>(message: T): T {
+  const kind = pushKindOf(message);
+  return kind
+    ? { ...message, title: `${PUSH_PICTOGRAMS[kind]} ${message.title}` }
+    : message;
+}
+
+/**
  * Which kind a message is: its own `kind`, else the prefix of its tag (every
  * producer's dedupe key starts with it). `null` for anything unknown, which a
  * device is then never sent.

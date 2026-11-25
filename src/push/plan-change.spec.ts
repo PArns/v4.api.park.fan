@@ -399,23 +399,62 @@ describe("the digest", () => {
     ],
   };
 
-  it("names the park and day, three lines and the rest counted, in the subscriber's language", () => {
+  it("makes the first change the title, whose plan and day the second line, the rest the body", () => {
     const de = writePlanChangeMessage(copy, "de-AT");
-    expect(de.title).toBe("Dein Plan: Phantasialand, Sa., 17.10.");
+    expect(de.title).toBe(
+      "Öffnungszeiten jetzt 10:00–18:00 Uhr (vorher 09:00–18:00)",
+    );
+    expect(de.subtitle).toBe("Dein Plan · Phantasialand, Sa., 17.10.");
     expect(de.body).toBe(
-      "Öffnungszeiten jetzt 10:00–18:00 Uhr (vorher 09:00–18:00)\nFeuerwerk jetzt um 15:30 Uhr\nTaron ist gerade außer Betrieb\nund 1 weitere Änderung",
+      "Feuerwerk jetzt um 15:30 Uhr\nTaron ist gerade außer Betrieb\nund 1 weitere Änderung",
     );
-    expect(writePlanChangeMessage({ ...copy, isToday: true }, "en").title).toBe(
-      "Your plan: Phantasialand, today",
+    expect(
+      writePlanChangeMessage({ ...copy, isToday: true }, "en").subtitle,
+    ).toBe("Your plan · Phantasialand, today");
+    // English names the month: 11/28 and 28/11 are each wrong for half its readers.
+    expect(writePlanChangeMessage(copy, "xx").subtitle).toBe(
+      "Your plan · Phantasialand, Sat 17 Oct",
     );
-    expect(writePlanChangeMessage(copy, "xx").title).toMatch(/^Your plan/);
+  });
+
+  it("is a single line when one thing changed, in the words of a reopen alert", () => {
+    const one = { ...copy, isToday: true, changes: [copy.changes[2]] };
+    expect(writePlanChangeMessage(one, "de")).toMatchObject({
+      title: "Taron ist gerade außer Betrieb",
+      subtitle: "Dein Plan · Phantasialand, heute",
+      body: "",
+    });
+    const up = {
+      ...one,
+      changes: [{ type: "ride-up" as const, name: "Taron" }],
+    };
+    expect(writePlanChangeMessage(up, "de").title).toBe(
+      "Taron ist wieder offen",
+    );
+    expect(writePlanChangeMessage(up, "en").title).toBe("Taron is open again");
+  });
+
+  it("cuts a long name in the title so the verb stays", () => {
+    const long = {
+      ...copy,
+      changes: [
+        {
+          type: "show-cancelled" as const,
+          name: "Mickey's Most Merriest Celebration at the Castle",
+        },
+      ],
+    };
+    expect(writePlanChangeMessage(long, "de").title).toBe(
+      "Mickey's Most Merriest… fällt aus",
+    );
   });
 
   it("writes every language", () => {
     for (const locale of ["de", "en", "nl", "fr", "es", "it"]) {
       const m = writePlanChangeMessage(copy, locale);
-      expect(m.body.split("\n")).toHaveLength(4);
-      expect(m.body).not.toContain("undefined");
+      expect(m.title.length).toBeGreaterThan(0);
+      expect(m.body.split("\n")).toHaveLength(3);
+      expect(`${m.title}${m.subtitle}${m.body}`).not.toContain("undefined");
     }
   });
 

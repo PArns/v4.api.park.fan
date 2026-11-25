@@ -18,10 +18,13 @@ import { Park } from "../parks/entities/park.entity";
 import { PushSubscription } from "../push/entities/push-subscription.entity";
 import { PushService } from "../push/push.service";
 import {
+  parkDayThread,
   writeRideAlertMessage,
   writeRideReopenMessage,
 } from "../push/push-messages";
 import { isWithinQuietHours } from "../push/quiet-hours";
+import { photoKeyOf } from "../push/push-media";
+import { formatInTimeZone } from "date-fns-tz";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import {
@@ -77,6 +80,9 @@ export interface ParkForRideAlertCheck {
 @Injectable()
 export class RideAlertsService {
   private readonly logger = new Logger(RideAlertsService.name);
+
+  /** Least time between two notifications of the same wait alert. */
+  static readonly WAIT_ALERT_GAP_MS = 30 * 60_000;
 
   /** How many triggers to send concurrently — see `checkAndNotify`. */
   private static readonly SEND_BATCH_SIZE = 20;
@@ -390,7 +396,20 @@ export class RideAlertsService {
         readings,
         waitAlerts as (RideAlert & { thresholdMinutes: number })[],
       );
-      const triggers: SweepTrigger[] = [...reopenTriggers, ...waitTriggers];
+      // A queue hovering at the threshold crosses it every few minutes. The
+      // alert stays armed, so it fires once the gap has passed and the wait
+      // is still under the threshold.
+      const lastSent = new Map(
+        waitAlerts.map((a) => [a.id, a.lastTriggeredAt?.getTime() ?? 0]),
+      );
+      const triggers: SweepTrigger[] = [
+        ...reopenTriggers,
+        ...waitTriggers.filter(
+          (t) =>
+            nowMs - (lastSent.get(t.alertId) ?? 0) >=
+            RideAlertsService.WAIT_ALERT_GAP_MS,
+        ),
+      ];
 
       // Re-arms (wait recovered above threshold) send nothing and race
       // nothing — one bulk update instead of one per alert.
@@ -600,17 +619,35 @@ export class RideAlertsService {
       const attraction = attractionById.get(trigger.attractionId);
       if (!attraction) return;
 
+      const url =
+        frontendAttractionPath(park, { slug: attraction.slug }) ?? "/";
       const copy = {
         dedupeKey: `ride-alert:${trigger.alertId}`,
         attractionName: resolveCuratedFacts(attraction).name,
         parkName: park.name,
-        url: frontendAttractionPath(park, { slug: attraction.slug }) ?? "/",
+        url,
+        photo: photoKeyOf(url),
+        // No zone, no park day: the notification then stacks with its kind.
+        ...(park.timezone
+          ? {
+              threadId: parkDayThread(
+                park.slug,
+                formatInTimeZone(new Date(nowMs), park.timezone, "yyyy-MM-dd"),
+              ),
+            }
+          : {}),
+        // What "Alarm aus" deletes: `DELETE /v1/push/ride-alerts`.
+        data: { attractionId: trigger.attractionId },
       };
       const message =
         "waitTime" in trigger
           ? {
               ...writeRideAlertMessage(
-                { ...copy, waitTime: trigger.waitTime },
+                {
+                  ...copy,
+                  waitTime: trigger.waitTime,
+                  thresholdMinutes: trigger.thresholdMinutes,
+                },
                 subscription.locale,
               ),
               kind: "ride-wait" as const,
