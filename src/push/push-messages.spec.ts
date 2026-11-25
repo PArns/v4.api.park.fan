@@ -8,6 +8,42 @@ import {
   writeRainSoonMessage,
   writeRideReopenMessage,
 } from "./push-messages";
+import {
+  DEVICE_PUSH_KINDS,
+  PUSH_PICTOGRAMS,
+  PUSH_PICTOGRAM_CHARS,
+  PUSH_PICTOGRAM_LOCAL,
+  pushKindOf,
+  withPictogram,
+  type DevicePushKind,
+} from "./push-config";
+import {
+  POST_FEEDS,
+  writeNewsMessage,
+} from "../queues/services/news-push.service";
+
+describe("the pictograms", () => {
+  const all = [...Object.values(PUSH_PICTOGRAMS), PUSH_PICTOGRAM_LOCAL];
+
+  it("has one per kind and one for the phone's own reminder, no two alike", () => {
+    expect(Object.keys(PUSH_PICTOGRAMS).sort()).toEqual(
+      [...DEVICE_PUSH_KINDS].sort(),
+    );
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("is one code point each that is an emoji by itself: no ZWJ, no selector, no skin tone", () => {
+    for (const pictogram of all) {
+      expect([...pictogram]).toHaveLength(1);
+      expect(pictogram).toMatch(/^\p{Emoji_Presentation}$/u);
+    }
+  });
+
+  it("leaves a message of no known kind as it is", () => {
+    const test = { title: "Test", tag: "test:1" };
+    expect(withPictogram(test)).toBe(test);
+  });
+});
 
 const LOCALES = ["de", "en", "nl", "fr", "es", "it"];
 
@@ -18,8 +54,10 @@ describe("fit", () => {
 
   it("cuts the name, never the number behind it", () => {
     const title = fit("Harry Potter and the Forbidden Journey", ": 15 Min.");
-    expect(title).toBe("Harry Potter and the F…: 15 Min.");
-    expect([...title].length).toBeLessThanOrEqual(TITLE_MAX_CHARS);
+    expect(title).toBe("Harry Potter and th…: 15 Min.");
+    expect([...title].length).toBeLessThanOrEqual(
+      TITLE_MAX_CHARS - PUSH_PICTOGRAM_CHARS,
+    );
   });
 
   it("never cuts a name of sixteen characters or fewer", () => {
@@ -150,7 +188,9 @@ describe("writeRideAlertMessage", () => {
       "de",
     ).title;
     expect(title.endsWith(": 15 Min.")).toBe(true);
-    expect([...title].length).toBeLessThanOrEqual(TITLE_MAX_CHARS);
+    expect([...title].length).toBeLessThanOrEqual(
+      TITLE_MAX_CHARS - PUSH_PICTOGRAM_CHARS,
+    );
   });
 
   it("carries the url and dedupe key through", () => {
@@ -358,16 +398,27 @@ describe("every kind, in every language", () => {
   };
 
   it.each(LOCALES)(
-    "%s: a title, no emoji, no exclamation mark, no em dash",
+    "%s: exactly the kind's pictogram, once, leading the title; no exclamation mark, no em dash",
     (locale) => {
       const messages = [
         writeMessage(start, locale),
         writeMessage({ ...start, dedupeKey: "show-start:s:t" }, locale),
-        writeRideAlertMessage(ride, locale),
-        writeRideReopenMessage(ride, locale),
+        { ...writeRideAlertMessage(ride, locale), kind: "ride-wait" as const },
+        {
+          ...writeRideReopenMessage(ride, locale),
+          kind: "ride-reopen" as const,
+        },
+        ...POST_FEEDS.map((feed) =>
+          writeNewsMessage(
+            { slug: "s", title: "Titel", teaser: "Text.", publishedAt: "" },
+            feed,
+            locale,
+          ),
+        ),
         writeRainSoonMessage(
           {
             ...start,
+            dedupeKey: "rain-soon:p:2026-10-17",
             atTime: "14:20",
             rides: [{ name: "Fly", waitTime: 5 }],
           },
@@ -376,6 +427,7 @@ describe("every kind, in every language", () => {
         writeMorningPlanMessage(
           {
             ...start,
+            dedupeKey: "morning-plan:p:2026-10-17",
             opensAt: "09:00",
             entries: [{ name: "Taron", atTime: "09:30" }],
             crowdLevel: "extreme",
@@ -386,16 +438,25 @@ describe("every kind, in every language", () => {
         ),
         writePlanChangeMessage(plan, locale),
       ];
-      for (const message of messages) {
+      const kinds = new Set<string>();
+      for (const written of messages) {
+        const message = withPictogram(written);
+        const kind = pushKindOf(written) as DevicePushKind;
+        kinds.add(kind);
         const text = `${message.title}|${message.subtitle}|${message.body}`;
+        expect(message.title.startsWith(`${PUSH_PICTOGRAMS[kind]} `)).toBe(
+          true,
+        );
+        expect(text.match(/\p{Extended_Pictographic}/gu)).toEqual([
+          PUSH_PICTOGRAMS[kind],
+        ]);
         expect(message.title.length).toBeGreaterThan(0);
         expect(message.subtitle).toBeTruthy();
-        expect(text).not.toMatch(
-          /undefined|null|NaN|[!—]|\p{Extended_Pictographic}/u,
-        );
+        expect(text).not.toMatch(/undefined|null|NaN|[!—]/u);
         // A title is a headline: no full stop but an abbreviation's.
         expect(message.title).not.toMatch(/[a-zà-ü]{4,}\.$/);
       }
+      expect([...kinds].sort()).toEqual([...DEVICE_PUSH_KINDS].sort());
     },
   );
 });

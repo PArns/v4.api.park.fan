@@ -421,7 +421,8 @@ describe("APNs", () => {
         (webpush.sendNotification as jest.Mock).mock.calls[0][1],
       );
       expect(payload).toEqual({
-        title: "t",
+        // One rule for browsers and devices: the kind's pictogram leads.
+        title: "⏳ t",
         body: "b",
         url: "/",
         tag: "ride-alert:1",
@@ -456,8 +457,13 @@ describe("APNs", () => {
       await service.send(browser, { ...rich, body: "" });
       const payloads = sendNotification.mock.calls.map((c) => JSON.parse(c[1]));
       expect(payloads).toEqual([
-        { title: "t", body: "Phantasialand\nb", url: "/", tag: "ride-alert:1" },
-        { title: "t", body: "Phantasialand", url: "/", tag: "ride-alert:1" },
+        {
+          title: "⏳ t",
+          body: "Phantasialand\nb",
+          url: "/",
+          tag: "ride-alert:1",
+        },
+        { title: "⏳ t", body: "Phantasialand", url: "/", tag: "ride-alert:1" },
       ]);
     });
 

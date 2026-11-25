@@ -8,6 +8,7 @@ import {
   getVapidConfig,
   isPushConfigured,
   pushKindOf,
+  withPictogram,
   type DevicePushKind,
   type PushTopic,
 } from "./push-config";
@@ -309,8 +310,9 @@ export class PushService {
    */
   async send(
     subscription: PushSubscription,
-    message: PushMessage,
+    written: PushMessage,
   ): Promise<boolean> {
+    const message = withPictogram(written);
     if (subscription.apnsToken) return this.sendToDevice(subscription, message);
 
     const vapid = getVapidConfig();

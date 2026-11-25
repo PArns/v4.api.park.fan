@@ -44,14 +44,27 @@ export interface NewsExportPost {
   cover?: string | null;
 }
 
-/** A guide says what it is; a news headline reads as news by itself. */
-const NEW_GUIDE: Record<string, string> = {
-  de: "Neuer Guide",
-  en: "New guide",
-  nl: "Nieuwe gids",
-  fr: "Nouveau guide",
-  es: "Nueva guía",
-  it: "Nuova guida",
+/**
+ * The line under a post's title, in Parky's voice: who is telling, and for a
+ * guide that it is one. Calm, `du`, no promise about the post.
+ */
+const PARKY_SAYS: Record<PostFeed["kind"], Record<string, string>> = {
+  news: {
+    de: "Parky hat Neues für dich",
+    en: "Parky has news for you",
+    nl: "Parky heeft nieuws voor je",
+    fr: "Parky a du nouveau pour toi",
+    es: "Parky tiene novedades para ti",
+    it: "Parky ha novità per te",
+  },
+  guides: {
+    de: "Parky hat einen neuen Guide",
+    en: "Parky has a new guide",
+    nl: "Parky heeft een nieuwe gids",
+    fr: "Parky a un nouveau guide",
+    es: "Parky tiene una guía nueva",
+    it: "Parky ha una nuova guida",
+  },
 };
 
 export function newsLocaleOf(locale: string): string {
@@ -79,9 +92,7 @@ export function writeNewsMessage(
 ): PushMessage {
   return {
     title: post.title,
-    ...(feed.kind === "guides"
-      ? { subtitle: NEW_GUIDE[newsLocaleOf(locale)] }
-      : {}),
+    subtitle: PARKY_SAYS[feed.kind][newsLocaleOf(locale)],
     body: post.teaser ?? "",
     ...(typeof post.cover === "string" ? { photo: post.cover } : {}),
     url: `${feed.path}${post.slug}`,

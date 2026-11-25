@@ -37,6 +37,7 @@ describe("news push", () => {
   it("writes the post as it stands in the reader's export, with a deep link", () => {
     expect(writeNewsMessage(POST)).toEqual({
       title: POST.title,
+      subtitle: "Parky has news for you",
       body: POST.teaser,
       url: `/news/${POST.slug}`,
       tag: `news:${POST.slug}`,
@@ -134,7 +135,10 @@ describe("news push", () => {
 
     it("sends a new post once, never twice", async () => {
       expect(await service.run(NOW)).toBe(1);
-      expect(send).toHaveBeenCalledWith(devices[0], writeNewsMessage(POST));
+      expect(send).toHaveBeenCalledWith(
+        devices[0],
+        writeNewsMessage(POST, POST_FEEDS[0], "de"),
+      );
       expect(await service.run(NOW)).toBe(0);
     });
 
@@ -181,8 +185,8 @@ describe("news push", () => {
         expect(await service.run(NOW)).toBe(1);
         expect(send).toHaveBeenCalledWith(devices[0], {
           title: NEW_GUIDE.title,
-          // What tells a guide from a news headline in a stack.
-          subtitle: "Neuer Guide",
+          // Parky's line, which also says it is a guide.
+          subtitle: "Parky hat einen neuen Guide",
           body: NEW_GUIDE.teaser,
           url: "/blog/phantasialand-tipps",
           tag: "guides:phantasialand-tipps",
@@ -199,11 +203,26 @@ describe("news push", () => {
           ),
         ).toMatchObject({
           photo: "phantasialand/background",
-          subtitle: "New guide",
+          subtitle: "Parky has a new guide",
         });
         const news = writeNewsMessage({ ...NEW_GUIDE, cover: null });
         expect(news).not.toHaveProperty("photo");
-        expect(news).not.toHaveProperty("subtitle");
+      });
+
+      it.each([
+        ["de", "Parky hat Neues für dich", "Parky hat einen neuen Guide"],
+        ["en", "Parky has news for you", "Parky has a new guide"],
+        ["nl", "Parky heeft nieuws voor je", "Parky heeft een nieuwe gids"],
+        ["fr", "Parky a du nouveau pour toi", "Parky a un nouveau guide"],
+        ["es", "Parky tiene novedades para ti", "Parky tiene una guía nueva"],
+        ["it", "Parky ha novità per te", "Parky ha una nuova guida"],
+        ["pt-BR", "Parky has news for you", "Parky has a new guide"],
+      ])("lets Parky say it in %s, and never loudly", (locale, news, guide) => {
+        const lines = POST_FEEDS.map(
+          (feed) => writeNewsMessage(NEW_GUIDE, feed, locale).subtitle,
+        );
+        expect(lines).toEqual([news, guide]);
+        for (const line of lines) expect(line).not.toMatch(/[!—]/);
       });
 
       it("keeps an edited guide quiet, and one that left the list and came back", async () => {

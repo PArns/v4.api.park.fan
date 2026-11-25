@@ -1,5 +1,6 @@
 import type { PushMessage } from "./push.service";
 import type { PlanChange } from "./plan-change";
+import { PUSH_PICTOGRAM_CHARS } from "./push-config";
 
 /**
  * What a notification says, in the six languages this site publishes.
@@ -22,9 +23,10 @@ import type { PlanChange } from "./plan-change";
  * - **subtitle**: the place, so two parks' notifications tell apart in a stack.
  * - **body**: the reason or the next number, a sentence that still reads when
  *   the lock screen cuts it after two lines.
- * No emoji, no exclamation mark, no dash as a pivot (the brand's writing
- * rules); times are the park's clock. The one greeting is the morning plan's
- * subtitle.
+ * No exclamation mark, no dash as a pivot (the brand's writing rules); times
+ * are the park's clock. No emoji in any text here: the kind's one pictogram is
+ * put in front of the title when it is sent (`withPictogram`). Parky speaks in
+ * three subtitles: the morning plan's greeting, news and guides.
  *
  * The language is the SUBSCRIBER's, stored with the subscription, because the
  * job runs with no request to read an `Accept-Language` from. An unknown tag
@@ -32,14 +34,17 @@ import type { PlanChange } from "./plan-change";
  * site to English and is standing in Brühl wants English.
  */
 
-/** The longest title that still shows whole on a lock screen, roughly. */
+/** The longest title that still shows whole on a lock screen, roughly, the kind's pictogram included. */
 export const TITLE_MAX_CHARS = 32;
 
 /** `name` + `rest`, the name cut so that `rest` (the number) is never the part that falls off. */
 export function fit(name: string, rest: string): string {
   const chars = [...name];
   // A name up to 16 characters is never cut, whatever follows it.
-  const room = Math.max(16, TITLE_MAX_CHARS - [...rest].length);
+  const room = Math.max(
+    16,
+    TITLE_MAX_CHARS - PUSH_PICTOGRAM_CHARS - [...rest].length,
+  );
   return chars.length <= room
     ? `${name}${rest}`
     : `${chars

@@ -72,14 +72,18 @@ describe("PushService.send — writes the outcome without resurrecting the row",
 
   it("a row deleted between load and a successful send stays deleted", async () => {
     sendNotification.mockResolvedValue(undefined);
-    await expect(service.send(stale, {} as never)).resolves.toBe(true);
+    await expect(
+      service.send(stale, { title: "t", tag: "x" } as never),
+    ).resolves.toBe(true);
     expect(repository.save).not.toHaveBeenCalled();
     expect(live.has("sub-1")).toBe(false);
   });
 
   it("a row deleted between load and a failed send stays deleted", async () => {
     sendNotification.mockRejectedValue({ statusCode: 500 });
-    await expect(service.send(stale, {} as never)).resolves.toBe(false);
+    await expect(
+      service.send(stale, { title: "t", tag: "x" } as never),
+    ).resolves.toBe(false);
     expect(repository.save).not.toHaveBeenCalled();
     expect(live.has("sub-1")).toBe(false);
   });
@@ -87,9 +91,9 @@ describe("PushService.send — writes the outcome without resurrecting the row",
   it("counts failures on the live row and drops it at the limit", async () => {
     sendNotification.mockRejectedValue({ statusCode: 500 });
     live.set("sub-1", { failureCount: 6 });
-    await service.send(stale, {} as never);
+    await service.send(stale, { title: "t", tag: "x" } as never);
     expect(live.get("sub-1")?.failureCount).toBe(7);
-    await service.send(stale, {} as never);
+    await service.send(stale, { title: "t", tag: "x" } as never);
     expect(live.has("sub-1")).toBe(false);
   });
 });

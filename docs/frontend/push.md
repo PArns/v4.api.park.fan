@@ -51,16 +51,35 @@ Every message is written in the **subscriber's** language (de, en, nl, fr, es, i
 anything else English), because the job has no request to read a language from.
 All texts follow one pattern (`src/push/push-messages.ts`): the **title** is the
 thing and the number or time that decides ("Taron: 15 Min."), never the kind's
-name; a long name is cut so the number stays (`fit`, 32 characters). The **place**
+name; a long name is cut so the number stays (`fit`, 32 characters with the pictogram). The **place**
 is a line of its own: `aps.alert.subtitle` on a device, the first line of `body`
 in a browser, whose payload stays `{ title, body, url, tag }`. The **body** is the
-reason or the next number. No emoji, no exclamation mark; times are the park's
-clock. The examples below are the browser's payload; what a device gets on top is
-in [the device payload](#the-device-payload).
+reason or the next number. No exclamation mark; times are the park's clock.
+The examples below are the browser's payload; what a device gets on top is in
+[the device payload](#the-device-payload).
 The `tag` is load-bearing: a phone in a pocket for two hours surfaces one banner,
 not four about moments that have passed. A sent event leaves a Redis marker
 (`push:sent:<hash(endpoint)>:<hash(key)>`, 45 minutes) as the first dedupe; the
 device's `tag` is the second.
+
+**One pictogram per kind** leads the title, the same in all six languages, for
+browsers and devices alike (`PUSH_PICTOGRAMS` in `src/push/push-config.ts`, put
+on in `PushService.send`): a stack is then read by its first character. It
+leads the title and not the subtitle because the title is the one line every
+surface shows. Each is a single code point that is an emoji without a variation
+selector; a text carries no other emoji, which `push-messages.spec.ts` pins.
+
+| kind          | pictogram | kind                           | pictogram |
+| ------------- | --------- | ------------------------------ | --------- |
+| `ride-wait`   | ⏳        | `plan-change`                  | 🔄        |
+| `ride-reopen` | ✅        | `morning-plan`                 | 🌅        |
+| `next-up`     | 🎢        | `news`                         | 📰        |
+| `show`        | 🎭        | `guides`                       | 📖        |
+| `rain-soon`   | ☔        | the app's own reminder (local) | 🚶        |
+
+**Parky speaks in three subtitles** and nowhere else: "Guten Morgen" on the
+morning plan, "Parky hat Neues für dich" on news and "Parky hat einen neuen
+Guide" on guides (each in the reader's language).
 
 ### `next-up` — the next block of a stored plan
 
@@ -70,7 +89,7 @@ missed run costs nothing.
 
 ```json
 {
-  "title": "Taron in 10 Min.",
+  "title": "🎢 Taron in 10 Min.",
   "body": "Phantasialand\nGeplant für 14:30 Uhr.",
   "url": "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17",
   "tag": "next-up:phantasialand:2026-10-17:e17:870"
@@ -98,7 +117,7 @@ tried again on later ticks.
 
 ```json
 {
-  "title": "Phantasialand öffnet um 09:00 Uhr",
+  "title": "🌅 Phantasialand öffnet um 09:00 Uhr",
   "body": "Guten Morgen\nAndrang niedrig, bis 14 °C, 20 % Regenrisiko. Zuerst Taron um 09:30 Uhr, dann Black Mamba.",
   "url": "/parks/europe/germany/bruehl/phantasialand",
   "tag": "morning-plan:phantasialand:2026-10-17"
@@ -133,7 +152,7 @@ or a ride alert on one of its rides. A plan names parks by slug plus `geo`
 
 ```json
 {
-  "title": "Regen ab etwa 14:20 Uhr",
+  "title": "☔ Regen ab etwa 14:20 Uhr",
   "body": "Phantasialand\nÜberdacht und offen: Maus au Chocolat (15 Min.), Fly (20 Min.)",
   "url": "/parks/europe/germany/bruehl/phantasialand",
   "tag": "rain-soon:<parkId>:2026-10-17"
@@ -188,7 +207,7 @@ and alerts to the pure `diffRideAlerts` (`src/ride-alerts/ride-alert-transitions
 
 ```json
 {
-  "title": "Taron: 15 Min.",
+  "title": "⏳ Taron: 15 Min.",
   "body": "Phantasialand\nUnter deiner Grenze von 20 Min.",
   "url": "/parks/europe/germany/bruehl/phantasialand/taron",
   "tag": "ride-alert:3f2c…"
@@ -223,7 +242,7 @@ unfollows idempotently. At most 100 per subscription, 60 writes an hour per addr
 
 ```json
 {
-  "title": "Feuerwerk in 30 Min.",
+  "title": "🎭 Feuerwerk in 30 Min.",
   "body": "Europa-Park\nBeginn 20:30 Uhr.",
   "url": "/parks/europe/germany/rust/europa-park#shows",
   "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z"
@@ -333,7 +352,8 @@ about those parks (geo paths, else park slugs). Quiet hours drop it.
 
 ```json
 {
-  "title": "Europa-Park startet in den Winter",
+  "title": "📰 Europa-Park startet in den Winter",
+  "subtitle": "Parky hat Neues für dich",
   "body": "<teaser>",
   "url": "/news/europa-park-wintersaison-2026",
   "tag": "news:europa-park-wintersaison-2026"
@@ -361,8 +381,8 @@ never sends the kind is unaffected.
 
 ```json
 {
-  "title": "Die Freizeitpark-Packliste",
-  "subtitle": "Neuer Guide",
+  "title": "📖 Die Freizeitpark-Packliste",
+  "subtitle": "Parky hat einen neuen Guide",
   "body": "<teaser>",
   "url": "/blog/freizeitpark-packliste",
   "tag": "guides:freizeitpark-packliste"
@@ -410,7 +430,7 @@ show/forecast reach.
 
 ```json
 {
-  "title": "Öffnungszeiten jetzt 09:00–17:00 Uhr (vorher 09:00–18:00)",
+  "title": "🔄 Öffnungszeiten jetzt 09:00–17:00 Uhr (vorher 09:00–18:00)",
   "subtitle": "Dein Plan · Phantasialand, Sa., 17.10.",
   "body": "Taron ist gerade außer Betrieb",
   "url": "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17",
@@ -430,7 +450,7 @@ its title), the collapse id at most 64 bytes.
 {
   "aps": {
     "alert": {
-      "title": "Taron: 15 Min.",
+      "title": "⏳ Taron: 15 Min.",
       "subtitle": "Phantasialand",
       "body": "Unter deiner Grenze von 20 Min."
     },
