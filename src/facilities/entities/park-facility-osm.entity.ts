@@ -71,6 +71,10 @@ export class ParkFacilityOsm {
   @Column({ name: "fetched_at", type: "timestamptz" })
   fetchedAt: Date;
 
+  /** False for a building whose centre falls outside the outline it touches. */
+  @Column({ name: "inside_outline", type: "boolean", default: true })
+  insideOutline: boolean;
+
   /** Set in the admin, kept across imports. A hidden row is never served. */
   @Column({ type: "boolean", default: false })
   hidden: boolean;

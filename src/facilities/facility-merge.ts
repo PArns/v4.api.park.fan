@@ -1,11 +1,11 @@
-import type { ParsedFacility } from "./facility.types";
+import type { ImportedFacility } from "./facility.types";
 import type { ParkFacilityOsm } from "./entities/park-facility-osm.entity";
 
 /** What an import does to a park's stored rows. */
 export interface FacilityMergePlan {
-  insert: ParsedFacility[];
+  insert: ImportedFacility[];
   /** `visible`: something a client shows changed, not only the OSM version. */
-  update: { id: string; facility: ParsedFacility; visible: boolean }[];
+  update: { id: string; facility: ImportedFacility; visible: boolean }[];
   /** Rows whose OSM element is gone from the answer. */
   removeIds: string[];
   unchanged: number;
@@ -32,7 +32,7 @@ const SHOWN = [
  */
 export function planFacilityMerge(
   existing: readonly ParkFacilityOsm[],
-  incoming: readonly ParsedFacility[],
+  incoming: readonly ImportedFacility[],
 ): FacilityMergePlan {
   const stored = new Map(existing.map((row) => [key(row), row]));
   const plan: FacilityMergePlan = {
@@ -53,6 +53,7 @@ export function planFacilityMerge(
       if (
         visible ||
         row.osmVersion !== facility.osmVersion ||
+        row.insideOutline !== facility.insideOutline ||
         new Date(row.osmTimestamp).getTime() !== facility.osmTimestamp.getTime()
       ) {
         plan.update.push({ id: row.id, facility, visible });

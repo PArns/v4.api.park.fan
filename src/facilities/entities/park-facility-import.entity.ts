@@ -1,16 +1,23 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
-import type { OsmElementType } from "../facility.types";
-
-export type FacilityReviewStatus = "imported" | "approved";
+import type { OsmElementType, OutlineRings } from "../facility.types";
 
 /**
- * The state of a park's facility import: which OSM boundary it was cut with,
- * when, and whether somebody has looked at the result.
+ * `pending`: no import has succeeded yet (no outline found, or it failed).
+ * `imported`: rows are there and nobody approved them. `approved`: served.
+ */
+export type FacilityReviewStatus = "pending" | "imported" | "approved";
+
+/** How the last import attempt for a park ended. */
+export type FacilityRunOutcome = "ok" | "no_outline" | "failed";
+
+/**
+ * The state of a park's facility import: which OSM outline it was cut with,
+ * how the last attempt ended, and whether somebody has looked at the result.
  *
- * `imported` rows are never served. An import that changes anything puts an
- * approved park back to `imported`, so a point nobody saw cannot reach a
- * visitor through a re-import.
+ * Only `approved` rows are served. An import that brings something a visitor
+ * would newly see puts an approved park back to `imported`; a failed attempt
+ * changes neither the rows nor the review state.
  */
 @Entity("park_facility_imports")
 export class ParkFacilityImport {
@@ -21,24 +28,39 @@ export class ParkFacilityImport {
   @JoinColumn({ name: "park_id" })
   park?: Park;
 
-  @Column({ type: "text", default: "imported" })
+  @Column({ type: "text", default: "pending" })
   status: FacilityReviewStatus;
 
-  @Column({ name: "boundary_osm_type", type: "text" })
-  boundaryOsmType: OsmElementType;
+  @Column({ name: "boundary_osm_type", type: "text", nullable: true })
+  boundaryOsmType: OsmElementType | null;
 
-  @Column({ name: "boundary_osm_id", type: "bigint" })
-  boundaryOsmId: string;
+  @Column({ name: "boundary_osm_id", type: "bigint", nullable: true })
+  boundaryOsmId: string | null;
 
   @Column({ name: "boundary_name", type: "text", nullable: true })
   boundaryName: string | null;
 
-  @Column({ name: "imported_at", type: "timestamptz" })
-  importedAt: Date;
+  /** The outline as it was at the last import, for the review plot. */
+  @Column({ name: "boundary_rings", type: "jsonb", nullable: true })
+  boundaryRings: OutlineRings | null;
+
+  /** The last import that succeeded. */
+  @Column({ name: "imported_at", type: "timestamptz", nullable: true })
+  importedAt: Date | null;
 
   /** Overpass' `timestamp_osm_base`: the OSM state the import saw. */
   @Column({ name: "osm_base", type: "timestamptz", nullable: true })
   osmBase: Date | null;
+
+  @Column({ name: "last_run", type: "text" })
+  lastRun: FacilityRunOutcome;
+
+  @Column({ name: "last_run_at", type: "timestamptz" })
+  lastRunAt: Date;
+
+  /** Why it failed, or the outlines found when none carried the park's name. */
+  @Column({ name: "last_run_message", type: "text", nullable: true })
+  lastRunMessage: string | null;
 
   @Column({ name: "approved_at", type: "timestamptz", nullable: true })
   approvedAt: Date | null;

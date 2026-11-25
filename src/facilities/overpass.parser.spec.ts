@@ -67,17 +67,22 @@ describe("parseFacilities", () => {
     });
   });
 
+  it("reads drinking water", () => {
+    expect(
+      parseFacilities([node(1, { amenity: "drinking_water" })])[0].type,
+    ).toBe("drinking_water");
+  });
+
+  // The public route serves toilets and drinking water; nothing else is read.
   it.each([
-    ["amenity", "drinking_water", "drinking_water"],
-    ["amenity", "nursing_room", "baby_care"],
-    ["amenity", "luggage_locker", "lockers"],
-    ["amenity", "locker", "lockers"],
-    ["amenity", "atm", "atm"],
-    ["amenity", "first_aid", "first_aid"],
-    ["emergency", "first_aid", "first_aid"],
-    ["emergency", "defibrillator", "defibrillator"],
-  ])("%s=%s is %s", (key, value, type) => {
-    expect(parseFacilities([node(1, { [key]: value })])[0].type).toBe(type);
+    ["amenity", "nursing_room"],
+    ["amenity", "luggage_locker"],
+    ["amenity", "atm"],
+    ["amenity", "first_aid"],
+    ["emergency", "defibrillator"],
+    ["amenity", "water_point"],
+  ])("leaves %s=%s out", (key, value) => {
+    expect(parseFacilities([node(1, { [key]: value })])).toEqual([]);
   });
 
   it("drops what is not one of our types", () => {
@@ -246,11 +251,14 @@ describe("the queries", () => {
 
   it("asks for everything inside one outline, with its metadata", () => {
     const ql = buildFacilitiesQuery({ type: "way", id: 31052062 });
-    expect(ql).toContain("way(31052062);map_to_area->.a;");
-    expect(ql).toContain("(area.a);");
+    expect(ql).toContain("way(31052062)->.b;");
+    expect(ql).toContain(".b out geom;");
+    expect(ql).toContain(
+      'nwr["amenity"~"^(toilets|drinking_water)$"](area.a);',
+    );
     expect(ql).toContain("out meta center;");
     expect(buildFacilitiesQuery({ type: "relation", id: "7" })).toContain(
-      "rel(7);map_to_area",
+      "rel(7)->.b;",
     );
   });
 });

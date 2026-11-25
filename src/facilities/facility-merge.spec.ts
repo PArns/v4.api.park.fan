@@ -1,8 +1,8 @@
 import type { ParkFacilityOsm } from "./entities/park-facility-osm.entity";
 import { planFacilityMerge } from "./facility-merge";
-import type { ParsedFacility } from "./facility.types";
+import type { ImportedFacility } from "./facility.types";
 
-const facility = (over: Partial<ParsedFacility> = {}): ParsedFacility => ({
+const facility = (over: Partial<ImportedFacility> = {}): ImportedFacility => ({
   type: "toilets",
   latitude: 50.8,
   longitude: 6.88,
@@ -14,12 +14,13 @@ const facility = (over: Partial<ParsedFacility> = {}): ParsedFacility => ({
   osmId: "1",
   osmVersion: 3,
   osmTimestamp: new Date("2024-05-26T13:06:10Z"),
+  insideOutline: true,
   ...over,
 });
 
 const stored = (
   id: string,
-  over: Partial<ParsedFacility> = {},
+  over: Partial<ImportedFacility> = {},
   hidden = false,
 ): ParkFacilityOsm => ({
   ...facility(over),
@@ -81,6 +82,14 @@ describe("planFacilityMerge", () => {
     expect(plan.update).toEqual([
       { id: "a", facility: expect.any(Object), visible: true },
     ]);
+  });
+
+  it("updates a point that moved across the outline, without asking for review", () => {
+    const plan = planFacilityMerge(
+      [stored("a")],
+      [facility({ insideOutline: false })],
+    );
+    expect(plan.update.map((u) => u.visible)).toEqual([false]);
   });
 
   it("keeps node 1 and way 1 apart", () => {

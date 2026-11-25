@@ -32,6 +32,8 @@ import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstruction.processor";
 import { WeatherClosureProcessor } from "./processors/weather-closure.processor";
+import { FacilitiesImportProcessor } from "./processors/facilities-import.processor";
+import { FacilitiesModule } from "../facilities/facilities.module";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { NewsPushService } from "./services/news-push.service";
@@ -145,6 +147,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
 
     // Feature modules for processors
     ParksModule,
+    FacilitiesModule,
     DestinationsModule,
     AttractionsModule,
     ShowsModule,
@@ -208,6 +211,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     ParkDayOperationProcessor, // Measured-operation verdict per park-day (daily)
     DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
     WeatherClosureProcessor, // Weekly cold/snow closure profiles (PAR-1414)
+    FacilitiesImportProcessor, // OSM facilities, admin-started only
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     RainSoonPushService, // …and its `rain-soon` half
     NewsPushService, // …and its `news` half

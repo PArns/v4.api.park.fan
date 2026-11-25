@@ -100,6 +100,18 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
       lockRenewTime: 300000,
     },
   },
+  {
+    // Park facilities from OpenStreetMap, started only from the admin. A bulk
+    // run walks every park with a pause after each and can wait minutes on a
+    // busy Overpass; it keeps its place in `progress`, so the stalls of a few
+    // deploys cost one park each, not the run.
+    name: "facilities",
+    settings: {
+      lockDuration: 600000, // 10 min
+      lockRenewTime: 300000,
+      maxStalledCount: 3,
+    },
+  },
   { name: "geoip-update" }, // GeoLite2-City every 48h
   { name: "nf-training" }, // TFT train (persists tft_forecasts)
   { name: "pcn-shadow" }, // PCN train + forecast + score ("shadow" is historical)

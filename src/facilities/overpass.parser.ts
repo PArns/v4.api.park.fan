@@ -18,6 +18,14 @@ export interface OverpassElement {
   lat?: number;
   lon?: number;
   center?: { lat: number; lon: number };
+  /** `out geom` on a way. */
+  geometry?: { lat: number; lon: number }[];
+  /** `out geom` on a relation: each member way with its own geometry. */
+  members?: {
+    type: OsmElementType;
+    role?: string;
+    geometry?: { lat: number; lon: number }[];
+  }[];
   bounds?: { minlat: number; minlon: number; maxlat: number; maxlon: number };
   tags?: Record<string, string>;
   version?: number;
@@ -104,50 +112,30 @@ export function pickBoundary(
   );
 }
 
-/** The OSM tags that make an element one of our types. */
-const TAG_FILTERS = [
-  '["amenity"~"^(toilets|drinking_water|nursing_room|baby_care|first_aid|locker|lockers|luggage_locker|atm)$"]',
-  '["emergency"~"^(first_aid|defibrillator)$"]',
-  '["healthcare"="first_aid"]',
-];
+/** The OSM tags that make an element one of `FACILITY_TYPES`. */
+const TAG_FILTER = '["amenity"~"^(toilets|drinking_water)$"]';
 
-/** Everything of our types inside one outline, with version and timestamp. */
+/**
+ * One outline with its geometry, then everything of our types inside it with
+ * version and timestamp. The outline comes first in the answer.
+ */
 export function buildFacilitiesQuery(boundary: {
   type: OsmElementType;
   id: number | string;
 }): string {
   const set = boundary.type === "relation" ? "rel" : "way";
   return `[out:json][timeout:60];
-${set}(${boundary.id});map_to_area->.a;
-(
-${TAG_FILTERS.map((filter) => `  nwr${filter}(area.a);`).join("\n")}
-);
+${set}(${boundary.id})->.b;
+.b out geom;
+.b map_to_area->.a;
+nwr${TAG_FILTER}(area.a);
 out meta center;`;
 }
 
 function facilityType(tags: Record<string, string>): FacilityType | null {
-  switch (tags.amenity) {
-    case "toilets":
-      return "toilets";
-    case "drinking_water":
-      return "drinking_water";
-    case "nursing_room":
-    case "baby_care":
-      return "baby_care";
-    case "first_aid":
-      return "first_aid";
-    case "locker":
-    case "lockers":
-    case "luggage_locker":
-      return "lockers";
-    case "atm":
-      return "atm";
-  }
-  if (tags.emergency === "defibrillator") return "defibrillator";
-  if (tags.emergency === "first_aid" || tags.healthcare === "first_aid") {
-    return "first_aid";
-  }
-  return null;
+  return tags.amenity === "toilets" || tags.amenity === "drinking_water"
+    ? tags.amenity
+    : null;
 }
 
 /** `access` values that mean a visitor cannot use it. */

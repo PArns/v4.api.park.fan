@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   NotFoundException,
@@ -7,54 +8,98 @@ import type { DataSource, Repository } from "typeorm";
 import type { Park } from "../parks/entities/park.entity";
 import type { ParkFacilityImport } from "./entities/park-facility-import.entity";
 import type { ParkFacilityOsm } from "./entities/park-facility-osm.entity";
-import { FacilitiesService, parseBoundaryRef } from "./facilities.service";
-import { OSM_ATTRIBUTION } from "./facility.types";
+import {
+  FacilitiesService,
+  isBulkApprovable,
+  parseBoundaryRef,
+} from "./facilities.service";
+import { FACILITY_TYPES, OSM_ATTRIBUTION } from "./facility.types";
 import type { OverpassClient } from "./overpass.client";
 import type { OverpassElement, OverpassResponse } from "./overpass.parser";
 
 const PARK = "11111111-1111-4111-8111-111111111111";
+const OTHER = "22222222-2222-4222-8222-222222222222";
 
+/** Inside the outline below unless `lat` says otherwise. */
 const toilet = (
   id: number,
   tags: Record<string, string> = {},
+  lat = 50.8 + id / 1000,
 ): OverpassElement => ({
   type: "node",
   id,
-  lat: 50.8 + id / 1000,
+  lat,
   lon: 6.88,
   tags: { amenity: "toilets", ...tags },
   version: 1,
   timestamp: "2024-01-01T00:00:00Z",
 });
 
+const square = [
+  { lat: 50.79, lon: 6.87 },
+  { lat: 50.79, lon: 6.89 },
+  { lat: 50.81, lon: 6.89 },
+  { lat: 50.81, lon: 6.87 },
+  { lat: 50.79, lon: 6.87 },
+];
 const outline: OverpassElement = {
   type: "way",
   id: 31052062,
   tags: { tourism: "theme_park", name: "Phantasialand" },
   bounds: { minlat: 50.79, minlon: 6.87, maxlat: 50.81, maxlon: 6.89 },
+  geometry: square,
 };
 
-/** The service over two arrays instead of two tables. */
+type ParkSeed = Partial<Park> & { id: string };
+
+/** The service over arrays instead of tables. */
 function setup(
-  park: Partial<Park> | null = { latitude: 50.8, longitude: 6.88 },
+  parks: ParkSeed[] = [
+    { id: PARK, name: "Phantasialand", latitude: 50.8, longitude: 6.88 },
+  ],
 ) {
   const rows: ParkFacilityOsm[] = [];
-  let state: ParkFacilityImport | null = null;
+  const states = new Map<string, ParkFacilityImport>();
   let nextId = 0;
   const queries: string[] = [];
   let facilitiesAnswer: OverpassElement[] = [];
+  let outlineAnswer: OverpassElement[] = [outline];
 
   const overpass = {
     query: jest.fn(async (ql: string): Promise<OverpassResponse> => {
       queries.push(ql);
-      return ql.includes("map_to_area")
-        ? {
-            osm3s: { timestamp_osm_base: "2026-11-25T13:41:51Z" },
-            elements: facilitiesAnswer,
-          }
-        : { elements: [outline] };
+      if (!ql.includes("map_to_area")) return { elements: [outline] };
+      const id = /(?:way|rel)\((\d+)\)/.exec(ql)![1];
+      return {
+        osm3s: { timestamp_osm_base: "2026-11-25T13:41:51Z" },
+        elements: [
+          ...outlineAnswer
+            .filter((e) => String(e.id) === id || id === "42")
+            .map((e) =>
+              id === "42"
+                ? {
+                    ...e,
+                    type: "relation" as const,
+                    id: 42,
+                    geometry: undefined,
+                    members: [
+                      { type: "way" as const, role: "outer", geometry: square },
+                    ],
+                  }
+                : e,
+            ),
+          ...facilitiesAnswer,
+        ],
+      };
     }),
   };
+  const matches = (row: ParkFacilityOsm, where: Record<string, unknown>) =>
+    (where.parkId === undefined || row.parkId === where.parkId) &&
+    (where.id === undefined || row.id === where.id) &&
+    (where.hidden === undefined || row.hidden === where.hidden) &&
+    (where.type === undefined ||
+      // FindOperator In([...])
+      (where.type as { value: string[] }).value.includes(row.type));
   const manager = {
     delete: async (_: unknown, ids: string[]) => {
       for (const id of ids) {
@@ -80,27 +125,59 @@ function setup(
       }
     },
     save: async (_: unknown, value: ParkFacilityImport) => {
-      state = { ...value };
+      states.set(value.parkId, { ...value });
     },
   };
   const service = new FacilitiesService(
     {
-      findOne: async () =>
-        park && { id: PARK, name: "Phantasialand", curatedName: null, ...park },
+      findOne: async ({ where }: { where: { id: string } }) =>
+        parks.find((p) => p.id === where.id) ?? null,
+      find: async () =>
+        parks
+          .filter((p) => !p.retiredAt)
+          .sort((a, b) => a.id.localeCompare(b.id)),
     } as unknown as Repository<Park>,
     {
-      find: async ({ where }: { where: Partial<ParkFacilityOsm> }) =>
-        rows.filter(
-          (r) => where.hidden === undefined || r.hidden === where.hidden,
-        ),
-      findOne: async ({ where }: { where: { id: string } }) =>
-        rows.find((r) => r.id === where.id) ?? null,
-      count: async () => rows.filter((r) => !r.hidden).length,
+      find: async ({ where = {} }: { where?: Record<string, unknown> } = {}) =>
+        rows.filter((r) => matches(r, where)),
+      findOne: async ({ where }: { where: Record<string, unknown> }) =>
+        rows.find((r) => matches(r, where)) ?? null,
+      count: async ({ where }: { where: Record<string, unknown> }) =>
+        rows.filter((r) => matches(r, where)).length,
       save: async (row: ParkFacilityOsm) => row,
     } as unknown as Repository<ParkFacilityOsm>,
     {
-      findOne: async () => state,
-      save: async (row: ParkFacilityImport) => (state = row),
+      findOne: async ({ where }: { where: { parkId: string } }) =>
+        states.get(where.parkId) ?? null,
+      find: async ({ where }: { where?: { lastRun?: string } } = {}) =>
+        [...states.values()].filter(
+          (s) => !where?.lastRun || s.lastRun === where.lastRun,
+        ),
+      create: (value: Partial<ParkFacilityImport>) =>
+        ({
+          boundaryOsmType: null,
+          boundaryOsmId: null,
+          boundaryName: null,
+          boundaryRings: null,
+          importedAt: null,
+          osmBase: null,
+          approvedAt: null,
+          approvedBy: null,
+          ...value,
+        }) as ParkFacilityImport,
+      save: async (row: ParkFacilityImport) => {
+        states.set(row.parkId, row);
+        return row;
+      },
+      update: async (
+        where: { parkId: { value: string[] }; status: string },
+        patch: Partial<ParkFacilityImport>,
+      ) => {
+        for (const id of where.parkId.value) {
+          const row = states.get(id);
+          if (row?.status === where.status) Object.assign(row, patch);
+        }
+      },
     } as unknown as Repository<ParkFacilityImport>,
     overpass as unknown as OverpassClient,
     {
@@ -112,8 +189,9 @@ function setup(
     rows,
     queries,
     overpass,
-    state: () => state,
+    state: (id = PARK) => states.get(id) ?? null,
     answer: (elements: OverpassElement[]) => (facilitiesAnswer = elements),
+    outlines: (elements: OverpassElement[]) => (outlineAnswer = elements),
   };
 }
 
@@ -179,6 +257,30 @@ describe("FacilitiesService", () => {
         osm: { type: "node", id: "1", version: 1 },
       });
       expect(JSON.stringify(answer)).not.toContain("admin@example.org");
+      expect(JSON.stringify(answer)).not.toContain("insideOutline");
+    });
+
+    it("serves toilets and drinking water and no other type, whatever the table holds", async () => {
+      expect(FACILITY_TYPES).toEqual(["toilets", "drinking_water"]);
+      const { service, rows, answer } = setup();
+      answer([
+        toilet(1, { wheelchair: "yes", changing_table: "yes" }),
+        toilet(2, { amenity: "drinking_water" }),
+        toilet(3, { amenity: "atm" }),
+      ]);
+      await service.importPark(PARK);
+      // A row of a type the list no longer names, as an older import left it.
+      rows.push({ ...rows[0], id: "old", osmId: "9", type: "atm" as never });
+      await service.setApproved(PARK, true, "admin@example.org");
+      const served = (await service.publicFor(PARK))!.facilities;
+      expect(served.map((f) => f.type).sort()).toEqual([
+        "drinking_water",
+        "toilets",
+      ]);
+      expect(served.find((f) => f.type === "toilets")).toMatchObject({
+        wheelchair: "yes",
+        changingTable: true,
+      });
     });
 
     it("leaves a hidden point out", async () => {
@@ -234,7 +336,7 @@ describe("FacilitiesService", () => {
   });
 
   describe("importPark", () => {
-    it("finds the outline by name, then cuts with it", async () => {
+    it("finds the outline by name, cuts with it and keeps its rings", async () => {
       const { service, answer, queries, state } = setup();
       answer([
         toilet(1, { wheelchair: "yes" }),
@@ -251,12 +353,22 @@ describe("FacilitiesService", () => {
         byType: { toilets: 1 },
       });
       expect(queries).toHaveLength(2);
-      expect(queries[1]).toContain("way(31052062);map_to_area");
+      expect(queries[1]).toContain("way(31052062)->.b;");
       expect(state()).toMatchObject({
         status: "imported",
+        lastRun: "ok",
+        lastRunMessage: null,
         boundaryOsmId: "31052062",
         osmBase: new Date("2026-11-25T13:41:51Z"),
       });
+      expect(state()!.boundaryRings![0]).toHaveLength(5);
+    });
+
+    it("marks a point whose position lies outside the outline", async () => {
+      const { service, answer, rows } = setup();
+      answer([toilet(1), toilet(2, {}, 50.85)]);
+      await service.importPark(PARK);
+      expect(rows.map((r) => r.insideOutline)).toEqual([true, false]);
     });
 
     it("changes nothing the second time, and asks Overpass once", async () => {
@@ -294,36 +406,235 @@ describe("FacilitiesService", () => {
       expect(rows).toHaveLength(1);
     });
 
-    it("uses the outline an admin names, without looking for one", async () => {
-      const { service, answer, queries } = setup({ latitude: null as never });
+    it("refuses an outline that does not exist or does not close", async () => {
+      const { service, answer, outlines, rows } = setup();
+      answer([toilet(1)]);
+      outlines([]);
+      await expect(service.importPark(PARK)).rejects.toThrow(
+        /way\/31052062 is not a closed outline/,
+      );
+      outlines([{ ...outline, geometry: square.slice(0, 3) }]);
+      await expect(service.importPark(PARK)).rejects.toThrow(ConflictException);
+      expect(rows).toEqual([]);
+    });
+
+    it("uses the outline an admin names, a relation too, without looking for one", async () => {
+      const { service, answer, queries, state } = setup([
+        { id: PARK, name: "Phantasialand", latitude: null as never },
+      ]);
       answer([toilet(1)]);
       await service.importPark(PARK, parseBoundaryRef("relation/42"));
       expect(queries).toHaveLength(1);
-      expect(queries[0]).toContain("rel(42);map_to_area");
-    });
-
-    it("names what it found when no outline carries the park's name", async () => {
-      const { service } = setup({
-        name: "Toverland",
-        // decimal columns arrive as strings
-        latitude: "51.397" as never,
-        longitude: "5.984" as never,
+      expect(queries[0]).toContain("rel(42)->.b;");
+      expect(state()).toMatchObject({
+        boundaryOsmType: "relation",
+        boundaryOsmId: "42",
+        boundaryName: "Phantasialand",
       });
-      await expect(service.importPark(PARK)).rejects.toThrow(
-        /way\/31052062 "Phantasialand"/,
-      );
-    });
-
-    it("asks for an outline when the park has no coordinates", async () => {
-      const { service } = setup({ latitude: null as never });
-      await expect(service.importPark(PARK)).rejects.toThrow(
-        BadRequestException,
-      );
     });
 
     it("answers 404 for a park we do not have", async () => {
-      await expect(setup(null).service.importPark(PARK)).rejects.toThrow(
+      await expect(setup([]).service.importPark(PARK)).rejects.toThrow(
         NotFoundException,
+      );
+    });
+  });
+
+  describe("runImport, the state a run leaves", () => {
+    it("records the points of a run that went through", async () => {
+      const { service, answer, state } = setup();
+      answer([toilet(1), toilet(2, { amenity: "drinking_water" })]);
+      expect(await service.runImport(PARK)).toEqual({
+        parkId: PARK,
+        outcome: "ok",
+        points: 2,
+        message: null,
+        overpassDown: false,
+      });
+      expect(state()).toMatchObject({ status: "imported", lastRun: "ok" });
+    });
+
+    it("lists a park without a named outline as such, with what was found", async () => {
+      const { service, state, rows } = setup([
+        // decimal columns arrive as strings
+        {
+          id: PARK,
+          name: "Toverland",
+          latitude: "51.397" as never,
+          longitude: "5.984" as never,
+        },
+      ]);
+      const result = await service.runImport(PARK);
+      expect(result).toMatchObject({
+        outcome: "no_outline",
+        overpassDown: false,
+      });
+      expect(result.message).toMatch(/way\/31052062 "Phantasialand"/);
+      expect(state()).toMatchObject({
+        status: "pending",
+        lastRun: "no_outline",
+        boundaryOsmId: null,
+      });
+      expect(rows).toEqual([]);
+    });
+
+    it("lists a park without coordinates as having no outline", async () => {
+      const { service } = setup([
+        { id: PARK, name: "Phantasialand", latitude: null as never },
+      ]);
+      expect((await service.runImport(PARK)).outcome).toBe("no_outline");
+    });
+
+    it("keeps an approved park approved and its rows when a later run fails", async () => {
+      const { service, answer, overpass, state, rows } = setup();
+      answer([toilet(1)]);
+      await service.runImport(PARK);
+      await service.setApproved(PARK, true, "admin@example.org");
+      overpass.query.mockRejectedValueOnce(
+        new BadGatewayException("Overpass did not answer: 504"),
+      );
+      expect(await service.runImport(PARK)).toMatchObject({
+        outcome: "failed",
+        overpassDown: true,
+        message: "Overpass did not answer: 504",
+      });
+      expect(state()).toMatchObject({
+        status: "approved",
+        lastRun: "failed",
+        lastRunMessage: "Overpass did not answer: 504",
+      });
+      expect(rows).toHaveLength(1);
+      expect((await service.publicFor(PARK))!.available).toBe(true);
+    });
+
+    it("cannot approve a park whose only run failed", async () => {
+      const { service, overpass } = setup();
+      overpass.query.mockRejectedValueOnce(new BadGatewayException("down"));
+      await service.runImport(PARK);
+      await expect(
+        service.setApproved(PARK, true, "admin@example.org"),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe("the bulk run's parks", () => {
+    const three: ParkSeed[] = [
+      { id: OTHER, name: "Phantasialand", latitude: 50.8, longitude: 6.88 },
+      { id: PARK, name: "Phantasialand", latitude: 50.8, longitude: 6.88 },
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        name: "Closed",
+        retiredAt: new Date(),
+      },
+    ];
+
+    it("takes every open park in id order, and skips the ones already done", async () => {
+      const { service, answer } = setup(three);
+      expect(await service.parkIdsForBulkRun(false)).toEqual([PARK, OTHER]);
+      answer([toilet(1)]);
+      await service.runImport(PARK);
+      expect(await service.parkIdsForBulkRun(false)).toEqual([OTHER]);
+      expect(await service.parkIdsForBulkRun(true)).toEqual([PARK, OTHER]);
+    });
+  });
+
+  describe("the list and the bulk approval", () => {
+    const counts = { toilets: 3, drinkingWater: 0, hidden: 0, outside: 0 };
+
+    it.each([
+      ["three points, all inside", {}, true],
+      [
+        "toilets and water count together",
+        { counts: { ...counts, toilets: 2, drinkingWater: 1 } },
+        true,
+      ],
+      ["two points", { counts: { ...counts, toilets: 2 } }, false],
+      [
+        "one point outside the outline",
+        { counts: { ...counts, toilets: 5, outside: 1 } },
+        false,
+      ],
+      ["already approved", { status: "approved" as const }, false],
+      ["never imported", { status: "pending" as const }, false],
+      ["last run failed", { lastRun: "failed" as const }, false],
+    ])("%s", (_name, over, expected) => {
+      expect(
+        isBulkApprovable({
+          status: "imported",
+          lastRun: "ok",
+          counts,
+          ...over,
+        }),
+      ).toBe(expected);
+    });
+
+    async function twoParks() {
+      const ctx = setup([
+        {
+          id: PARK,
+          name: "Phantasialand",
+          country: "Germany",
+          latitude: 50.8,
+          longitude: 6.88,
+        },
+        {
+          id: OTHER,
+          name: "Phantasialand",
+          curatedName: "Zweitpark",
+          latitude: 50.8,
+          longitude: 6.88,
+        },
+        { id: "33333333-3333-4333-8333-333333333333", name: "Untouched" },
+      ]);
+      ctx.answer([toilet(1), toilet(2), toilet(3), toilet(4)]);
+      await ctx.service.runImport(PARK);
+      await ctx.service.setHidden(PARK, ctx.rows[3].id, true);
+      // Three points, one of them outside.
+      ctx.answer([toilet(5), toilet(6), toilet(7, {}, 50.85)]);
+      await ctx.service.runImport(OTHER);
+      return ctx;
+    }
+
+    it("lists every park with state and counts, hidden points apart", async () => {
+      const { service } = await twoParks();
+      const list = await service.listParks();
+      expect(list.map((p) => [p.name, p.status, p.bulkApprovable])).toEqual([
+        ["Phantasialand", "imported", true],
+        ["Zweitpark", "imported", false],
+        ["Untouched", "none", false],
+      ]);
+      expect(list[0]).toMatchObject({
+        country: "Germany",
+        lastRun: "ok",
+        boundary: { type: "way", id: "31052062", name: "Phantasialand" },
+        counts: { toilets: 3, drinkingWater: 0, hidden: 1, outside: 0 },
+      });
+      expect(list[1].counts).toMatchObject({ toilets: 3, outside: 1 });
+      expect(list[2]).toMatchObject({ lastRun: null, boundary: null });
+    });
+
+    it("previews without approving, then approves exactly those parks", async () => {
+      const { service, state } = await twoParks();
+      expect(await service.approveAll("admin@example.org", true)).toEqual({
+        dryRun: true,
+        count: 1,
+        parks: ["Phantasialand"],
+      });
+      expect(state(PARK)!.status).toBe("imported");
+
+      expect(
+        await service.approveAll("admin@example.org", false),
+      ).toMatchObject({
+        dryRun: false,
+        count: 1,
+      });
+      expect(state(PARK)).toMatchObject({
+        status: "approved",
+        approvedBy: "admin@example.org",
+      });
+      expect(state(OTHER)!.status).toBe("imported");
+      expect((await service.approveAll("admin@example.org", false)).count).toBe(
+        0,
       );
     });
   });

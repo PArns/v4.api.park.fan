@@ -3,16 +3,12 @@
  * docs/frontend/facilities.md holds the contract and the licence duties.
  */
 
-/** What the import keeps. The order is the order a client lists them in. */
-export const FACILITY_TYPES = [
-  "toilets",
-  "drinking_water",
-  "baby_care",
-  "first_aid",
-  "lockers",
-  "atm",
-  "defibrillator",
-] as const;
+/**
+ * The types the import keeps and the public route serves: the one list. OSM
+ * maps first aid, lockers, baby-care rooms and ATMs too thinly inside parks
+ * (0 to 4 per park) for "the nearest one" to be true, so they are not read.
+ */
+export const FACILITY_TYPES = ["toilets", "drinking_water"] as const;
 export type FacilityType = (typeof FACILITY_TYPES)[number];
 
 export type OsmElementType = "node" | "way" | "relation";
@@ -33,6 +29,15 @@ export interface ParsedFacility {
   osmVersion: number;
   osmTimestamp: Date;
 }
+
+/** A parsed facility with where it lies relative to the park's outline. */
+export interface ImportedFacility extends ParsedFacility {
+  /** False for a building whose centre falls outside the outline it touches. */
+  insideOutline: boolean;
+}
+
+/** An outline as closed rings of `[longitude, latitude]`. */
+export type OutlineRings = [number, number][][];
 
 /**
  * The notice every answer carries. ODbL 4.2 wants the licence named with the

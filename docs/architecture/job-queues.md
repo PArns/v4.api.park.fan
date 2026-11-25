@@ -105,6 +105,13 @@ across the stall, and a run resumes after it. Its queue, `children-metadata`, al
 run under the default of one (PAR-1183). A longer `lockDuration` would not help here: the process is
 gone, and the lock only decides how soon the stall is noticed.
 
+## Jobs only the admin starts
+
+`facilities` / `import` reads park facilities from OpenStreetMap, for one park or all of them. It
+has no cron and no boot entry: an editor starts it under `/admin/facilities`. A bulk run is serial
+with a pause after each park and keeps its place in `progress`
+([facilities](../frontend/facilities.md#the-import-job)).
+
 ## Failed jobs: retention and monitoring
 
 - **Retention** is `defaultJobOptions` in `src/queues/queues.module.ts`: the last 100 completed and

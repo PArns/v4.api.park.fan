@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { BullModule } from "@nestjs/bull";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AdminAuthModule } from "../admin/auth/admin-auth.module";
 import { Park } from "../parks/entities/park.entity";
@@ -9,13 +10,19 @@ import { FacilitiesController } from "./facilities.controller";
 import { FacilitiesService } from "./facilities.service";
 import { OverpassClient } from "./overpass.client";
 
-/** Park facilities from OpenStreetMap: docs/frontend/facilities.md. */
+/**
+ * Park facilities from OpenStreetMap: docs/frontend/facilities.md. The import
+ * job's processor lives with the other processors in `QueuesModule`, which
+ * imports this module for the service.
+ */
 @Module({
   imports: [
     TypeOrmModule.forFeature([Park, ParkFacilityOsm, ParkFacilityImport]),
     AdminAuthModule,
+    BullModule.registerQueue({ name: "facilities" }),
   ],
   controllers: [FacilitiesController, AdminFacilitiesController],
   providers: [FacilitiesService, OverpassClient],
+  exports: [FacilitiesService],
 })
 export class FacilitiesModule {}
