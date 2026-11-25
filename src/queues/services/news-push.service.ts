@@ -162,7 +162,7 @@ export class NewsPushService {
     readers: PushSubscription[],
     nowMs: number,
   ): Promise<number> {
-    const posts = await this.fetchPosts(feed, locale);
+    const posts = await fetchExportPosts(feed, locale);
     if (posts.length === 0) return 0;
     const key = `push:${feed.kind}:seen:${locale}`;
     // shortcut: the set grows by one slug per post, forever; a few KB a year.
@@ -194,24 +194,25 @@ export class NewsPushService {
     }
     return sent;
   }
+}
 
-  private async fetchPosts(
-    feed: PostFeed,
-    locale: string,
-  ): Promise<NewsExportPost[]> {
-    const base = process.env.NEWS_EXPORT_BASE ?? "https://media.park.fan";
-    const response = await fetch(`${base}/${feed.folder}/${locale}.json`, {
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) return [];
-    const json = (await response.json()) as { posts?: unknown };
-    return Array.isArray(json.posts)
-      ? (json.posts as NewsExportPost[]).filter(
-          (p) =>
-            typeof p?.slug === "string" &&
-            typeof p.title === "string" &&
-            typeof p.publishedAt === "string",
-        )
-      : [];
-  }
+/** The posts of one export file (the file the app itself reads); an unreadable file is none. */
+export async function fetchExportPosts(
+  feed: PostFeed,
+  locale: string,
+): Promise<NewsExportPost[]> {
+  const base = process.env.NEWS_EXPORT_BASE ?? "https://media.park.fan";
+  const response = await fetch(`${base}/${feed.folder}/${locale}.json`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return [];
+  const json = (await response.json()) as { posts?: unknown };
+  return Array.isArray(json.posts)
+    ? (json.posts as NewsExportPost[]).filter(
+        (p) =>
+          typeof p?.slug === "string" &&
+          typeof p.title === "string" &&
+          typeof p.publishedAt === "string",
+      )
+    : [];
 }

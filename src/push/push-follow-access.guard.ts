@@ -57,9 +57,16 @@ export class PushFollowAccessGuard {
     return subscription;
   }
 
-  /** Rate-limit a write, naming which bucket in both the log and the 429 body. */
-  async writeGuard(request: Request, kind: PushWriteKind): Promise<void> {
-    const verdict = await this.rateLimit.check(getRateLimitIp(request), kind);
+  /**
+   * Rate-limit a write, naming which bucket in both the log and the 429 body.
+   * `subject` is what is counted: the address, unless a bucket counts something else.
+   */
+  async writeGuard(
+    request: Request,
+    kind: PushWriteKind,
+    subject: string | null = getRateLimitIp(request),
+  ): Promise<void> {
+    const verdict = await this.rateLimit.check(subject, kind);
     if (verdict.allowed) return;
     throw new HttpException(
       {

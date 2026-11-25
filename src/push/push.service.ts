@@ -437,6 +437,26 @@ export class PushService {
     );
   }
 
+  /**
+   * A device's sample of one kind to itself (`POST /v1/push/devices/test`).
+   * Built and delivered as a real one, bookkeeping and circuit breaker
+   * included (a dead token is still deleted), but past the device's choice of
+   * kinds, and outside `TIME_SENSITIVE_CAP`: a test shows the kind's real
+   * level and does not use up the share the real alerts of the day need.
+   */
+  async sendSelfTest(
+    device: PushSubscription,
+    written: PushMessage,
+  ): Promise<ApnsSendResult> {
+    const message = withPictogram(written);
+    return this.deliver(
+      device,
+      buildApnsRequest(message, pushKindOf(message) ?? "test", Date.now(), {
+        image: message.photo ? await pushImageUrl(message.photo) : null,
+      }),
+    );
+  }
+
   /** One request to APNs and what its answer means for the row. */
   private async deliver(
     subscription: PushSubscription,

@@ -26,6 +26,9 @@ const PREFIX = {
   "ride-alert": "push-follow:ride-alert:ip:",
   "show-follow": "push-follow:show-follow:ip:",
   subscription: "push-follow:subscription:ip:",
+  // `POST /v1/push/devices/test`: one bucket per address, one per install.
+  "push-test": "push-test:ip:",
+  "push-test-install": "push-test:install:",
 } as const;
 
 export type PushWriteKind = keyof typeof PREFIX;
@@ -33,6 +36,10 @@ export type PushWriteKind = keyof typeof PREFIX;
 /** A person configures a handful of alerts. A script makes thousands. */
 const WINDOW_SECONDS = 60 * 60;
 const MAX = 60;
+/** A tester runs every kind twice an hour; each one is a real push to Apple. */
+const MAX_BY_KIND: Partial<Record<PushWriteKind, number>> = {
+  "push-test-install": 20,
+};
 
 export type PushFollowWriteVerdict = RateLimitVerdict;
 
@@ -42,18 +49,19 @@ export class PushFollowWriteRateLimitService {
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
+  /** `subject` is the address, or the install id for `push-test-install`. */
   async check(
-    ip: string | null,
+    subject: string | null,
     kind: PushWriteKind,
   ): Promise<PushFollowWriteVerdict> {
-    if (!ip) return { allowed: true, retryAfterSeconds: 0 };
+    if (!subject) return { allowed: true, retryAfterSeconds: 0 };
 
     return checkRateLimit({
       redis: this.redis,
       logger: this.logger,
       label: "Push-follow write limiter",
-      key: PREFIX[kind] + hashRateLimitKey(ip),
-      max: MAX,
+      key: PREFIX[kind] + hashRateLimitKey(subject),
+      max: MAX_BY_KIND[kind] ?? MAX,
       windowSeconds: WINDOW_SECONDS,
     });
   }

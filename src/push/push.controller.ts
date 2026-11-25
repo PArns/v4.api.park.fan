@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  NotFoundException,
   Post,
   Req,
   UseInterceptors,
@@ -15,7 +16,12 @@ import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Request } from "express";
 import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
-import { PushService } from "./push.service";
+import { PushService, deviceEndpoint } from "./push.service";
+import {
+  isPushSelfTestEnabled,
+  selfTestMessage,
+  type PushSelfTestKind,
+} from "./push-self-test";
 import { TripsService } from "../trips/trips.service";
 import {
   DEVICE_PUSH_KINDS,
@@ -32,6 +38,8 @@ import {
   PushDeviceDto,
   PushDeviceRemoveDto,
   PushDeviceResponseDto,
+  PushDeviceTestDto,
+  PushDeviceTestResponseDto,
   PushStatusDto,
   PushSubscribeDto,
   PushUnsubscribeDto,
@@ -127,6 +135,53 @@ export class PushController {
       kinds: stored.topics,
       newsParks: stored.newsParks,
       tripId: stored.tripId,
+    };
+  }
+
+  @Post("devices/test")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Send this install a sample notification of one kind",
+    description:
+      "For the app's hidden test menu. The sample goes to the token the " +
+      "install registered, never anywhere else, written by the kind's real " +
+      "writer and marked `test` in the payload. It skips the device's choice " +
+      "of kinds, quiet hours and cool-downs; Apple's answer is kept as for any " +
+      "send (a dead token is deleted). 20 an hour per install, 60 per address. " +
+      "An unknown install answers `no-token`.",
+  })
+  @ApiResponse({ status: 200, type: PushDeviceTestResponseDto })
+  @ApiResponse({
+    status: 404,
+    description: "Self-tests are off (`PUSH_SELF_TEST=false`).",
+  })
+  @ApiResponse({ status: 429, description: "Too many tests." })
+  async testDevice(
+    @Body() body: PushDeviceTestDto,
+    @Req() request: Request,
+  ): Promise<PushDeviceTestResponseDto> {
+    if (!isPushSelfTestEnabled()) throw new NotFoundException();
+    const installId = body.installId.toLowerCase();
+    // Counted before the lookup, so guessing installs costs the same bucket.
+    await this.writeAccess.writeGuard(request, "push-test");
+    await this.writeAccess.writeGuard(request, "push-test-install", installId);
+    if (!isApnsConfigured()) return { state: "not-configured" };
+    const device = await this.pushService.findByEndpoint(
+      deviceEndpoint(installId),
+    );
+    if (!device?.apnsToken) return { state: "no-token" };
+    const message = await selfTestMessage(
+      body.kind as PushSelfTestKind,
+      body.locale === undefined ? device.locale : normalizeLocale(body.locale),
+      Date.now(),
+    );
+    const result = await this.pushService.sendSelfTest(device, message);
+    if (result.reason === "NotConfigured") return { state: "not-configured" };
+    return {
+      state: result.outcome === "sent" ? "sent" : "apns-error",
+      status: result.status,
+      ...(result.reason ? { reason: result.reason } : {}),
+      environment: result.environment,
     };
   }
 

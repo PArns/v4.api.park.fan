@@ -12,6 +12,7 @@ import {
 } from "class-validator";
 import { DEVICE_PUSH_KINDS, PUSH_TOPICS } from "../push-config";
 import { APNS_ENVIRONMENTS, type ApnsEnvironment } from "../apns";
+import { PUSH_SELF_TEST_KINDS } from "../push-self-test";
 
 /**
  * The subscribe body.
@@ -261,6 +262,43 @@ export class PushDeviceRemoveDto {
   @ApiProperty({ description: "The install id to forget." })
   @IsUUID()
   installId: string;
+}
+
+/** A device asking for a sample of one kind, sent to itself. */
+export class PushDeviceTestDto {
+  @ApiProperty({
+    description:
+      "The install that asks; the sample goes to its own registered token.",
+  })
+  @IsUUID()
+  installId: string;
+
+  @ApiProperty({ enum: PUSH_SELF_TEST_KINDS })
+  @IsIn(PUSH_SELF_TEST_KINDS)
+  kind: string;
+
+  @ApiProperty({
+    required: false,
+    description: "The language to write it in; omitted, the stored one.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(12)
+  locale?: string;
+}
+
+export class PushDeviceTestResponseDto {
+  @ApiProperty({ enum: ["sent", "apns-error", "not-configured", "no-token"] })
+  state: "sent" | "apns-error" | "not-configured" | "no-token";
+
+  @ApiProperty({ required: false, description: "Apple's HTTP status." })
+  status?: number;
+
+  @ApiProperty({ required: false, description: "Apple's `reason`." })
+  reason?: string;
+
+  @ApiProperty({ required: false, enum: APNS_ENVIRONMENTS })
+  environment?: ApnsEnvironment;
 }
 
 export class PushDeviceResponseDto {
