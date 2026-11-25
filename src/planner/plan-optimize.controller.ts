@@ -51,7 +51,7 @@ export class PlanOptimizeController {
   @ApiResponse({
     status: 400,
     description:
-      "Malformed body: an impossible date, too many entries, a duplicate id, an unknown field, or a fit-only field on another mode.",
+      "Malformed body: an impossible date, too many entries, a duplicate id, an unknown field, a fit-only field on another mode, or a `from` ride that is not this park's.",
   })
   @ApiResponse({ status: 404, description: "Park not found" })
   @ApiResponse({
