@@ -207,7 +207,7 @@ export class PushDeviceDto {
     required: false,
     nullable: true,
     description:
-      "News only about these parks (API geo paths); omitted or null for all news.",
+      "News only about these parks (API geo paths); omitted or null for all news. Does not narrow `guides`.",
     example: ["europe/germany/rust/europa-park"],
   })
   @IsOptional()

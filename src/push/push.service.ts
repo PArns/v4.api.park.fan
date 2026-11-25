@@ -435,13 +435,13 @@ export class PushService {
       .getMany();
   }
 
-  /** Devices with `news` switched on, for `NewsPushService`. */
-  async devicesWithNews(): Promise<PushSubscription[]> {
+  /** Devices with this kind switched on, for `NewsPushService`. */
+  async devicesWithKind(kind: DevicePushKind): Promise<PushSubscription[]> {
     return this.repository
       .createQueryBuilder("s")
       .where("s.apnsToken IS NOT NULL")
       .andWhere("s.topics @> CAST(:topics AS jsonb)", {
-        topics: JSON.stringify(["news"]),
+        topics: JSON.stringify([kind]),
       })
       .getMany();
   }

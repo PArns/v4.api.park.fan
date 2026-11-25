@@ -200,7 +200,7 @@ its alerts and follows. Same 429 bucket as subscribe.
 
 - **The device chooses, the server enforces.** `kinds` is the device's whole
   choice and replaces what was stored: `ride-wait`, `ride-reopen`, `show`,
-  `news`, `plan-change`, plus the trip topics. `PushService.send` drops any message whose kind
+  `news`, `guides`, `plan-change`, plus the trip topics. `PushService.send` drops any message whose kind
   (`pushKindOf`: its `kind`, else its tag prefix) the device did not choose, for
   every producer. An empty list keeps the alerts and sends nothing.
 - **Transport.** `src/push/apns.ts`: ES256 provider token (refreshed every 50
@@ -227,6 +227,29 @@ about those parks (geo paths, else park slugs). Quiet hours drop it.
 
 ```json
 { "title": "Europa-Park startet in den Winter", "body": "<teaser>", "url": "/news/europa-park-wintersaison-2026", "tag": "news:europa-park-wintersaison-2026" }
+```
+
+### `guides` — a new guide in the guides export
+
+The same service and rules over `<NEWS_EXPORT_BASE>/guides/<locale>.json`
+(`POST_FEEDS`), for devices with `guides`: its own Redis sets
+`push:guides:seen:<locale>`, the same 6 hours on `publishedAt`, the same quiet
+hours. A device gets guides only if `guides` is among its `kinds`; an app that
+never sends the kind is unaffected.
+
+- **Only the slug counts.** An edited guide (`updatedAt`) is not a new one, and
+  a slug is never removed from the set, so a guide that leaves the export and
+  returns stays quiet. The first run per locale fills the set with every guide
+  there is and sends nothing.
+- **`newsParks` does not narrow guides.** A guide is often about several parks
+  or none; the news rule would keep those from a device narrowed to its
+  favourites, and guides have their own switch.
+- **A post and a guide in one run are two notifications**, with different
+  tags, each to the devices of its kind; nothing is merged or capped across
+  the two.
+
+```json
+{ "title": "Die Freizeitpark-Packliste", "body": "<teaser>", "url": "/blog/freizeitpark-packliste", "tag": "guides:freizeitpark-packliste" }
 ```
 
 ### `plan-change` — something a stored plan was built around changed
