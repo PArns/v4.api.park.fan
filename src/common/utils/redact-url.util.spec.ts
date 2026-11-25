@@ -87,4 +87,27 @@ describe("redactUrl", () => {
       "/v1/favorites?IP=***",
     );
   });
+  it("hides where a visitor stands, under every name, casing and position", () => {
+    expect(
+      redactUrl("/v1/discovery/nearby?lat=50.7996&lng=6.8793&radius=1000"),
+    ).toBe("/v1/discovery/nearby?lat=***&lng=***&radius=1000");
+    expect(
+      redactUrl("/v1/discovery/nearby?radius=1000&LNG=6.8793&Lat=50.8"),
+    ).toBe("/v1/discovery/nearby?radius=1000&LNG=***&Lat=***");
+    expect(redactUrl("/v1/favorites?parkIds=a,b&lat=-33.86&lng=151.2")).toBe(
+      "/v1/favorites?parkIds=a%2Cb&lat=***&lng=***",
+    );
+    expect(
+      redactUrl("/x?latitude=1.5&longitude=2.5&lon=3&long=4&limit=6"),
+    ).toBe("/x?latitude=***&longitude=***&lon=***&long=***&limit=6");
+    // Sent twice, or as the arrays Express's parser reads them as.
+    const repeated = redactUrl(
+      "/v1/discovery/nearby?lat=50.1&lat=50.2&lng[]=6.1&lat[0]=50.3",
+    );
+    expect(repeated).not.toMatch(/50\.|6\.1/);
+    // A neighbour that only starts the same stays readable.
+    expect(redactUrl("/x?latest=1&language=de")).toBe(
+      "/x?latest=1&language=de",
+    );
+  });
 });

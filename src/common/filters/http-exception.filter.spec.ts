@@ -478,6 +478,17 @@ describe("HttpExceptionFilter — server errors", () => {
       expect(everythingWritten()).toContain("/v1/location/nearby?ip=***");
     });
 
+    it("writes no position either, in a 4xx line or a 5xx record", () => {
+      const url = "/v1/discovery/nearby?lat=50.7996&LNG=6.8793&radius=1000";
+      new HttpExceptionFilter().catch(
+        new BadRequestException("Invalid latitude or longitude"),
+        hostWithAddress(url),
+      );
+      new HttpExceptionFilter().catch(new Error("boom"), hostWithAddress(url));
+      expect(everythingWritten()).not.toMatch(/50\.7996|6\.8793/);
+      expect(everythingWritten()).toContain("lat=***&LNG=***");
+    });
+
     it("is in no 5xx log line and no error file record", () => {
       new HttpExceptionFilter().catch(
         new Error("boom"),

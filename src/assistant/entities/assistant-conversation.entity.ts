@@ -56,6 +56,10 @@ export class AssistantConversation {
   @Column({ type: "smallint", default: 0 })
   rating: number;
 
+  /** When a visitor last reported one of its answers; null for a chat nobody reported. */
+  @Column({ type: "timestamptz", nullable: true })
+  reportedAt: Date | null;
+
   /** The prompt version of the chat's latest answer, so the list can filter by it. */
   @Column({ type: "smallint", nullable: true })
   promptVersion: number | null;

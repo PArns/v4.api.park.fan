@@ -18,8 +18,9 @@ export const assistantConversationsTool = defineMcpTool({
     "Chats visitors had with Parky, park.fan's chat assistant, newest first: when, the site " +
     "language, the source (web for the site's widget, app for park.fan's app), how many messages, tokens and cost in USD, the rating (-1 when any answer got a " +
     "thumbs down, 1 when only thumbs up, 0 unrated), the prompt version of its latest answer, " +
-    "the page the chat was opened on and the first question. Filter by rating, by source, by prompt " +
-    "version or by a word in any message. Read a whole chat with " +
+    "the page the chat was opened on, the first question, and reportedAt when a visitor reported " +
+    "one of its answers. Filter by rating, by source, by prompt version, by reported or by a " +
+    "word in any message. Read a whole chat with " +
     `assistant_conversation and its id. Chats are kept ${CONVERSATION_RETENTION_DAYS} days. ` +
     CHAT_DATA_DESCRIPTION,
   input: {
@@ -33,6 +34,12 @@ export const assistantConversationsTool = defineMcpTool({
       .enum(["web", "app"])
       .optional()
       .describe("Only chats from the site's widget (web) or from the app"),
+    reported: z
+      .boolean()
+      .optional()
+      .describe(
+        "true for chats with an answer a visitor reported, false for those without",
+      ),
     q: z
       .string()
       .trim()
@@ -60,10 +67,19 @@ export const assistantConversationsTool = defineMcpTool({
       .default(20)
       .describe("Chats per page"),
   },
-  async handler({ rating, source, q, promptVersion, page, pageSize }, ctx) {
-    const list = await ctx
-      .get(AssistantRecordsService)
-      .listConversations({ rating, source, q, promptVersion, page, pageSize });
+  async handler(
+    { rating, source, reported, q, promptVersion, page, pageSize },
+    ctx,
+  ) {
+    const list = await ctx.get(AssistantRecordsService).listConversations({
+      rating,
+      source,
+      reported,
+      q,
+      promptVersion,
+      page,
+      pageSize,
+    });
     return withVisitorData(
       { total: list.total, page: list.page, pageSize: list.pageSize },
       {

@@ -1,10 +1,16 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository, type SelectQueryBuilder } from "typeorm";
+import {
+  In,
+  Repository,
+  type EntityManager,
+  type SelectQueryBuilder,
+} from "typeorm";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import {
   ASSISTANT_TOOL_ERROR_KINDS,
   AssistantMessage,
+  type AssistantReportReason,
 } from "./entities/assistant-message.entity";
 import {
   SiteFeedback,
@@ -133,6 +139,8 @@ const LIVE_CALLS = `
  */
 @Injectable()
 export class AssistantRecordsService {
+  private readonly logger = new Logger(AssistantRecordsService.name);
+
   /** Parky's tool names and the trip regions, for the prune's tool sums (`AssistantModule` sets them). */
   private toolNames: readonly string[] = [];
   private regionSlugs: readonly string[] = [];
@@ -188,6 +196,32 @@ export class AssistantRecordsService {
     return true;
   }
 
+  /**
+   * "Antwort melden": stores the reason and the note at the answer and marks the chat, so the
+   * admin's list finds it. False under `rate`'s conditions; a second report replaces the first.
+   */
+  async report(
+    conversationId: string,
+    messageId: string,
+    reason: AssistantReportReason,
+    note: string | null,
+    sessionHash: string,
+  ): Promise<boolean> {
+    if (
+      !(await this.conversations.existsBy({ id: conversationId, sessionHash }))
+    ) {
+      return false;
+    }
+    const reportedAt = new Date();
+    const result = await this.messages.update(
+      { id: messageId, conversationId, role: "assistant" },
+      { reportReason: reason, reportNote: note, reportedAt },
+    );
+    if (!result.affected) return false;
+    await this.conversations.update({ id: conversationId }, { reportedAt });
+    return true;
+  }
+
   async addFeedback(entry: {
     message: string;
     email: string | null;
@@ -232,6 +266,8 @@ export class AssistantRecordsService {
     rating?: number;
     q?: string;
     source?: AssistantSource;
+    /** True for chats with a reported answer, false for those without. */
+    reported?: boolean;
     /** Only chats whose latest answer ran on this prompt version. */
     promptVersion?: number;
     page: number;
@@ -331,8 +367,14 @@ export class AssistantRecordsService {
     rating?: number;
     q?: string;
     source?: AssistantSource;
+    reported?: boolean;
   }): SelectQueryBuilder<AssistantConversation> {
     const query = this.conversations.createQueryBuilder("c");
+    if (params.reported !== undefined) {
+      query.andWhere(
+        `c.reportedAt IS ${params.reported ? "NOT NULL" : "NULL"}`,
+      );
+    }
     if (params.source)
       query.andWhere("c.source = :source", { source: params.source });
     if (params.rating !== undefined)
@@ -602,6 +644,43 @@ export class AssistantRecordsService {
   }
 
   /**
+   * Deletes a chat for the visitor who had it (consent withdrawn, or a new chat in the app): the
+   * chat and its messages go, reports on its answers with them; feedback sent from it stays,
+   * unlinked. False, and nothing deleted, when no chat with that id belongs to the session.
+   *
+   * The chat is first added to the day statistics, as the prune does, so a deleted chat still
+   * counts in chats, tokens and cost; those rows hold numbers only. That step fails soft: when the
+   * sums cannot be written, the chat is deleted all the same, because the visitor asked for the
+   * text to go and a statistic is no reason to keep it.
+   */
+  async deleteOwnConversation(
+    id: string,
+    sessionHash: string,
+  ): Promise<boolean> {
+    if (!(await this.conversations.existsBy({ id, sessionHash }))) return false;
+    try {
+      await this.conversations.manager.transaction(async (manager) => {
+        // Waits for a prune or a second delete holding the row; whoever is second finds none.
+        const rows: Array<{ id: string }> = await manager.query(
+          `SELECT id FROM assistant_conversations
+            WHERE id = $1::uuid AND "sessionHash" = $2
+              FOR UPDATE`,
+          [id, sessionHash],
+        );
+        if (rows.length > 0) await this.countAndDelete(manager, [id]);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Day statistics not kept for a chat its visitor deleted: ${message}`,
+      );
+    }
+    // Unlinks the feedback, and deletes the chat when the counted delete above did not.
+    await this.deleteConversation(id);
+    return true;
+  }
+
+  /**
    * Deletes chats past the retention, ended ones included; their messages go with them (the
    * foreign key cascades) and feedback keeps its link as it is. Each batch first adds what it
    * deletes to `assistant_day_stats`, and its tool calls to `assistant_tool_day_stats`, in the
@@ -623,80 +702,92 @@ export class AssistantRecordsService {
           );
           if (rows.length === 0) return 0;
           const ids = rows.map((row) => row.id);
-          await manager.query(
-            `INSERT INTO assistant_day_stats (day, chats, messages, tokens, "costUsd")
-             SELECT ("createdAt" AT TIME ZONE 'UTC')::date, count(*),
-                    coalesce(sum("messageCount"), 0), coalesce(sum("totalTokens"), 0),
-                    coalesce(sum("costUsd"), 0)
-               FROM assistant_conversations WHERE id = ANY($1::uuid[])
-              GROUP BY 1
-             ON CONFLICT (day) DO UPDATE SET
-               chats = assistant_day_stats.chats + EXCLUDED.chats,
-               messages = assistant_day_stats.messages + EXCLUDED.messages,
-               tokens = assistant_day_stats.tokens + EXCLUDED.tokens,
-               "costUsd" = assistant_day_stats."costUsd" + EXCLUDED."costUsd"`,
-            [ids],
-          );
-          await manager.query(
-            `INSERT INTO assistant_usage_day_stats
-                    (day, source, "apiKeyId", chats, messages, "inputTokens", "outputTokens",
-                     "cacheReadTokens", "costUsd")
-             SELECT (c."createdAt" AT TIME ZONE 'UTC')::date, c.source,
-                    coalesce(c."apiKeyId", '${NO_API_KEY}'::uuid), count(*),
-                    coalesce(sum(c."messageCount"), 0), coalesce(sum(m.input), 0),
-                    coalesce(sum(m.output), 0), coalesce(sum(m.cache_read), 0),
-                    coalesce(sum(c."costUsd"), 0)
-               FROM assistant_conversations c ${CHAT_TOKENS}
-              WHERE c.id = ANY($1::uuid[])
-              GROUP BY 1, 2, 3
-             ON CONFLICT (day, source, "apiKeyId") DO UPDATE SET
-               chats = assistant_usage_day_stats.chats + EXCLUDED.chats,
-               messages = assistant_usage_day_stats.messages + EXCLUDED.messages,
-               "inputTokens" = assistant_usage_day_stats."inputTokens" + EXCLUDED."inputTokens",
-               "outputTokens" = assistant_usage_day_stats."outputTokens" + EXCLUDED."outputTokens",
-               "cacheReadTokens" =
-                 assistant_usage_day_stats."cacheReadTokens" + EXCLUDED."cacheReadTokens",
-               "costUsd" = assistant_usage_day_stats."costUsd" + EXCLUDED."costUsd"`,
-            [ids],
-          );
-          await manager.query(
-            `INSERT INTO assistant_day_stats (day, up, down)
-             SELECT ("createdAt" AT TIME ZONE 'UTC')::date,
-                    count(*) FILTER (WHERE rating = 1), count(*) FILTER (WHERE rating = -1)
-               FROM assistant_messages
-              WHERE "conversationId" = ANY($1::uuid[]) AND rating IS NOT NULL
-              GROUP BY 1
-             ON CONFLICT (day) DO UPDATE SET
-               up = assistant_day_stats.up + EXCLUDED.up,
-               down = assistant_day_stats.down + EXCLUDED.down`,
-            [ids],
-          );
-          await manager.query(
-            `INSERT INTO assistant_tool_day_stats
-                    (day, prompt_version, tool, outcome, region, calls)
-             SELECT (m."createdAt" AT TIME ZONE 'UTC')::date,
-                    coalesce(m."promptVersion", 0),
-                    CASE WHEN c->>'name' = ANY($2::text[]) THEN c->>'name' ELSE '(unknown)' END,
-                    ${TOOL_OUTCOME_SQL},
-                    CASE WHEN c->'input'->>'region' = ANY($3::text[])
-                         THEN c->'input'->>'region' ELSE '' END,
-                    count(*)
-               ${LIVE_CALLS} AND m."conversationId" = ANY($1::uuid[])
-              GROUP BY 1, 2, 3, 4, 5
-             ON CONFLICT (day, prompt_version, tool, outcome, region) DO UPDATE SET
-               calls = assistant_tool_day_stats.calls + EXCLUDED.calls`,
-            [ids, this.toolNames, this.regionSlugs],
-          );
-          await manager.query(
-            `DELETE FROM assistant_conversations WHERE id = ANY($1::uuid[])`,
-            [ids],
-          );
+          await this.countAndDelete(manager, ids);
           return ids.length;
         },
       );
       removed += batch;
       if (batch < PRUNE_BATCH) return removed;
     }
+  }
+
+  /**
+   * Adds the chats `ids` to the day statistics (chats, messages, tokens, cost, ratings, tool
+   * calls: numbers only) and deletes them, in the caller's transaction, so no chat is lost from
+   * the statistics or counted twice.
+   */
+  private async countAndDelete(
+    manager: EntityManager,
+    ids: string[],
+  ): Promise<void> {
+    await manager.query(
+      `INSERT INTO assistant_day_stats (day, chats, messages, tokens, "costUsd")
+       SELECT ("createdAt" AT TIME ZONE 'UTC')::date, count(*),
+              coalesce(sum("messageCount"), 0), coalesce(sum("totalTokens"), 0),
+              coalesce(sum("costUsd"), 0)
+         FROM assistant_conversations WHERE id = ANY($1::uuid[])
+        GROUP BY 1
+       ON CONFLICT (day) DO UPDATE SET
+         chats = assistant_day_stats.chats + EXCLUDED.chats,
+         messages = assistant_day_stats.messages + EXCLUDED.messages,
+         tokens = assistant_day_stats.tokens + EXCLUDED.tokens,
+         "costUsd" = assistant_day_stats."costUsd" + EXCLUDED."costUsd"`,
+      [ids],
+    );
+    await manager.query(
+      `INSERT INTO assistant_usage_day_stats
+              (day, source, "apiKeyId", chats, messages, "inputTokens", "outputTokens",
+               "cacheReadTokens", "costUsd")
+       SELECT (c."createdAt" AT TIME ZONE 'UTC')::date, c.source,
+              coalesce(c."apiKeyId", '${NO_API_KEY}'::uuid), count(*),
+              coalesce(sum(c."messageCount"), 0), coalesce(sum(m.input), 0),
+              coalesce(sum(m.output), 0), coalesce(sum(m.cache_read), 0),
+              coalesce(sum(c."costUsd"), 0)
+         FROM assistant_conversations c ${CHAT_TOKENS}
+        WHERE c.id = ANY($1::uuid[])
+        GROUP BY 1, 2, 3
+       ON CONFLICT (day, source, "apiKeyId") DO UPDATE SET
+         chats = assistant_usage_day_stats.chats + EXCLUDED.chats,
+         messages = assistant_usage_day_stats.messages + EXCLUDED.messages,
+         "inputTokens" = assistant_usage_day_stats."inputTokens" + EXCLUDED."inputTokens",
+         "outputTokens" = assistant_usage_day_stats."outputTokens" + EXCLUDED."outputTokens",
+         "cacheReadTokens" =
+           assistant_usage_day_stats."cacheReadTokens" + EXCLUDED."cacheReadTokens",
+         "costUsd" = assistant_usage_day_stats."costUsd" + EXCLUDED."costUsd"`,
+      [ids],
+    );
+    await manager.query(
+      `INSERT INTO assistant_day_stats (day, up, down)
+       SELECT ("createdAt" AT TIME ZONE 'UTC')::date,
+              count(*) FILTER (WHERE rating = 1), count(*) FILTER (WHERE rating = -1)
+         FROM assistant_messages
+        WHERE "conversationId" = ANY($1::uuid[]) AND rating IS NOT NULL
+        GROUP BY 1
+       ON CONFLICT (day) DO UPDATE SET
+         up = assistant_day_stats.up + EXCLUDED.up,
+         down = assistant_day_stats.down + EXCLUDED.down`,
+      [ids],
+    );
+    await manager.query(
+      `INSERT INTO assistant_tool_day_stats
+              (day, prompt_version, tool, outcome, region, calls)
+       SELECT (m."createdAt" AT TIME ZONE 'UTC')::date,
+              coalesce(m."promptVersion", 0),
+              CASE WHEN c->>'name' = ANY($2::text[]) THEN c->>'name' ELSE '(unknown)' END,
+              ${TOOL_OUTCOME_SQL},
+              CASE WHEN c->'input'->>'region' = ANY($3::text[])
+                   THEN c->'input'->>'region' ELSE '' END,
+              count(*)
+         ${LIVE_CALLS} AND m."conversationId" = ANY($1::uuid[])
+        GROUP BY 1, 2, 3, 4, 5
+       ON CONFLICT (day, prompt_version, tool, outcome, region) DO UPDATE SET
+         calls = assistant_tool_day_stats.calls + EXCLUDED.calls`,
+      [ids, this.toolNames, this.regionSlugs],
+    );
+    await manager.query(
+      `DELETE FROM assistant_conversations WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
   }
 
   /**

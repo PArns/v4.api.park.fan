@@ -1,11 +1,15 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
+  Headers,
   HttpCode,
   HttpException,
   HttpStatus,
+  Param,
+  ParseUUIDPipe,
   Post,
   Req,
   Res,
@@ -33,6 +37,7 @@ import {
   chatRequestSchema,
   feedbackRequestSchema,
   ratingRequestSchema,
+  reportRequestSchema,
   sessionRequestSchema,
 } from "./assistant.schemas";
 import { OpenRoute } from "../api-keys/api-permission.decorator";
@@ -99,7 +104,7 @@ export class AssistantController {
     summary: "Trade a solved Turnstile challenge for a session token",
     description:
       "The token is valid for two hours and counts the limits per session; " +
-      "chat, rating and feedback refuse a request without it (401). " +
+      "chat, rating, report, feedback and deleting a chat refuse a request without it (401). " +
       "Without `turnstileToken` the request must present a data key carrying " +
       "`assistant.chat` in `X-API-Key` (park.fan's native app): 401 without one, " +
       "403 `api-key-permission-missing` for a key without the permission.",
@@ -298,6 +303,60 @@ export class AssistantController {
     if (!rated) throw new HttpException("No such answer", HttpStatus.NOT_FOUND);
   }
 
+  @Post("report")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "Report one answer (wrong, inappropriate, other)",
+    description:
+      "Stored at the answer for the admin, with an optional note of at most 500 characters; a " +
+      "second report of the same answer replaces the first. 401 `challenge` without a valid " +
+      "session token, 404 when the answer is not Parky's, not in that chat, or the chat is " +
+      "another session's. Five an hour per session.",
+  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
+  async report(@Body() body: unknown): Promise<void> {
+    const input = parse(reportRequestSchema, body);
+    const session = this.requireSession(input.sessionToken);
+    refuseOverLimit(await this.rateLimit.check({ session }, "report"));
+    const reported = await this.records.report(
+      input.conversationId,
+      input.messageId,
+      input.reason,
+      input.note || null,
+      hashRateLimitKey(session),
+    );
+    if (!reported) {
+      throw new HttpException("No such answer", HttpStatus.NOT_FOUND);
+    }
+  }
+
+  @Delete("conversations/:id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Header("Cache-Control", "no-store")
+  @ApiOperation({
+    summary: "Delete one's own chat from the server",
+    description:
+      "The session token of the session that had the chat goes in `Authorization: Bearer " +
+      "<sessionToken>`; an app session needs nothing else. The chat goes with its messages and " +
+      "the reports on them; the day statistics keep its numbers, no text. 204 says no chat with " +
+      "this id belongs to this session (any more): the same answer for a chat just deleted, " +
+      "deleted before, never there, or another session's, which is left alone. 401 `challenge` " +
+      "without a valid, unexpired token.",
+  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
+  async deleteConversation(
+    @Param("id", new ParseUUIDPipe()) id: string,
+    @Headers("authorization") authorization: string | undefined,
+  ): Promise<void> {
+    const session = this.requireSession(
+      /^Bearer +(\S+)$/i.exec(authorization ?? "")?.[1],
+    );
+    refuseOverLimit(
+      await this.rateLimit.check({ session }, "conversationDelete"),
+    );
+    await this.records.deleteOwnConversation(id, hashRateLimitKey(session));
+  }
+
   @Post("feedback")
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: "Send feedback about the site" })
@@ -339,7 +398,7 @@ export class AssistantController {
       .json({ statusCode: 422, message: "unclear" });
   }
 
-  private requireSession(token: string): string {
+  private requireSession(token: string | undefined): string {
     const session = this.challenge.session(token);
     if (!session) throw new HttpException("challenge", HttpStatus.UNAUTHORIZED);
     return session;

@@ -26,6 +26,10 @@ const BUCKETS = {
   // Per address, the form and Parky together: sessions can be farmed, ten an hour, the inbox not.
   feedbackAddress: { max: 20, windowSeconds: 24 * 60 * 60 },
   rating: { max: 60, windowSeconds: 60 * 60 },
+  // "Antwort melden": its own share, so a report never uses up the feedback form's.
+  report: { max: 5, windowSeconds: 60 * 60 },
+  // A visitor deleting their own chats: more than a session can open in an hour's bursts.
+  conversationDelete: { max: 60, windowSeconds: 60 * 60 },
   session: { max: 10, windowSeconds: 60 * 60 },
   // Per data key, the native app's sessions without Turnstile: every install shares the one key,
   // so this is a ceiling for the whole app, a circuit breaker should the key leak.

@@ -17,6 +17,7 @@ export const assistantConversationTool = defineMcpTool({
     "One chat with Parky in full, in order: every question and answer with its time, the tools " +
     "Parky called for an answer with their input (error true when one failed), tokens, cost and " +
     "the version of Parky's prompt per answer, the thumbs up (1) or down (-1) a visitor gave it, " +
+    "a visitor's report of it (reason wrong, inappropriate or other, with their note), " +
     "and the feedback sent from the " +
     "chat. Ids come from assistant_conversations or a feedback's conversationId; adminUrl opens " +
     "the chat in the admin. Tool results are not stored, only the calls. " +

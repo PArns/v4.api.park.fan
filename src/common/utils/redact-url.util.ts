@@ -48,6 +48,14 @@ const REDACTED_PARAMS = new Set([
   // instead of the caller's own. It is still a visitor's address, and the
   // privacy policy says no log line carries one.
   "ip",
+  // Where a visitor stands, on `/v1/discovery/nearby` and `/v1/favorites`. Not an address, but a
+  // position: park.fan's app tells its users the server keeps none (PAR-1430).
+  "lat",
+  "lng",
+  "lon",
+  "long",
+  "latitude",
+  "longitude",
 ]);
 
 /**
@@ -65,7 +73,8 @@ export function redactUrl(rawUrl: string): string {
   const params = new URLSearchParams(url.slice(cut + 1));
   let touched = false;
   for (const key of [...params.keys()]) {
-    if (REDACTED_PARAMS.has(key.toLowerCase())) {
+    // `lat[]=` and `lat[0]=` are `lat` to Express's query parser, so they are here too.
+    if (REDACTED_PARAMS.has(key.toLowerCase().replace(/\[.*$/, ""))) {
       params.set(key, "***");
       touched = true;
     }

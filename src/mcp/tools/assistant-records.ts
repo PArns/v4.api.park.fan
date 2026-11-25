@@ -25,12 +25,27 @@ export function chatSummary(chat: AssistantConversation) {
     rating: chat.rating,
     // Absent for chats from before the version was stored.
     ...(chat.promptVersion !== null && { promptVersion: chat.promptVersion }),
+    // Absent unless a visitor reported one of its answers ("Antwort melden").
+    ...(chat.reportedAt && { reportedAt: chat.reportedAt }),
     // Absent unless Parky closed the chat for abuse.
     ...(chat.endedAt && {
       endedByParky: { at: chat.endedAt, reason: chat.endedReason },
     }),
     adminUrl: adminConversationUrl(chat.id),
   };
+}
+
+/** A visitor's report of an answer: the reason, their note and when; nothing when not reported. */
+function messageReport(message: AssistantMessage) {
+  return message.reportedAt
+    ? {
+        report: {
+          reason: message.reportReason,
+          ...(message.reportNote && { note: message.reportNote }),
+          at: message.reportedAt,
+        },
+      }
+    : {};
 }
 
 /** One question or answer, with what Parky looked up for it. */
@@ -59,6 +74,7 @@ export function chatMessage(message: AssistantMessage) {
       }),
     }),
     ...(message.rating !== null && { rating: message.rating }),
+    ...messageReport(message),
   };
 }
 
@@ -83,6 +99,7 @@ export function transcriptMessage(message: AssistantMessage) {
         promptVersion: message.promptVersion,
       }),
     ...(message.rating !== null && { rating: message.rating }),
+    ...messageReport(message),
   };
 }
 

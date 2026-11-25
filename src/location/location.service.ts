@@ -111,19 +111,8 @@ export class LocationService {
     const nearbyPark = await this.findNearestPark(userLocation, radiusInMeters);
 
     if (nearbyPark) {
-      // User is in a park - return rides
-      // Calculate distance for logging
-      const parkDistance = calculateHaversineDistance(
-        userLocation,
-        {
-          latitude: Number(nearbyPark.latitude),
-          longitude: Number(nearbyPark.longitude),
-        },
-        "m",
-      );
-      this.logger.log(
-        `User is in park: ${nearbyPark.name} (${Math.round(parkDistance)}m away)`,
-      );
+      // User is in a park - return rides. No log line: where a visitor stands is not for the log
+      // (docs/rules/no-address-in-logs.md).
       const ridesData = await this.findRidesInPark(nearbyPark.id, userLocation);
 
       // Count toward popularity so prewarm prioritizes this park.
@@ -139,9 +128,6 @@ export class LocationService {
       };
     } else {
       // User is outside - return nearby parks
-      this.logger.log(
-        `User is outside all parks, finding nearest ${limit} parks`,
-      );
       const parksData = await this.findNearbyParks(userLocation, limit);
 
       // Count returned parks toward popularity so prewarm prioritizes them.

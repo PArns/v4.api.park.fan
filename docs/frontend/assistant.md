@@ -14,6 +14,8 @@ park.fan's `docs/features/assistant.md`.
 | `POST /v1/assistant/session` without a token        | park.fan's app    | a data key with `assistant.chat` in, a session token out        |
 | `POST /v1/assistant/chat`                           | browser           | one question, answered as server-sent events                    |
 | `POST /v1/assistant/rating`                         | browser           | 👍/👎 for one answer                                            |
+| `POST /v1/assistant/report`                         | browser, app      | "Antwort melden": one answer, a reason, a note                  |
+| `DELETE /v1/assistant/conversations/:id`            | browser, app      | delete one's own chat from the server                           |
 | `POST /v1/assistant/feedback`                       | browser           | feedback about the site                                         |
 | `GET /v1/parks/…/parky-tip`                         | park.fan's server | Parky's one sentence on a calendar day (see below)              |
 | `GET/PUT /v1/admin/assistant/settings`              | admin, PUT owner  | switch, share, daily token budget, key (stored, never shown)    |
@@ -27,7 +29,7 @@ park.fan's `docs/features/assistant.md`.
 
 ## The challenge
 
-Chat, rating and feedback need a `sessionToken`, or they answer 401. The browser gets one from
+Chat, rating, report, feedback and deleting a chat need a `sessionToken`, or they answer 401. The browser gets one from
 `POST session` with a Turnstile token solved for the action `assistant-session`; the API checks it
 with Cloudflare, including the action. The token (`assistant-session.util.ts`) is signed with a key derived from `ASSISTANT_SECRET_KEY` and valid for two hours. It is not bound to an address, which a phone changes between Wi-Fi and mobile data: the limits count per session, and only issuing sessions counts per address. Without
 `TURNSTILE_SECRET_KEY` production issues no session at all; elsewhere any token passes, for local
@@ -1302,6 +1304,81 @@ behind a data key like `/calendar`, answers the calendar's day dialog:
   every forecast route unless `FORECAST_SHARED_CACHE=vary`. Its tokens count into the daily budget;
   no chat row is stored.
 
+## Reporting an answer and deleting a chat
+
+Both act on a chat for the session that started it and for nobody else, web or app alike: an app
+session needs its session token and no data key, since the token already says which key opened it.
+
+### `POST /v1/assistant/report`
+
+"Antwort melden" in the app. Body, JSON, no other key allowed:
+
+```jsonc
+{
+  "conversationId": "<uuid>",   // from the chat's `start` event
+  "messageId": "<uuid>",        // the answer's id, from its `done` event
+  "reason": "wrong",            // "wrong" | "inappropriate" | "other"
+  "note": "…",                  // optional, trimmed, at most 500 characters
+  "sessionToken": "s1.…"
+}
+```
+
+| Answer | When | Body |
+| ------ | ---- | ---- |
+| 204 | stored | none |
+| 400 | a field is missing (`sessionToken` too), not a UUID, an unknown `reason`, a `note` over 500 characters, an extra key | `{ statusCode: 400, message: "<which fields>" }` |
+| 401 | the token is not ours, or older than two hours | `{ statusCode: 401, message: "challenge" }` |
+| 404 | the answer is not Parky's (a question), not in that chat, the chat is another session's or is gone | `{ statusCode: 404, message: "No such answer" }` |
+| 429 | more than 5 reports in an hour on this session (`report`, apart from the feedback's 5) | `{ statusCode: 429, message: "Too many requests", retryAfter }` and `Retry-After` |
+
+The report is stored at the answer, in three nullable columns of `assistant_messages`
+(`reportReason`, `reportNote`, `reportedAt`), and the chat gets `reportedAt` so the list finds it.
+A second report of the same answer replaces the first. `GET /v1/admin/assistant/conversations/:id`
+carries the three fields on each message, `GET /v1/admin/assistant/conversations?reported=true`
+(or `false`) filters the list, whose rows carry the chat's `reportedAt`, and the MCP's
+`assistant_conversations` (`reported`), `assistant_conversation` and `assistant_transcripts` show
+it (`report: { reason, note?, at }` on the answer).
+
+A report lives as long as its chat: 7 days from the chat's start, or until the visitor deletes
+the chat (below), whichever comes first. Nothing keeps a reported chat longer, because the app's
+consent text promises the 7 days; the admin's list filter is what makes a report findable in that
+time. Builds of the app from before this endpoint send the report as feedback instead
+(`POST feedback` with a message starting `[app-report reason=… message=<messageId>]`); that still
+works and lands in the feedback inbox, which is kept until deleted by hand.
+
+### `DELETE /v1/assistant/conversations/:id`
+
+Deletes the server's copy of a chat: when a visitor withdraws consent, or starts a new chat in the
+app. The session token goes in the header, since a `DELETE` carries no body:
+
+```
+DELETE /v1/assistant/conversations/<uuid>
+Authorization: Bearer <sessionToken>
+```
+
+| Answer | When | Body |
+| ------ | ---- | ---- |
+| 204 | no chat with this id belongs to this session (any more) | none |
+| 400 | `:id` is not a UUID | the error envelope |
+| 401 | no `Authorization: Bearer` header, a token that is not ours, or one older than two hours | `{ statusCode: 401, message: "challenge" }` |
+| 429 | more than 60 deletes in an hour on this session (`conversationDelete`) | as above |
+
+204 is the answer for a chat just deleted, one deleted before, one that never existed and one that
+is another session's, which is left untouched: the call is idempotent and says nothing about
+whether an id exists. Nothing is deleted without a valid token of the session that started the
+chat. **A token is valid for two hours**, so the app deletes while it holds the chat's token; a
+chat whose session has run out cannot be continued or deleted by anyone and goes with the nightly
+prune after 7 days.
+
+What goes: the chat's row and, through the foreign key's cascade, every question and answer with
+its tool calls, ratings and reports. What stays: the day's numbers. The chat is first added to the
+three day statistics the prune writes (chats, messages, tokens, cost, thumbs, tool calls per day:
+counts only, no text, no visitor key), in one transaction with the delete, so a deleted chat still
+counts in the cost. If those sums cannot be written the chat is deleted all the same
+(`deleteOwnConversation`). Feedback the visitor sent from the chat is their message to the site
+and stays, without its link to the chat. An answer still streaming when its chat is deleted cannot
+be stored afterwards (the foreign key refuses it).
+
 ## Limits and cost
 
 Per session (`AssistantRateLimitService`): 3 questions per 30 seconds (room for a quick "yes" to
@@ -1310,7 +1387,7 @@ Parky offered under his last answer (`answersOffer`: the question's text is one 
 `suggest_replies`, compared without case and extra spaces) does not count in the 30-second window,
 since an interview answers chip after chip within seconds; it counts in the other two. A question
 that opens a chat counts in all three at once, a later one in the short window only after the
-history is read, 5 feedback messages and 60 ratings per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed, and 20 feedback messages a day, form and chat together, so farmed sessions cannot fill the inbox either. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
+history is read, 5 feedback messages, 5 reports of an answer, 60 ratings and 60 deleted chats per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed, and 20 feedback messages a day, form and chat together, so farmed sessions cannot fill the inbox either. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
 spent, the config says off and new chats get a 503. Cache reads cost a tenth and are left out of
 both counts. A stream cut short is counted from its events, so dropping the connection is no way
 around the budget. Each answer stores its tokens and cost at Haiku 5.5's prices.
@@ -1334,8 +1411,9 @@ makes the stored key unreadable: enter it again.
 
 Chats (`assistant_conversations`, `assistant_messages`) keep no address. `visitorKey` is a hash of
 the address with the day and the master key, which tells one visitor's chats of a day apart and
-nothing more. They are deleted after 7 days (`CONVERSATION_RETENTION_DAYS`), ended chats included,
-by the nightly `assistant` queue job (`prune-conversations`, 04:50), in batches of 2,000. Each
+nothing more. They are deleted after 7 days (`CONVERSATION_RETENTION_DAYS`), ended and reported
+chats included, or earlier by the visitor
+([deleting a chat](#delete-v1assistantconversationsid)), by the nightly `assistant` queue job (`prune-conversations`, 04:50), in batches of 2,000. Each
 batch first adds what it deletes to `assistant_day_stats`: per UTC day only counts of chats,
 messages, tokens, cost and thumbs up and down, no text and no visitor key, so `GET
 /v1/admin/assistant/stats` still covers 30 days (live rows plus those sums). The same transaction

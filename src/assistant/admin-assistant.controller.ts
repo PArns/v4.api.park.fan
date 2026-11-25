@@ -49,6 +49,11 @@ const listQuery = z.object({
   promptVersion: z.coerce.number().int().min(1).max(32767).optional(),
   status: z.enum(FEEDBACK_STATUSES).optional(),
   source: z.enum(["web", "app"]).optional(),
+  /** `true`: only chats with a reported answer; `false`: only those without. */
+  reported: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
 });
 
 /** The token statistic's window: UTC days back from today, today included. */
@@ -156,15 +161,24 @@ export class AdminAssistantController {
   }
 
   @Get("conversations")
-  @ApiOperation({ summary: "Stored chats, newest first" })
+  @ApiOperation({
+    summary: "Stored chats, newest first",
+    description:
+      "`reported=true` keeps the chats with an answer a visitor reported (`reportedAt` on the " +
+      "row); the reason and note are on the answer in the chat's detail.",
+  })
   conversations(@Query() query: unknown) {
-    const { page, rating, q, promptVersion, source } = parse(listQuery, query);
+    const { page, rating, q, promptVersion, source, reported } = parse(
+      listQuery,
+      query,
+    );
     return this.records.listConversations({
       page,
       rating,
       q,
       promptVersion,
       source,
+      reported,
     });
   }
 

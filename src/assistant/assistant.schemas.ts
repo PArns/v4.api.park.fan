@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CLOCK_PATTERN } from "../common/utils/date.util";
 import { ASSISTANT_LOCALES } from "./assistant-locales";
+import { ASSISTANT_REPORT_REASONS } from "./entities/assistant-message.entity";
 import {
   RIDE_ALERT_THRESHOLD_MAX,
   RIDE_ALERT_THRESHOLD_MIN,
@@ -387,6 +388,15 @@ export const ratingRequestSchema = z.strictObject({
   conversationId: z.uuid(),
   messageId: z.uuid(),
   rating: z.union([z.literal(1), z.literal(-1)]),
+  sessionToken,
+});
+
+/** "Antwort melden": one of Parky's answers, a reason, and a note of at most 500 characters. */
+export const reportRequestSchema = z.strictObject({
+  conversationId: z.uuid(),
+  messageId: z.uuid(),
+  reason: z.enum(ASSISTANT_REPORT_REASONS),
+  note: z.string().trim().max(500).optional(),
   sessionToken,
 });
 

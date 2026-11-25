@@ -8,6 +8,7 @@ import {
 import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { PopularityService } from "../popularity.service";
+import { redactUrl } from "../../common/utils/redact-url.util";
 
 /**
  * Popularity Interceptor
@@ -36,7 +37,9 @@ export class PopularityInterceptor implements NestInterceptor {
         // Track after successful response; tracking failures must never
         // affect the response, but should still be visible in debug logs.
         this.trackRequest(url, params).catch((err) =>
-          this.logger.debug(`Popularity tracking failed for ${url}: ${err}`),
+          this.logger.debug(
+            `Popularity tracking failed for ${redactUrl(url)}: ${err}`,
+          ),
         );
       }),
     );

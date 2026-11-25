@@ -22,6 +22,14 @@ export const ASSISTANT_TOOL_ERROR_KINDS = [
 export type AssistantToolErrorKind =
   (typeof ASSISTANT_TOOL_ERROR_KINDS)[number];
 
+/** Why a visitor reported an answer. */
+export const ASSISTANT_REPORT_REASONS = [
+  "wrong",
+  "inappropriate",
+  "other",
+] as const;
+export type AssistantReportReason = (typeof ASSISTANT_REPORT_REASONS)[number];
+
 /** A tool call of one answer, as the admin shows it. */
 export interface AssistantToolCall {
   name: string;
@@ -75,6 +83,20 @@ export class AssistantMessage {
   /** Thumbs up (1) or down (−1) from the visitor; null when not rated. */
   @Column({ type: "smallint", nullable: true })
   rating: number | null;
+
+  /**
+   * A visitor reported this answer ("Antwort melden", `POST /v1/assistant/report`): why, their
+   * optional note, and when. All null on an answer nobody reported; a second report of the same
+   * answer replaces the first. Goes with the chat after `CONVERSATION_RETENTION_DAYS`.
+   */
+  @Column({ type: "varchar", length: 16, nullable: true })
+  reportReason: AssistantReportReason | null;
+
+  @Column({ type: "varchar", length: 500, nullable: true })
+  reportNote: string | null;
+
+  @Column({ type: "timestamptz", nullable: true })
+  reportedAt: Date | null;
 
   /** The `SYSTEM_PROMPT_VERSION` an answer was written with; null on questions and older answers. */
   @Column({ type: "smallint", nullable: true })

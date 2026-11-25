@@ -91,6 +91,16 @@ describe("LoggingInterceptor", () => {
     expect(written).not.toContain("203.0.113");
   });
 
+  it("logs a failed nearby request without the visitor's position", async () => {
+    const written = await line(
+      "/v1/discovery/nearby?lat=50.7996&lng=6.8793&radius=1000",
+      FULL,
+      400,
+    );
+    expect(written).toContain("/v1/discovery/nearby?lat=***&lng=***");
+    expect(written).not.toMatch(/50\.7996|6\.8793/);
+  });
+
   it("logs a visitor's counter requests without any address, as before", async () => {
     expect(await line("/v1/page-views", FULL, 400)).not.toContain("203.0.113");
     expect(await line("/v1/analytics/collect", FULL, 400)).not.toContain(

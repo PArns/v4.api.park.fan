@@ -16,6 +16,10 @@ writing a `logger` call, a `logToFile` record or a request filter that touches t
   `admin_users.last_login_ip` and the session's address.
 - **The URL is redacted before it is logged** (`redactUrl`): the query parameter `ip`, which the
   location and favourites routes take to look up another address, is `***` like a secret is.
+- **So is where a visitor stands.** `lat`, `lng`, `lon`, `long`, `latitude` and `longitude` are
+  `***` in every logged URL, in any casing and as `lat[]=`; no log line names a position, a
+  distance from a park or the park a visitor stands in (PAR-1430). See
+  [what is kept of a position](#what-is-kept-of-a-position).
 - **Bound parameters are cut too.** The slow-query file and the error line of a failed statement
   write the parameters; `withoutAddresses` (`typeorm-slow-query-logger.ts`) turns any address among
   them into its network. A statement that binds a visitor's address does not exist, and the audit
@@ -41,7 +45,22 @@ writing a `logger` call, a `logToFile` record or a request filter that touches t
 - `logging.interceptor.spec.ts`, `http-exception.filter.spec.ts`, `redact-url.util.spec.ts` and
   `typeorm-slow-query-logger.spec.ts` pin each path with a full address going in.
 
-## Known limit
+## What is kept of a position
 
-A request's coordinates (`lat`, `lng` on the location routes) stay in the URL of an error line. They
-are not an address, but they say where a reader is; nothing redacts them yet.
+Two routes take a visitor's coordinates, both in the query string: `GET /v1/discovery/nearby` and
+`GET /v1/favorites`. Parky's chat takes them in its body.
+
+| Where | What the API keeps |
+| --- | --- |
+| request line of a slow (> 1 s) or failed request, the error file (`api-errors`), the error body's `path` | the URL with `lat=***&lng=***` |
+| `/v1/discovery/nearby` | nothing: no log line, no table, no Redis entry per caller. The parks it answers with each get one anonymous hit in the popularity counter (a park id and a count) |
+| `/v1/favorites` | the answer in Redis for 5 minutes, under a key that holds the ids asked for and the position rounded to three decimals (about 110 m), and the answer's own `userLocation`. No table, no log line |
+| `POST /v1/assistant/chat` `location` | rounded to two decimals (about a kilometre) on arrival and used for that answer (`find_parks_nearby`); the coordinates are not written to the chat's rows or a log. What Parky then says ("you are in park X, ride Y is 200 m away") is the answer's text, kept 7 days with the chat |
+| the slow-query file | the statement and its bound parameters; no statement binds a visitor's position (both routes measure distance in memory) |
+
+Without `lat`/`lng` both routes look the caller's address up in the local GeoLite2 file and keep
+neither the address nor the result.
+
+Outside this API, and not visible from this repository: the reverse proxy's and Cloudflare's own
+request logs see the full query string, coordinates included
+([container logs](../deployment/coolify.md#container-logs)).
