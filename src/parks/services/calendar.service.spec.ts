@@ -691,6 +691,26 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
       { minDate: null, maxDate: null },
     );
 
+  it("serves no hours on a cached day that is not OPERATING (PAR-1425)", () => {
+    const hours = {
+      openingTime: "2026-11-25T02:00:00.000Z",
+      closingTime: "2026-11-25T07:00:00.000Z",
+      type: "OPERATING",
+      isInferred: true,
+    };
+    const result = assemble(
+      [
+        day("2026-11-24", { hours }),
+        day("2026-11-25", { status: "CLOSED", crowdLevel: "closed", hours }),
+      ],
+      "2026-11-24",
+      "2026-11-25",
+      "2026-11-25",
+    );
+    expect(result.days[0].hours).toEqual(hours);
+    expect(result.days[1].hours).toBeUndefined();
+  });
+
   it("keeps todayCrowdLevel on the day that is actually today", () => {
     const days = [
       day("2026-08-17", {
@@ -1383,6 +1403,90 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
       );
 
       expect((await buildDay(day)).status).toBe("CLOSED");
+    });
+  });
+
+  describe("a CLOSED day with ride reports through the night (PAR-1425)", () => {
+    const dayAt = (offset: number) => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + offset);
+      return d.toISOString().slice(0, 10);
+    };
+    /** What a feed stuck on 5 minutes derives: 02:00-07:00, no operating day. */
+    const nightHours = (day: string) =>
+      new Map([
+        [
+          day,
+          {
+            openingTime: `${day}T02:00:00.000Z`,
+            closingTime: `${day}T07:00:00.000Z`,
+          },
+        ],
+      ]);
+
+    const buildDay = async (day: string, scheduleType: ScheduleType | null) => {
+      const parks = (service as any).parksService;
+      parks.getSchedule.mockResolvedValue(
+        scheduleType
+          ? [{ date: day, scheduleType, openingTime: null, closingTime: null }]
+          : [],
+      );
+      parks.getOperatingDateRange.mockResolvedValue({
+        minDate: "2026-01-01",
+        maxDate: "2099-12-31",
+      });
+      parks.getDerivedHistoricalHours.mockResolvedValue(nightHours(day));
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: "UTC",
+      });
+      const response = await service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "UTC",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+      return response.days[0];
+    };
+
+    it("gives a CLOSED today no hours, however many rides reported", async () => {
+      const built = await buildDay(dayAt(0), ScheduleType.CLOSED);
+      expect(built.status).toBe("CLOSED");
+      expect(built.hours).toBeUndefined();
+      expect(built.crowdLevel).toBe("closed");
+    });
+
+    it("gives a past CLOSED day without a measured verdict no hours", async () => {
+      const built = await buildDay(dayAt(-3), ScheduleType.CLOSED);
+      expect(built.status).toBe("CLOSED");
+      expect(built.hours).toBeUndefined();
+    });
+
+    it("gives no hours to a day the schedule leaves UNKNOWN at a park that publishes one", async () => {
+      const built = await buildDay(dayAt(0), ScheduleType.UNKNOWN);
+      expect(built.status).not.toBe("OPERATING");
+      expect(built.hours).toBeUndefined();
+    });
+
+    it("keeps the reconstructed hours on a day the measurement opened: status and hours agree", async () => {
+      const day = dayAt(-3);
+      (
+        service as any
+      ).parkDayOperationService.getMeasuredOperationDays.mockResolvedValue(
+        new Set([day]),
+      );
+      const built = await buildDay(day, ScheduleType.CLOSED);
+      expect(built.status).toBe("OPERATING");
+      expect(built.hours).toMatchObject({
+        type: "OPERATING",
+        isInferred: true,
+      });
     });
   });
 

@@ -74,6 +74,10 @@ import {
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
 
+import {
+  MEASURED_OPERATION_DEAD_HOURS_FROM,
+  MEASURED_OPERATION_DEAD_HOURS_TO,
+} from "./utils/measured-operation.gate";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { NegativeCache } from "../common/utils/negative-cache.util";
@@ -189,6 +193,14 @@ function scheduleRowsFromCache(parsed: unknown): ScheduleEntry[] | null {
 function parkPairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
+
+const slotAt = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
+
+/**
+ * A 15-minute slot ("HH:MM", park-local, zero-padded so text order is clock order) outside the
+ * dead hours of the measured-operation gate: `"slot" < '02:00' OR "slot" >= '06:00'`.
+ */
+export const OUTSIDE_DEAD_HOURS_SQL = `("slot" < '${slotAt(MEASURED_OPERATION_DEAD_HOURS_FROM)}' OR "slot" >= '${slotAt(MEASURED_OPERATION_DEAD_HOURS_TO + 1)}')`;
 
 @Injectable()
 export class ParksService {
@@ -2137,6 +2149,9 @@ export class ParksService {
    * Logic:
    * - Opening: First 15min window where >= 10% of attractions (min 2, max 10) show activity, rounded down.
    * - Closing: Last 15min window with activity, rounded up.
+   * - A window in the dead hours (02:00-05:59 park-local, the measured-operation gate's own) is
+   *   never activity: no park runs then, and a feed that keeps its last waits through the night
+   *   otherwise opens the day at 03:00 (PAR-1425). A day with nothing else has no derived hours.
    */
   async getDerivedHistoricalHours(
     parkId: string,
@@ -2216,8 +2231,8 @@ export class ParksService {
       daily_bounds AS (
         SELECT
           "date",
-          MIN("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "first_slot",
-          MAX("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "last_slot"
+          MIN("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10)) AND ${OUTSIDE_DEAD_HOURS_SQL}) as "first_slot",
+          MAX("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10)) AND ${OUTSIDE_DEAD_HOURS_SQL}) as "last_slot"
         FROM activity
         GROUP BY 1
       )

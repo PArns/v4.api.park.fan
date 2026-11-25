@@ -677,6 +677,9 @@ export class CalendarService {
         // `isToday` drives the HEUTE badge and decides which day the month summary excludes
         // from its median. Written once at build time, it marks yesterday.
         isToday: d.date === today,
+        // Hours belong to an operating day only (PAR-1425); a month cached before that rule
+        // can still hold reconstructed hours on a CLOSED day.
+        hours: d.status === "OPERATING" ? d.hours : undefined,
         // A day that was future when it was cached keeps the forecast it was given. Once it
         // is past and was never OPERATING, the honest answer is "closed" — the same rule
         // buildCalendarDay applies at write time.
@@ -1134,8 +1137,11 @@ export class CalendarService {
         type: schedule.scheduleType,
         isInferred: false,
       };
-    } else if (isHistorical && derivedHours) {
-      // Use reconstructed hours for the past
+    } else if (status === "OPERATING" && isHistorical && derivedHours) {
+      // Reconstructed hours, for a day the status above calls operating and only for it
+      // (PAR-1425): ride activity alone attaches nothing to a day the schedule or a curated
+      // closure calls CLOSED, nor to a day still UNKNOWN. Before, a feed that kept reporting
+      // waits through the night put OPERATING hours of 03:00-08:00 on a CLOSED today.
       hours = {
         openingTime: derivedHours.openingTime,
         closingTime: derivedHours.closingTime,

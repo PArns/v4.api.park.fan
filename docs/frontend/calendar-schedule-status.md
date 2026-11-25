@@ -25,6 +25,9 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=
   status.
 - **`isEstimated: true`** only on past days whose status and hours were
   reconstructed from ride activity.
+- **`hours` only on an `OPERATING` day.** A `CLOSED` or `UNKNOWN` day never carries
+  them, so `hours.type` is always `OPERATING`; `isInferred: true` marks hours
+  reconstructed from ride activity.
 - **`closedBy`** names the curated `closure` season ([park seasons](park-seasons.md))
   that makes a day `CLOSED`, a confirmed or announced one running that day. It is a
   statement, so it holds past `scheduleCoverage.to` too; a day the feed calls

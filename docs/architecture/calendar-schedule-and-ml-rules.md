@@ -31,6 +31,16 @@ cannot be read, the days are built without them.
 The crowd level never changes the status. UNKNOWN means "opening hours not yet available", CLOSED means
 closed.
 
+**Hours follow the status (PAR-1425).** A day carries `hours` only when its status is `OPERATING`:
+the schedule's own (`isInferred: false`), or, on a past day or today that the rules above
+reconstructed as operating, the hours derived from ride activity (`isInferred: true`). A `CLOSED`
+or `UNKNOWN` day has none, whatever the rides reported; the cached-month read drops them too. The
+derivation (`getDerivedHistoricalHours`: the first and last 15-minute slot in which at least 10 %
+of the rides, 2 to 10, showed a wait) counts no slot between 02:00 and 05:59 park-local, the
+measured-operation gate's dead hours: a feed that keeps its last waits through the night would
+otherwise open the day at 03:00, which is what put 03:00 to 08:00 on Movie Park Germany's CLOSED
+2026-11-25.
+
 ### 1.2 Crowd level
 
 - OPERATING, and UNKNOWN in the future: `inferredCrowdLevel`. A strictly past day reads its measured

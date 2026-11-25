@@ -1,7 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { IsNull } from "typeorm";
-import { ParksService } from "./parks.service";
+import { OUTSIDE_DEAD_HOURS_SQL, ParksService } from "./parks.service";
 import { Park } from "./entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -3499,6 +3499,35 @@ describe("ParksService", () => {
       const { keptDates, today } = retractionParams();
       expect(keptDates).toContain(PAST);
       expect(PAST < today).toBe(true);
+    });
+  });
+  describe("getDerivedHistoricalHours, the dead hours (PAR-1425)", () => {
+    it("counts no slot between 02:00 and 05:59 park-local as activity, for the opening or the closing", async () => {
+      expect(OUTSIDE_DEAD_HOURS_SQL).toBe(
+        `("slot" < '02:00' OR "slot" >= '06:00')`,
+      );
+      const query = jest.fn().mockResolvedValue([]);
+      (mockScheduleRepository as any).manager = { query };
+      mockRedis.get.mockResolvedValueOnce(null);
+
+      const hours = await service.getDerivedHistoricalHours(
+        "p1",
+        "2026-11-25",
+        "2026-11-25",
+        "Europe/Berlin",
+      );
+
+      // A day whose only activity was at night has no bounds, so no row and no hours.
+      expect(hours.size).toBe(0);
+      const sql: string = query.mock.calls[0][0];
+      const bounds = sql.split("daily_bounds AS")[1];
+      expect(bounds.split(OUTSIDE_DEAD_HOURS_SQL)).toHaveLength(3);
+      expect(query.mock.calls[0][1]).toEqual([
+        "p1",
+        "2026-11-25",
+        "2026-11-25",
+        "Europe/Berlin",
+      ]);
     });
   });
 });
