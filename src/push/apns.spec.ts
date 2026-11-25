@@ -157,6 +157,7 @@ describe("APNs", () => {
     expect(pushKindOf({ tag: "rain-soon:x" })).toBe("rain-soon");
     expect(pushKindOf({ tag: "morning-plan:x" })).toBe("morning-plan");
     expect(pushKindOf({ tag: "plan-change:p:2026-10-17" })).toBe("plan-change");
+    expect(pushKindOf({ tag: "guides:freizeitpark-packliste" })).toBe("guides");
     expect(pushKindOf({ tag: "ride-alert:x" })).toBeNull();
     expect(pushKindOf({ tag: "ride-alert:x", kind: "ride-reopen" })).toBe(
       "ride-reopen",
@@ -221,6 +222,9 @@ describe("APNs", () => {
         tag: "plan-change:p:2026-10-17",
       };
       await expect(service.send(device, plan)).resolves.toBe(false);
+      // A device with `news` that never asked for `guides` (an older app).
+      const guide = { ...wait, tag: "guides:x", kind: "guides" as const };
+      await expect(service.send(device, guide)).resolves.toBe(false);
       await expect(
         service.send({ ...device, topics: [] } as PushSubscription, wait),
       ).resolves.toBe(false);

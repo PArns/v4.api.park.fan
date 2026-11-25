@@ -63,7 +63,7 @@ export class PushSubscription {
 
   /**
    * A device's news narrowing: the park geo paths whose news it wants, or
-   * `null` for all news. Only read for rows with `news` in `topics`.
+   * `null` for all news. Only read for `news`; `guides` is never narrowed.
    */
   @Column({ type: "jsonb", nullable: true })
   newsParks: string[] | null;

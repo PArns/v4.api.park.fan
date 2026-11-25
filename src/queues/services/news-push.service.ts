@@ -2,17 +2,37 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { isApnsConfigured } from "../../push/apns";
+import type { DevicePushKind } from "../../push/push-config";
 import { PushSubscription } from "../../push/entities/push-subscription.entity";
 import { isWithinQuietHours } from "../../push/quiet-hours";
 import { PushService, type PushMessage } from "../../push/push.service";
 
-/** The languages the news export is written in; anything else reads English. */
+/**
+ * The two post exports on media.park.fan, each its own device kind. Both files
+ * have one shape, so everything below is written once and reads the feed.
+ *
+ * `narrowed`: whether the device's `newsParks` applies. News only: a guide is
+ * often about several parks or none, so the news rule would keep most guides
+ * from a device narrowed to its favourites, and `guides` is its own switch.
+ */
+export const POST_FEEDS = [
+  { kind: "news", folder: "news", path: "/news/", narrowed: true },
+  { kind: "guides", folder: "guides", path: "/blog/", narrowed: false },
+] as const satisfies readonly {
+  kind: DevicePushKind;
+  folder: string;
+  path: string;
+  narrowed: boolean;
+}[];
+export type PostFeed = (typeof POST_FEEDS)[number];
+
+/** The languages the exports are written in; anything else reads English. */
 export const NEWS_LOCALES = ["de", "en", "nl", "fr", "es", "it"] as const;
 
 /** A post older than this is never announced, even when first seen now. */
 export const NEWS_MAX_AGE_MS = 6 * 60 * 60_000;
 
-/** The fields of a news-export post (`<base>/news/<locale>.json`) this reads. */
+/** The fields of an export post (`<base>/<folder>/<locale>.json`) this reads. */
 export interface NewsExportPost {
   slug: string;
   title: string;
@@ -40,19 +60,25 @@ export function wantsNewsPost(
 }
 
 /** The notification for one post: the export is per locale, so it is already in the reader's language. */
-export function writeNewsMessage(post: NewsExportPost): PushMessage {
+export function writeNewsMessage(
+  post: NewsExportPost,
+  feed: PostFeed = POST_FEEDS[0],
+): PushMessage {
   return {
     title: post.title,
     body: post.teaser ?? "",
-    url: `/news/${post.slug}`,
-    tag: `news:${post.slug}`,
-    kind: "news",
+    url: `${feed.path}${post.slug}`,
+    tag: `${feed.kind}:${post.slug}`,
+    kind: feed.kind,
   };
 }
 
 /**
  * The `news` half of the push job: a new post in the news export goes to the
- * devices that switched news on.
+ * devices that switched `news` on, a new guide in the guides export to the
+ * devices that switched `guides` on (`POST_FEEDS`). The feeds share nothing but
+ * the code: own seen-sets, own tags, so a post and a guide in one run are two
+ * notifications.
  *
  * Polled rather than called by the publish pipeline: the export on
  * media.park.fan is what the app itself reads, so a post is announced exactly
@@ -64,6 +90,10 @@ export function writeNewsMessage(post: NewsExportPost): PushMessage {
  * cannot both send. A missing set (first run, or a flushed Redis) is filled
  * silently — never a burst of a hundred old posts — and `NEWS_MAX_AGE_MS`
  * keeps a backfilled or re-slugged old post quiet too.
+ *
+ * Only the slug is compared, so an edit (`updatedAt`) never announces again,
+ * and since a slug is never removed from the set, neither does a post that
+ * leaves the export and comes back.
  */
 @Injectable()
 export class NewsPushService {
@@ -77,34 +107,36 @@ export class NewsPushService {
 
   async run(nowMs: number): Promise<number> {
     if (!isApnsConfigured()) return 0;
-    const devices = await this.pushService.devicesWithNews();
-    const byLocale = new Map<string, PushSubscription[]>();
-    for (const device of devices) {
-      const locale = newsLocaleOf(device.locale);
-      byLocale.set(locale, [...(byLocale.get(locale) ?? []), device]);
-    }
-
     let sent = 0;
-    for (const [locale, readers] of byLocale) {
-      try {
-        sent += await this.runLocale(locale, readers, nowMs);
-      } catch (error) {
-        this.logger.warn(
-          `News push for ${locale} failed: ${(error as Error)?.message}`,
-        );
+    for (const feed of POST_FEEDS) {
+      const devices = await this.pushService.devicesWithKind(feed.kind);
+      const byLocale = new Map<string, PushSubscription[]>();
+      for (const device of devices) {
+        const locale = newsLocaleOf(device.locale);
+        byLocale.set(locale, [...(byLocale.get(locale) ?? []), device]);
+      }
+      for (const [locale, readers] of byLocale) {
+        try {
+          sent += await this.runLocale(feed, locale, readers, nowMs);
+        } catch (error) {
+          this.logger.warn(
+            `${feed.kind} push for ${locale} failed: ${(error as Error)?.message}`,
+          );
+        }
       }
     }
     return sent;
   }
 
   private async runLocale(
+    feed: PostFeed,
     locale: string,
     readers: PushSubscription[],
     nowMs: number,
   ): Promise<number> {
-    const posts = await this.fetchPosts(locale);
+    const posts = await this.fetchPosts(feed, locale);
     if (posts.length === 0) return 0;
-    const key = `push:news:seen:${locale}`;
+    const key = `push:${feed.kind}:seen:${locale}`;
     // shortcut: the set grows by one slug per post, forever; a few KB a year.
     if (!(await this.redis.exists(key))) {
       await this.redis.sadd(key, ...posts.map((p) => p.slug));
@@ -117,10 +149,10 @@ export class NewsPushService {
       const age = nowMs - Date.parse(post.publishedAt);
       if (!(age >= 0 && age <= NEWS_MAX_AGE_MS)) continue;
 
-      const message = writeNewsMessage(post);
+      const message = writeNewsMessage(post, feed);
       const due = readers.filter(
         (d) =>
-          wantsNewsPost(d.newsParks, post) &&
+          (!feed.narrowed || wantsNewsPost(d.newsParks, post)) &&
           !isWithinQuietHours(d.timezone, nowMs),
       );
       for (let i = 0; i < due.length; i += NewsPushService.SEND_BATCH_SIZE) {
@@ -135,9 +167,12 @@ export class NewsPushService {
     return sent;
   }
 
-  private async fetchPosts(locale: string): Promise<NewsExportPost[]> {
+  private async fetchPosts(
+    feed: PostFeed,
+    locale: string,
+  ): Promise<NewsExportPost[]> {
     const base = process.env.NEWS_EXPORT_BASE ?? "https://media.park.fan";
-    const response = await fetch(`${base}/news/${locale}.json`, {
+    const response = await fetch(`${base}/${feed.folder}/${locale}.json`, {
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return [];
