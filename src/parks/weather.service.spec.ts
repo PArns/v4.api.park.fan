@@ -56,6 +56,7 @@ describe("WeatherService", () => {
     getHistoricalWeather: jest.fn(),
     getWeatherForecast: jest.fn(),
     getMinutelyNowcast: jest.fn(),
+    getHourlyDetail: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -648,6 +649,46 @@ describe("WeatherService", () => {
       const result = await service.hasHistoricalData("park-999");
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe("getHourlyDays", () => {
+    const park = {
+      id: "park-1",
+      latitude: 50.8,
+      longitude: 6.88,
+      timezone: "Europe/Berlin",
+    };
+
+    it("cuts the coordinate's cached hours into the park's days without a park lookup", async () => {
+      mockParkRepository.findOne.mockClear();
+      const start = Date.now() - 36 * 3_600_000;
+      mockOpenMeteoClient.getHourlyDetail.mockResolvedValue({
+        fetchedAt: new Date().toISOString(),
+        hours: Array.from({ length: 18 * 24 }, (_, i) => ({
+          time: new Date(start + i * 3_600_000).toISOString(),
+          temperature: 1,
+        })),
+        sunrises: [],
+        sunsets: [],
+      });
+      const r = await service.getHourlyDays(park);
+      expect(mockOpenMeteoClient.getHourlyDetail).toHaveBeenCalledWith(
+        50.8,
+        6.88,
+      );
+      expect(mockParkRepository.findOne).not.toHaveBeenCalled();
+      expect(r?.days[0].hours.length).toBeGreaterThanOrEqual(23);
+    });
+
+    it("answers null without coordinates or when the upstream fails", async () => {
+      mockOpenMeteoClient.getHourlyDetail.mockClear();
+      expect(
+        await service.getHourlyDays({ ...park, latitude: null as never }),
+      ).toBeNull();
+      expect(mockOpenMeteoClient.getHourlyDetail).not.toHaveBeenCalled();
+      mockOpenMeteoClient.getHourlyDetail.mockRejectedValue(new Error("503"));
+      expect(await service.getHourlyDays(park)).toBeNull();
     });
   });
 });

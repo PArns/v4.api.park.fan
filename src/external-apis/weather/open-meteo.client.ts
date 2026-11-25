@@ -89,6 +89,48 @@ export function toDailyWeather(daily: OpenMeteoDaily): DailyWeather[] {
     );
 }
 
+/**
+ * How long one coordinate's hourly curve is cached: the daily forecast's 2 h,
+ * so the curve and the tiles under it refresh on the same beat.
+ */
+export const HOURLY_DETAIL_CACHE_TTL = 2 * 60 * 60;
+
+/** A GMT response's offset-less string as an explicit UTC instant. */
+const asUtc = (time: string) =>
+  /(Z|[+-]\d{2}:?\d{2})$/.test(time) ? time : `${time}Z`;
+
+const events = (list: (string | null)[] | undefined) =>
+  (list ?? []).filter((t): t is string => !!t).map(asUtc);
+
+/** The `getHourlyDetail` request's answer in our shape; exported for specs. */
+export function toHourlyDetail(
+  data: OpenMeteoResponse,
+  fetchedAt: string,
+): HourlyDetailResponse {
+  const h = data.hourly;
+  if (!h?.time) {
+    throw new Error("Invalid Open-Meteo response: missing hourly data");
+  }
+  const at = <T>(arr: (T | null)[] | undefined, i: number) => arr?.[i] ?? null;
+  return {
+    fetchedAt,
+    hours: h.time.map((time, i) => ({
+      time: asUtc(time),
+      temperature: at(h.temperature_2m, i),
+      apparentTemperature: at(h.apparent_temperature, i),
+      precipitation: at(h.precipitation, i),
+      precipitationProbability: at(h.precipitation_probability, i),
+      weatherCode: at(h.weather_code, i),
+      windSpeed: at(h.wind_speed_10m, i),
+      windGusts: at(h.wind_gusts_10m, i),
+      windDirection: at(h.wind_direction_10m, i),
+      isDay: h.is_day?.[i] != null ? h.is_day[i] === 1 : null,
+    })),
+    sunrises: events(data.daily?.sunrise),
+    sunsets: events(data.daily?.sunset),
+  };
+}
+
 @Injectable()
 export class OpenMeteoClient {
   private readonly logger = new Logger(OpenMeteoClient.name);
@@ -670,6 +712,67 @@ export class OpenMeteoClient {
   }
 
   /**
+   * The hour-by-hour day curve the `/weather/hourly` route serves: yesterday
+   * through 16 days ahead in UTC, so every park-local day from today to
+   * today + 14 is complete whatever the park's offset (UTC+14 to UTC−12).
+   * One upstream call per ~1 km coordinate per `HOURLY_DETAIL_CACHE_TTL`,
+   * shared by every park and request on it; times are UTC instants (`…Z`),
+   * as `getHourlyForecast` returns them (PAR-818).
+   */
+  async getHourlyDetail(
+    latitude: number,
+    longitude: number,
+  ): Promise<HourlyDetailResponse> {
+    const latR = Math.round(latitude * 100) / 100;
+    const lonR = Math.round(longitude * 100) / 100;
+    const cacheKey = `weather:hourly-detail:${latR}:${lonR}`;
+
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached) as HourlyDetailResponse;
+    } catch {
+      // Cache miss is fine
+    }
+
+    return this.dedupe(cacheKey, async () => {
+      const data = await this.requestWithRetry<OpenMeteoResponse>("/forecast", {
+        params: {
+          latitude,
+          longitude,
+          past_days: 1,
+          forecast_days: 16,
+          hourly: [
+            "temperature_2m",
+            "apparent_temperature",
+            "precipitation",
+            "precipitation_probability",
+            "weather_code",
+            "wind_speed_10m",
+            "wind_gusts_10m",
+            "wind_direction_10m",
+            "is_day",
+          ].join(","),
+          daily: "sunrise,sunset",
+          timezone: "GMT",
+        },
+      });
+
+      const result = toHourlyDetail(data, new Date().toISOString());
+      try {
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(result),
+          "EX",
+          HOURLY_DETAIL_CACHE_TTL,
+        );
+      } catch {
+        // Cache write failure is non-critical
+      }
+      return result;
+    });
+  }
+
+  /**
    * Fetch minutely (15-min resolution) nowcast for a location.
    *
    * Returns precipitation in 15-minute steps for the next few hours.
@@ -889,6 +992,8 @@ interface OpenMeteoDaily {
   uv_index_max?: (number | null)[];
   /** Seconds of sunshine over the day. */
   sunshine_duration?: (number | null)[];
+  sunrise?: (string | null)[];
+  sunset?: (string | null)[];
 }
 
 interface OpenMeteoResponse {
@@ -928,6 +1033,11 @@ interface OpenMeteoResponse {
     windspeed_10m?: (number | null)[];
     precipitation_probability?: (number | null)[];
     wind_gusts_10m?: (number | null)[];
+    apparent_temperature?: (number | null)[];
+    weather_code?: (number | null)[];
+    wind_speed_10m?: (number | null)[];
+    wind_direction_10m?: (number | null)[];
+    is_day?: (number | null)[];
   };
 }
 
@@ -992,6 +1102,29 @@ export interface HourlyWeather {
 
 export interface HourlyWeatherResponse {
   hours: HourlyWeather[];
+}
+
+/** One hour of `getHourlyDetail`: °C, mm, %, km/h, degrees (wind FROM). */
+export interface HourlyDetail {
+  time: string; // UTC instant, `…Z`
+  temperature: number | null;
+  apparentTemperature: number | null;
+  precipitation: number | null;
+  precipitationProbability: number | null;
+  weatherCode: number | null;
+  windSpeed: number | null;
+  windGusts: number | null;
+  windDirection: number | null;
+  isDay: boolean | null;
+}
+
+export interface HourlyDetailResponse {
+  /** UTC ISO time the upstream answer was fetched. */
+  fetchedAt: string;
+  hours: HourlyDetail[];
+  /** Every sunrise / sunset instant in the window, UTC (`…Z`). */
+  sunrises: string[];
+  sunsets: string[];
 }
 
 export interface NowcastStep {

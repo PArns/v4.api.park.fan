@@ -17,7 +17,7 @@ list of permissions, granted one by one or a group at a time:
 | --------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
 | live      | `live.waits`           | `/wait-times`; open without a key                                                                               |
 | live      | `live.schedule`        | `/schedule`; `schedule`, show times and opening hours in the park and ride detail                               |
-| live      | `live.weather`         | `/weather`, `/weather/forecast`, `/weather/nowcast`; `weather` in the park detail                               |
+| live      | `live.weather`         | `/weather`, `/weather/forecast`, `/weather/nowcast`, `/weather/hourly`; `weather` in the park detail                               |
 | parks     | `parks.directory`      | `/v1/parks` lists, `/popular`, `/v1/discovery/**`, `/v1/search`, `/v1/sitemap/attractions`                      |
 | parks     | `parks.details`        | the park detail `…/{park}`, `/v1/favorites`                                                                     |
 | parks     | `parks.seasons`        | `…/{park}/seasons`; the season and maintenance fields of the park and ride detail                               |

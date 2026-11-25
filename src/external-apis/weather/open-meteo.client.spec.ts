@@ -1,4 +1,8 @@
-import { OpenMeteoClient, toDailyWeather } from "./open-meteo.client";
+import {
+  HOURLY_DETAIL_CACHE_TTL,
+  OpenMeteoClient,
+  toDailyWeather,
+} from "./open-meteo.client";
 
 /**
  * The sixteenth day of a 16-day forecast.
@@ -173,5 +177,89 @@ describe("OpenMeteoClient climate normals", () => {
       "07-11": {},
     });
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe("OpenMeteoClient hourly detail", () => {
+  const store = new Map<string, string>();
+  const redis = {
+    get: jest.fn((k: string) => Promise.resolve(store.get(k) ?? null)),
+    set: jest.fn((k: string, v: string) => {
+      store.set(k, v);
+      return Promise.resolve("OK");
+    }),
+    mget: jest.fn().mockResolvedValue([null, null]),
+  };
+  const get = jest.fn();
+  let client: OpenMeteoClient;
+
+  const upstream = {
+    hourly: {
+      time: ["2026-11-25T00:00", "2026-11-25T01:00"],
+      temperature_2m: [-1.2, -1.6],
+      apparent_temperature: [-5, null],
+      precipitation: [0, 0.3],
+      precipitation_probability: [5, 60],
+      weather_code: [0, 61],
+      wind_speed_10m: [12, 14],
+      wind_gusts_10m: [30, 33],
+      wind_direction_10m: [250, 260],
+      is_day: [0, 1],
+    },
+    daily: {
+      time: ["2026-11-25"],
+      sunrise: ["2026-11-25T07:01"],
+      sunset: ["2026-11-25T15:38"],
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    store.clear();
+    get.mockResolvedValue({ data: upstream });
+    client = new OpenMeteoClient({} as never, redis as never);
+    (client as unknown as { client: { get: jest.Mock } }).client = { get };
+  });
+
+  it("asks once in GMT from yesterday through 16 days and maps to UTC instants", async () => {
+    const r = await client.getHourlyDetail(50.8049, 6.8751);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls[0][1].params).toMatchObject({
+      past_days: 1,
+      forecast_days: 16,
+      timezone: "GMT",
+      daily: "sunrise,sunset",
+    });
+    expect(r.hours[1]).toEqual({
+      time: "2026-11-25T01:00Z",
+      temperature: -1.6,
+      apparentTemperature: null,
+      precipitation: 0.3,
+      precipitationProbability: 60,
+      weatherCode: 61,
+      windSpeed: 14,
+      windGusts: 33,
+      windDirection: 260,
+      isDay: true,
+    });
+    expect(r.hours[0].isDay).toBe(false);
+    expect(r.sunrises).toEqual(["2026-11-25T07:01Z"]);
+    expect(r.sunsets).toEqual(["2026-11-25T15:38Z"]);
+  });
+
+  it("serves many requests on one coordinate from one upstream call, cached 2 h", async () => {
+    await Promise.all([
+      client.getHourlyDetail(50.8049, 6.8751),
+      client.getHourlyDetail(50.8049, 6.8751),
+    ]);
+    await client.getHourlyDetail(50.8, 6.88);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(redis.set).toHaveBeenCalledWith(
+      "weather:hourly-detail:50.8:6.88",
+      expect.any(String),
+      "EX",
+      HOURLY_DETAIL_CACHE_TTL,
+    );
+    expect(HOURLY_DETAIL_CACHE_TTL).toBe(7200);
   });
 });

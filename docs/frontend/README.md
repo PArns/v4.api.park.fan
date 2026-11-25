@@ -35,7 +35,7 @@ page for the field or endpoint you are reading or changing.
 | [facilities](./facilities.md)                                     | `/facilities`: toilets, drinking water and other facilities from OpenStreetMap, the ODbL duties                          |
 | [shows](./shows.md)                                               | shows on the park payload: status, today's showtimes, season                                                             |
 | [restaurants](./restaurants.md)                                   | restaurants on the park payload: `cuisineType`, `requiresReservation` (unknown is absent)                                |
-| [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`                                                                      |
+| [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`, `/weather/hourly`                                                                    |
 | [trips](./trips.md)                                               | `/v1/trips`: stored plans, the id as credential, write limits                                                            |
 | [trip-regions](./trip-regions.md)                                 | `/v1/trip-regions/*`: the regions, a region's parks and travel times, its days side by side, the optimized vacation plan |
 | [trip-regions-when](./trip-regions-when.md)                       | `/v1/trip-regions/:region/when` and `/school-breaks`: the best dates for a trip, the year strip, school breaks           |

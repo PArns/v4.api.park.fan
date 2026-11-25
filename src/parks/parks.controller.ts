@@ -63,6 +63,7 @@ import { ParkYearlyHolidayDto } from "./dto/park-yearly-holiday.dto";
 import { WeatherResponseDto } from "./dto/weather-response.dto";
 import { WeatherItemDto } from "./dto/weather-item.dto";
 import { WeatherNowcastDto } from "./dto/weather-nowcast.dto";
+import { WeatherHourlyDto } from "./dto/weather-hourly.dto";
 import { OPEN_METEO_ATTRIBUTION } from "./dto/weather-attribution.dto";
 import { ScheduleResponseDto } from "./dto/schedule-response.dto";
 import { ScheduleItemDto } from "./dto/schedule-item.dto";
@@ -917,6 +918,58 @@ export class ParksController {
     const dto = WeatherNowcastDto.fromNowcast(parkRef(park), nowcast);
     dto.warnings = warnings.map((w) => WeatherWarningDto.fromEntity(w));
     return dto;
+  }
+
+  /**
+   * GET /v1/parks/:continent/:country/:city/:parkSlug/weather/hourly
+   *
+   * The park's hour-by-hour days (today + up to 14), for a day curve.
+   * Cache: until `nextUpdateAt` (the upstream cache's end or the park's next
+   * midnight), like the nowcast.
+   */
+  @Get(":continent/:country/:city/:parkSlug/weather/hourly")
+  @ApiPermission("live.weather")
+  @ApiOperation({
+    summary: "Get hourly weather by day (geo)",
+    description:
+      "Hour-by-hour temperature, feels-like, precipitation, weather code, wind and daylight for the park's today " +
+      "and up to 14 following days, each day midnight to midnight on the park's clock, with sunrise and sunset. " +
+      "Cache runs to nextUpdateAt.",
+  })
+  @ApiParkPath()
+  @ApiResponse({
+    status: 200,
+    description: "Hourly days",
+    type: WeatherHourlyDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description:
+      "Park not found, or hourly weather unavailable (missing coordinates or upstream error)",
+  })
+  async getWeatherHourlyByGeographicPath(
+    @Param("continent") continent: string,
+    @Param("country") country: string,
+    @Param("city") city: string,
+    @Param("parkSlug") parkSlug: string,
+    @Res({ passthrough: true }) res?: HeaderTarget,
+  ): Promise<WeatherHourlyDto> {
+    const park = await this.findParkOr404(continent, country, city, parkSlug);
+    const hourly = await this.weatherService.getHourlyDays(park);
+    if (!hourly || hourly.days.length === 0) {
+      throw new NotFoundException(
+        `Hourly weather unavailable for park "${parkSlug}" (missing coordinates or upstream error)`,
+      );
+    }
+    if (res) {
+      const ttl = Math.max(
+        1,
+        Math.ceil((Date.parse(hourly.nextUpdateAt) - Date.now()) / 1000),
+      );
+      res.setHeader("Cache-Control", `public, max-age=${ttl}, s-maxage=${ttl}`);
+      res.setHeader("Vary", "Accept-Encoding");
+    }
+    return WeatherHourlyDto.from(parkRef(park), hourly);
   }
 
   /**
