@@ -6,6 +6,9 @@ import { ApnsClient } from "./apns";
 import { PushFollowWriteRateLimitService } from "./push-follow-write-rate-limit.service";
 import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { PushSubscription } from "./entities/push-subscription.entity";
+import { ApnsSettings } from "./entities/apns-settings.entity";
+import { ApnsAdminService } from "./apns-admin.service";
+import { AdminPushController } from "./admin-push.controller";
 import { TripsModule } from "../trips/trips.module";
 import { RedisModule } from "../common/redis/redis.module";
 
@@ -21,14 +24,15 @@ import { RedisModule } from "../common/redis/redis.module";
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PushSubscription]),
+    TypeOrmModule.forFeature([PushSubscription, ApnsSettings]),
     TripsModule,
     RedisModule,
   ],
-  controllers: [PushController],
+  controllers: [PushController, AdminPushController],
   providers: [
     PushService,
     ApnsClient,
+    ApnsAdminService,
     PushFollowWriteRateLimitService,
     PushFollowAccessGuard,
   ],

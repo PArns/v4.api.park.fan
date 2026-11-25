@@ -1405,7 +1405,8 @@ prompt's playful off-topic line.
 
 The Claude key is entered in the admin and stored sealed with AES-256-GCM
 (`assistant-secret.util.ts`). The master key is `ASSISTANT_SECRET_KEY`, 32 bytes as hex or base64
-(`openssl rand -hex 32`); without it no key can be stored and the assistant is off. The admin only
+(`openssl rand -hex 32`); without it no key can be stored and the assistant is off. The same master key
+seals the APNs key uploaded in the admin ([push](push.md#the-apns-key-in-the-admin-v1adminpushapns)). The admin only
 ever sees `sk-ant-…abcd`, and the audit log redacts the `apiKey` field. Changing the master key
 makes the stored key unreadable: enter it again.
 

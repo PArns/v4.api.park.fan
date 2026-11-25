@@ -11,7 +11,14 @@ import {
   type DevicePushKind,
   type PushTopic,
 } from "./push-config";
-import { ApnsClient, buildApnsRequest, isApnsConfigured } from "./apns";
+import {
+  ApnsClient,
+  buildApnsRequest,
+  isApnsConfigured,
+  type ApnsEnvironment,
+  type ApnsRequest,
+  type ApnsSendResult,
+} from "./apns";
 
 /** A device's identity in `push_subscriptions.endpoint`: never a URL, so no web route accepts it. */
 export function deviceEndpoint(installId: string): string {
@@ -341,31 +348,87 @@ export class PushService {
     if (!kind || !subscription.topics?.includes(kind)) return false;
     if (!isApnsConfigured()) return false;
 
-    const outcome = await this.apns.send(
-      subscription.apnsToken as string,
+    const result = await this.deliver(
+      subscription,
       buildApnsRequest(message, kind, Date.now()),
     );
-    if (outcome === "sent") {
+    return result.outcome === "sent";
+  }
+
+  /**
+   * A test notification from the admin to one device, whatever kinds it
+   * chose, with the bookkeeping of any other send. `null` when no such device
+   * is registered.
+   */
+  async sendTest(id: string): Promise<ApnsSendResult | null> {
+    const device = await this.repository.findOne({
+      where: { id, apnsToken: Not(IsNull()) },
+    });
+    if (!device) return null;
+    const now = Date.now();
+    return this.deliver(
+      device,
+      buildApnsRequest(
+        {
+          title: "park.fan",
+          body: device.locale.startsWith("de")
+            ? "Test: Mitteilungen kommen an."
+            : "Test: notifications arrive.",
+          url: "/",
+          tag: `test:${now}`,
+        },
+        "test",
+        now,
+      ),
+    );
+  }
+
+  /** One request to APNs and what its answer means for the row. */
+  private async deliver(
+    subscription: PushSubscription,
+    request: ApnsRequest,
+  ): Promise<ApnsSendResult> {
+    const result = await this.apns.send(
+      subscription.apnsToken as string,
+      request,
+      subscription.apnsEnvironment ?? null,
+    );
+    if (result.outcome === "sent") {
+      // The environment that took the token is remembered: the next send
+      // goes there first.
       await this.repository.update(
         { id: subscription.id },
-        { failureCount: 0, lastNotifiedAt: new Date() },
+        {
+          failureCount: 0,
+          lastNotifiedAt: new Date(),
+          apnsEnvironment: result.environment,
+          apnsLastError: null,
+        },
       );
-      return true;
-    }
-    // Only Apple's verdict on the token is the device's fault. A 403 (our key),
-    // 429 or 5xx (Apple) or a timeout hits every device at once, and counting
-    // it would let one bad hour drop the whole install base with its alerts.
-    if (outcome === "dead") {
+    } else if (result.outcome === "dead") {
+      // Only Apple's verdict on the token is the device's fault, and for a
+      // `BadDeviceToken` only once both environments gave it.
       await this.recordFailure(subscription, { statusCode: 410 });
+    } else if (result.reason !== subscription.apnsLastError) {
+      // A 403 (our key), 429 or 5xx (Apple) or a timeout hits every device at
+      // once, and counting it would let one bad hour drop the whole install
+      // base with its alerts. The reason is kept for the admin's list.
+      subscription.apnsLastError = result.reason;
+      await this.repository.update(
+        { id: subscription.id },
+        { apnsLastError: result.reason },
+      );
     }
-    return false;
+    return result;
   }
 
   /**
    * Store an app install: an upsert on `apns:<installId>`.
    *
    * `kinds` and `newsParks` are the device's whole current choice and replace
-   * what was stored (the app sends them on every change). `tripId` follows
+   * what was stored (the app sends them on every change). `environment` is
+   * the app's word on its token; without it the stored one stays while the
+   * token does. `tripId` follows
    * `subscribe`: omitted keeps the stored pointer, null clears it, an id is
    * checked under the trip's row lock and is a 404 when it names no live trip.
    */
@@ -377,6 +440,8 @@ export class PushService {
     locale?: string;
     timezone?: string | null;
     tripId?: string | null;
+    /** What the app says its token belongs to; omitted by apps that do not know. */
+    environment?: ApnsEnvironment;
   }): Promise<PushSubscription | null> {
     if (!isApnsConfigured()) return null;
     if (!input.tripId) return this.storeDevice(this.repository, input);
@@ -406,6 +471,13 @@ export class PushService {
       apnsToken: input.token,
       endpoint: Not(endpoint),
     });
+    // A new token without a word on its environment may come from another
+    // build of the app: what the old one taught no longer holds.
+    if (input.environment !== undefined) {
+      row.apnsEnvironment = input.environment;
+    } else if (row.apnsToken !== input.token) {
+      row.apnsEnvironment = null;
+    }
     row.apnsToken = input.token;
     row.topics = input.kinds;
     row.newsParks = input.newsParks;

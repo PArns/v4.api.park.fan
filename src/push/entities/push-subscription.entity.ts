@@ -62,6 +62,21 @@ export class PushSubscription {
   apnsToken: string | null;
 
   /**
+   * Which APNs environment the device's token belongs to: `sandbox` for a
+   * build installed from Xcode, `production` for TestFlight and the App Store.
+   * `null` until the app says so or a send finds out (`ApnsClient.send`).
+   */
+  @Column({ type: "varchar", length: 10, nullable: true })
+  apnsEnvironment: "production" | "sandbox" | null;
+
+  /**
+   * Apple's reason for the last send to this device that failed, for the
+   * admin's device list; `null` after one that arrived.
+   */
+  @Column({ type: "varchar", length: 64, nullable: true })
+  apnsLastError: string | null;
+
+  /**
    * A device's news narrowing: the park geo paths whose news it wants, or
    * `null` for all news. Only read for `news`; `guides` is never narrowed.
    */
