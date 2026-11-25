@@ -6,6 +6,7 @@ import {
   NewsPushService,
   newsLocaleOf,
   wantsNewsPost,
+  POST_FEEDS,
   writeNewsMessage,
 } from "./news-push.service";
 
@@ -180,12 +181,29 @@ describe("news push", () => {
         expect(await service.run(NOW)).toBe(1);
         expect(send).toHaveBeenCalledWith(devices[0], {
           title: NEW_GUIDE.title,
+          // What tells a guide from a news headline in a stack.
+          subtitle: "Neuer Guide",
           body: NEW_GUIDE.teaser,
           url: "/blog/phantasialand-tipps",
           tag: "guides:phantasialand-tipps",
           kind: "guides",
         });
         expect(await service.run(NOW)).toBe(0);
+      });
+
+      it("carries the cover as the photo, when the post has one", () => {
+        expect(
+          writeNewsMessage(
+            { ...NEW_GUIDE, cover: "phantasialand/background" },
+            POST_FEEDS[1],
+          ),
+        ).toMatchObject({
+          photo: "phantasialand/background",
+          subtitle: "New guide",
+        });
+        const news = writeNewsMessage({ ...NEW_GUIDE, cover: null });
+        expect(news).not.toHaveProperty("photo");
+        expect(news).not.toHaveProperty("subtitle");
       });
 
       it("keeps an edited guide quiet, and one that left the list and came back", async () => {

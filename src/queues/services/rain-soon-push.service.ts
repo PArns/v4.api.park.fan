@@ -19,7 +19,7 @@ import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-source
 import { ParksService } from "../../parks/parks.service";
 import { WeatherService } from "../../parks/weather.service";
 import { parksPlannedToday } from "../../push/notification-planner";
-import { writeRainSoonMessage } from "../../push/push-messages";
+import { parkDayThread, writeRainSoonMessage } from "../../push/push-messages";
 import { isWithinQuietHours } from "../../push/quiet-hours";
 import { PushSubscription } from "../../push/entities/push-subscription.entity";
 import { PushService } from "../../push/push.service";
@@ -256,11 +256,15 @@ export class RainSoonPushService {
       },
     );
     const copy = {
-      dedupeKey: `rain-soon:${park.id}:${localDate}:${decision.startsAtMs}`,
+      // No start time in it: a corrected warning replaces the one on the screen.
+      dedupeKey: `rain-soon:${park.id}:${localDate}`,
       parkName: park.name,
       atTime,
       rides,
       url: frontendParkPath(park) ?? "/",
+      // Once it rains the warning is the weather.
+      expiresAtMs: decision.startsAtMs,
+      threadId: parkDayThread(park.slug, localDate),
     };
 
     let sent = 0;

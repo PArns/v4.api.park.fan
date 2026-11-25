@@ -49,6 +49,13 @@ export interface PlannedNotification {
   atTime: string;
   /** Where a tap lands, relative to the site's origin. */
   url: string;
+  /** The block's start: after it the reminder is worthless. */
+  expiresAtMs: number;
+  threadId: string;
+  /** The ride's geo path, for its photo. */
+  photo?: string;
+  /** What the app's "Los" and "Abhaken" act on. */
+  data: Record<string, string>;
 }
 
 export interface PlanEntry {
@@ -114,6 +121,11 @@ export function dueNotifications(
       // subject is worse than silence.
       if (!what) continue;
 
+      const geoPath = park.geo
+        ? `${park.geo.continent}/${park.geo.country}/${park.geo.city}/${park.slug}`
+        : null;
+      const ride =
+        geoPath && isSlug(entry.attractionSlug) ? entry.attractionSlug : null;
       out.push({
         topic: "next-up",
         dedupeKey: `next-up:${park.slug}:${today}:${entry.id}:${entry.startMinute}`,
@@ -121,7 +133,19 @@ export function dueNotifications(
         what,
         inMinutes: Math.round(lead / 5) * 5,
         atTime: formatMinute(entry.startMinute),
-        url: "/",
+        // The plan day, where the phone's own reminder leads too.
+        url: geoPath
+          ? `/trip-planner?park=${encodeURIComponent(geoPath)}&date=${today}`
+          : "/",
+        expiresAtMs: nowMs + lead * 60_000,
+        threadId: `${park.slug}:${today}`,
+        ...(ride ? { photo: `${geoPath}/${ride}` } : {}),
+        data: {
+          entry: entry.id,
+          date: today,
+          ...(geoPath ? { park: geoPath } : {}),
+          ...(ride ? { ride } : {}),
+        },
       });
     }
   }
@@ -346,6 +370,11 @@ function isPlanEntry(value: unknown): value is PlanEntry {
     typeof value.startMinute === "number" &&
     Number.isFinite(value.startMinute)
   );
+}
+
+/** Plan slugs are client input and end up in a photo path. */
+function isSlug(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9-]{1,120}$/.test(value);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

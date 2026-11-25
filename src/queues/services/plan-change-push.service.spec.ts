@@ -100,8 +100,17 @@ describe("PlanChangePushService", () => {
       expect.objectContaining({
         kind: "plan-change",
         tag: "plan-change:phantasialand:2026-10-17",
-        body: expect.stringContaining("09:00–17:00"),
+        // The change itself is the title; whose plan and which day the line under it.
+        title: "Öffnungszeiten jetzt 09:00–17:00 Uhr (vorher 09:00–18:00)",
+        subtitle: "Dein Plan · Phantasialand, heute",
         url: "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17",
+        // Today's change may wait an hour for the phone, and stacks with the park day.
+        expiresAtMs: NOW + 5 * 60_000 + 60 * 60_000,
+        threadId: "phantasialand:2026-10-17",
+        data: {
+          park: "europe/germany/bruehl/phantasialand",
+          date: "2026-10-17",
+        },
       }),
     );
     await expect(service.run(NOW + 60 * 60_000)).resolves.toBe(0);

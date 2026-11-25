@@ -20,7 +20,10 @@ import {
   type StandbyReading,
 } from "../../push/plan-change";
 import { isApnsConfigured } from "../../push/apns";
-import { writePlanChangeMessage } from "../../push/push-messages";
+import {
+  parkDayThread,
+  writePlanChangeMessage,
+} from "../../push/push-messages";
 import { isWithinQuietHours } from "../../push/quiet-hours";
 import { PushSubscription } from "../../push/entities/push-subscription.entity";
 import { PushService } from "../../push/push.service";
@@ -203,6 +206,10 @@ export class PlanChangePushService {
         isToday: day.isToday,
         changes,
         url: `/trip-planner?park=${encodeURIComponent(geoKey)}&date=${day.date}`,
+        // Today's change is about the next hour; a later day's may wait for the phone.
+        expiresAtMs: nowMs + (day.isToday ? 1 : 24) * 60 * 60_000,
+        threadId: parkDayThread(day.slug, day.date),
+        data: { park: geoKey, date: day.date },
       };
       for (const subscription of subscriptions) {
         // Held back, not dropped: the baseline stays, so the change is still

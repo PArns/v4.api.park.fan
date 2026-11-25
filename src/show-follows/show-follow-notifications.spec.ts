@@ -47,6 +47,12 @@ describe("dueShowNotifications", () => {
     expect(due[0].dedupeKey).toContain("show-1");
   });
 
+  it("ends with the performance and stacks with the park's day", () => {
+    const [due] = dueShowNotifications([show()], NOW);
+    expect(due.expiresAtMs).toBe(NOW + 30 * 60_000);
+    expect(due.threadId).toBe("europa-park:2026-10-17");
+  });
+
   it("includes the near edge of the window (25 minutes)", () => {
     const due = dueShowNotifications(
       [show({ showtimes: [{ startTime: minutesFromNow(SHOW_LEAD_MIN) }] })],

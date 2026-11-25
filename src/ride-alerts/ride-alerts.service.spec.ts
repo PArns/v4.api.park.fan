@@ -259,6 +259,61 @@ describe("RideAlertsService", () => {
       expect(alertRows.get("alert-1")!.lastTriggeredAt).not.toBeNull();
     });
 
+    it('writes the wait, the limit and what the device needs for photo, stack and "Alarm aus"', async () => {
+      alertRows.set("alert-1", alert({ thresholdMinutes: 20, armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([["ride-1", standbyReading({ waitTime: 12 })]]),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([["sub-1", { id: "sub-1", locale: "de" }]]),
+      );
+
+      await service.checkAndNotify(PHANTASIALAND, ["ride-1"], NOW_MS);
+
+      const message = pushService.send.mock.calls[0][1];
+      const slug = attractionRows.get("ride-1")!.slug;
+      expect(message).toMatchObject({
+        title: expect.stringMatching(/: 12 Min\.$/),
+        subtitle: "Phantasialand",
+        body: "Unter deiner Grenze von 20 Min.",
+        kind: "ride-wait",
+        tag: "ride-alert:alert-1",
+        photo: `europe/germany/bruehl/phantasialand/${slug}`,
+        // The park's day (14:00 in Berlin), not UTC's.
+        threadId: "phantasialand:2026-06-15",
+        data: { attractionId: "ride-1" },
+      });
+    });
+
+    it("keeps an alert armed, and quiet, for half an hour after it last fired", async () => {
+      // The queue hovered at the threshold: fired 10 minutes ago, rose, fell again.
+      alertRows.set(
+        "alert-1",
+        alert({
+          thresholdMinutes: 20,
+          armed: true,
+          lastTriggeredAt: new Date(NOW_MS - 10 * 60_000),
+        }),
+      );
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 12 })]]),
+      );
+      pushService.findByIds.mockResolvedValue(
+        new Map([["sub-1", { id: "sub-1", locale: "de" }]]),
+      );
+
+      await service.checkAndNotify(PHANTASIALAND, ["ride-1"], NOW_MS);
+      expect(pushService.send).not.toHaveBeenCalled();
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+
+      await service.checkAndNotify(
+        PHANTASIALAND,
+        ["ride-1"],
+        NOW_MS - 10 * 60_000 + RideAlertsService.WAIT_ALERT_GAP_MS,
+      );
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
+
     it("does not re-send while the wait stays below an already-fired alert", async () => {
       alertRows.set(
         "alert-1",

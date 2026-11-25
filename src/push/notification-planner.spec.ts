@@ -53,6 +53,50 @@ describe("dueNotifications", () => {
     },
   });
 
+  it("opens the plan day and carries what the device acts on, for a park with a geo path", () => {
+    const payload = plan();
+    Object.assign(payload.parks.phantasialand, {
+      geo: { continent: "europe", country: "germany", city: "bruehl" },
+    });
+    expect(dueNotifications(payload, BERLIN_0945)[0]).toMatchObject({
+      url: "/trip-planner?park=europe%2Fgermany%2Fbruehl%2Fphantasialand&date=2026-10-17",
+      // The block's start: the reminder is worthless after it.
+      expiresAtMs: BERLIN_0945 + 15 * 60_000,
+      threadId: "phantasialand:2026-10-17",
+      photo: "europe/germany/bruehl/phantasialand/taron",
+      data: {
+        entry: "taron-1",
+        date: "2026-10-17",
+        park: "europe/germany/bruehl/phantasialand",
+        ride: "taron",
+      },
+    });
+  });
+
+  it("has no photo and opens the app for a plan without a geo path or with a slug that is none", () => {
+    const [bare] = dueNotifications(plan(), BERLIN_0945);
+    expect(bare.url).toBe("/");
+    expect(bare).not.toHaveProperty("photo");
+    expect(bare.data).toEqual({ entry: "taron-1", date: "2026-10-17" });
+
+    const payload = plan({
+      entries: [
+        {
+          id: "x",
+          attractionSlug: "../../etc",
+          attractionName: "Taron",
+          startMinute: 600,
+        },
+      ],
+    });
+    Object.assign(payload.parks.phantasialand, {
+      geo: { continent: "europe", country: "germany", city: "bruehl" },
+    });
+    const [odd] = dueNotifications(payload, BERLIN_0945);
+    expect(odd).not.toHaveProperty("photo");
+    expect(odd.data).not.toHaveProperty("ride");
+  });
+
   it("notifies about a block starting inside the window", () => {
     const due = dueNotifications(plan(), BERLIN_0945);
     expect(due).toHaveLength(1);

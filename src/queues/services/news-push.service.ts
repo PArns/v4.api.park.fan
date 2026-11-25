@@ -40,7 +40,19 @@ export interface NewsExportPost {
   publishedAt: string;
   parks?: string[];
   parkSlugs?: string[];
+  /** An image id of the media index, or null. */
+  cover?: string | null;
 }
+
+/** A guide says what it is; a news headline reads as news by itself. */
+const NEW_GUIDE: Record<string, string> = {
+  de: "Neuer Guide",
+  en: "New guide",
+  nl: "Nieuwe gids",
+  fr: "Nouveau guide",
+  es: "Nueva guía",
+  it: "Nuova guida",
+};
 
 export function newsLocaleOf(locale: string): string {
   const base = locale.split("-")[0]?.toLowerCase() ?? "en";
@@ -63,10 +75,15 @@ export function wantsNewsPost(
 export function writeNewsMessage(
   post: NewsExportPost,
   feed: PostFeed = POST_FEEDS[0],
+  locale = "en",
 ): PushMessage {
   return {
     title: post.title,
+    ...(feed.kind === "guides"
+      ? { subtitle: NEW_GUIDE[newsLocaleOf(locale)] }
+      : {}),
     body: post.teaser ?? "",
+    ...(typeof post.cover === "string" ? { photo: post.cover } : {}),
     url: `${feed.path}${post.slug}`,
     tag: `${feed.kind}:${post.slug}`,
     kind: feed.kind,
@@ -149,7 +166,7 @@ export class NewsPushService {
       const age = nowMs - Date.parse(post.publishedAt);
       if (!(age >= 0 && age <= NEWS_MAX_AGE_MS)) continue;
 
-      const message = writeNewsMessage(post, feed);
+      const message = writeNewsMessage(post, feed, locale);
       const due = readers.filter(
         (d) =>
           (!feed.narrowed || wantsNewsPost(d.newsParks, post)) &&

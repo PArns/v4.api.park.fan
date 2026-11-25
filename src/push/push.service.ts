@@ -11,8 +11,12 @@ import {
   type DevicePushKind,
   type PushTopic,
 } from "./push-config";
+import { pushImageUrl } from "./push-media";
 import {
+  APNS_KINDS,
   ApnsClient,
+  TIME_SENSITIVE_CAP,
+  TIME_SENSITIVE_WINDOW_MS,
   buildApnsRequest,
   isApnsConfigured,
   type ApnsEnvironment,
@@ -73,6 +77,22 @@ export interface PushMessage {
    * (`ride-alert:` is both a wait and a reopen alert). Never sent to a browser.
    */
   kind?: DevicePushKind;
+  /**
+   * The place, as its own line under the title on a device (`aps.alert.subtitle`).
+   * A browser has no such line and gets it as the first line of the body.
+   */
+  subtitle?: string;
+  /**
+   * Devices only, like everything below. The photo to attach: a ride's or a
+   * park's geo path, or an image id of the media index (`push-media.ts`).
+   */
+  photo?: string;
+  /** When the message is worthless (`apns-expiration`); else the kind's own time to live. */
+  expiresAtMs?: number;
+  /** What it stacks with on the lock screen (`thread-id`); else the kind. */
+  threadId?: string;
+  /** Ids the app's action buttons need, beside `url` and `kind` in the payload. */
+  data?: Record<string, string>;
 }
 
 /**
@@ -296,8 +316,13 @@ export class PushService {
     const vapid = getVapidConfig();
     if (!vapid) return false;
 
-    // `kind` is for device gating; a browser's payload stays what it was.
-    const { kind: _kind, ...payload } = message;
+    // A browser's payload stays `{title, body, url, tag}`; the place leads its body.
+    const payload = {
+      title: message.title,
+      body: [message.subtitle, message.body].filter(Boolean).join("\n"),
+      url: message.url,
+      tag: message.tag,
+    };
     try {
       await webpush.sendNotification(
         {
@@ -348,11 +373,38 @@ export class PushService {
     if (!kind || !subscription.topics?.includes(kind)) return false;
     if (!isApnsConfigured()) return false;
 
+    const now = Date.now();
     const result = await this.deliver(
       subscription,
-      buildApnsRequest(message, kind, Date.now()),
+      buildApnsRequest(message, kind, now, {
+        image: message.photo ? await pushImageUrl(message.photo) : null,
+        calm: !this.mayInterrupt(subscription.id, kind, now),
+      }),
     );
     return result.outcome === "sent";
+  }
+
+  /** Time-sensitive sends per device, for `TIME_SENSITIVE_CAP`. */
+  private readonly interruptions = new Map<string, number[]>();
+
+  /**
+   * Whether this send may still break through a Focus. Past
+   * `TIME_SENSITIVE_CAP` in `TIME_SENSITIVE_WINDOW_MS` a device still gets the
+   * message, as an ordinary one: a jittery queue must not teach somebody to
+   * switch time-sensitive notifications off.
+   * shortcut: counted in this process's memory, so a restart or a second
+   * worker starts at zero; move to Redis if the cap has to be exact.
+   */
+  private mayInterrupt(id: string, kind: string, nowMs: number): boolean {
+    if (APNS_KINDS[kind]?.level !== "time-sensitive") return true;
+    const recent = (this.interruptions.get(id) ?? []).filter(
+      (at) => nowMs - at < TIME_SENSITIVE_WINDOW_MS,
+    );
+    const allowed = recent.length < TIME_SENSITIVE_CAP;
+    if (allowed) recent.push(nowMs);
+    if (this.interruptions.size > 5000) this.interruptions.clear();
+    this.interruptions.set(id, recent);
+    return allowed;
   }
 
   /**
@@ -370,10 +422,10 @@ export class PushService {
       device,
       buildApnsRequest(
         {
-          title: "park.fan",
+          title: "Test",
           body: device.locale.startsWith("de")
-            ? "Test: Mitteilungen kommen an."
-            : "Test: notifications arrive.",
+            ? "Mitteilungen kommen auf diesem iPhone an."
+            : "Notifications arrive on this iPhone.",
           url: "/",
           tag: `test:${now}`,
         },

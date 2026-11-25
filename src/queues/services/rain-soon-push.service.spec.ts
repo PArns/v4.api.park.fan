@@ -164,9 +164,17 @@ describe("RainSoonPushService", () => {
     expect(sub.id).toBe("sub-1");
     expect(message.title).toBe("Regen ab etwa 14:20 Uhr");
     expect(message.body).toBe(
-      "Phantasialand. Überdacht und offen: maus (15 Min.), fly (20 Min.)",
+      "Überdacht und offen: maus (15 Min.), fly (20 Min.)",
     );
     expect(message.url).toBe("/parks/europe/germany/bruehl/phantasialand");
+    // One tag per park day, so a corrected warning replaces the first; gone
+    // from Apple's store once the rain has started.
+    expect(message).toMatchObject({
+      subtitle: "Phantasialand",
+      tag: "rain-soon:park-1:2026-10-17",
+      expiresAtMs: NOW + 20 * 60_000,
+      threadId: "phantasialand:2026-10-17",
+    });
     // The closed covered ride and the outdoor one are not named.
     expect(message.body).not.toContain("closed");
     expect(message.body).not.toContain("taron");
@@ -185,7 +193,10 @@ describe("RainSoonPushService", () => {
 
     await service.run(NOW);
 
-    expect(pushService.send.mock.calls[0][1].body).toBe("Phantasialand");
+    expect(pushService.send.mock.calls[0][1]).toMatchObject({
+      subtitle: "Phantasialand",
+      body: "",
+    });
     expect(
       queueDataService.findCurrentStatusByAttractionIds,
     ).not.toHaveBeenCalled();
@@ -204,7 +215,10 @@ describe("RainSoonPushService", () => {
 
     await service.run(NOW);
 
-    expect(pushService.send.mock.calls[0][1].body).toBe("Phantasialand");
+    expect(pushService.send.mock.calls[0][1]).toMatchObject({
+      subtitle: "Phantasialand",
+      body: "",
+    });
   });
 
   it("sends one push per front: the next ticks stay silent", async () => {
@@ -290,7 +304,10 @@ describe("RainSoonPushService", () => {
     );
 
     expect(await service.run(NOW)).toBe(1);
-    expect(pushService.send.mock.calls[0][1].body).toBe("Phantasialand");
+    expect(pushService.send.mock.calls[0][1]).toMatchObject({
+      subtitle: "Phantasialand",
+      body: "",
+    });
   });
 
   it("treats an unknown stored state as none", async () => {
@@ -392,6 +409,6 @@ describe("RainSoonPushService", () => {
       .mockResolvedValueOnce(nowcast({ rainStartsAt: at(20) }));
 
     expect(await service.run(NOW)).toBe(1);
-    expect(pushService.send.mock.calls[0][1].body).toContain("Europa-Park");
+    expect(pushService.send.mock.calls[0][1].subtitle).toBe("Europa-Park");
   });
 });
