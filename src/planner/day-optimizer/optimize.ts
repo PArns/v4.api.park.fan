@@ -293,6 +293,21 @@ export interface OptimizeInput {
    * forget the other; passed in because "now" is a render-time value and this module is pure.
    */
   clock?: DayClock;
+  /**
+   * Where the visitor stands now, read on the park's today only: the first stop is walked to from
+   * here, leaving at the clock's minute. Absent, the first stop costs no walk, as on a day that
+   * has not begun.
+   */
+  start?: LegPlace | null;
+}
+
+/** The walk from {@link OptimizeInput.start} to a ride: on foot only, nothing to leave first. */
+export function walkFromStart(
+  start: LegPlace,
+  ride: LegPlace | null,
+  bound: "floorMinutes" | "ceilingMinutes" = "ceilingMinutes",
+): number {
+  return transferBetween(start, ride, null, { fromBlock: true })[bound];
 }
 
 /**
@@ -491,6 +506,8 @@ interface Context {
   walk: number[][];
   /** Rides {@link MAX_STOPS} had no room for. Reported, never swallowed. */
   capped: number;
+  /** The visitor's place today: the minute they leave it and the walk to each candidate. */
+  start: { freeAt: number; walk: number[] } | null;
   /**
    * Placement fronts, keyed by candidate and earliest start. A front depends on nothing else, and
    * the local search re-schedules the same orders thousands of times. Per call, so it cannot go
@@ -715,7 +732,11 @@ function earliestStart(
   // `dayStartMin`: on an early-entry day a headliner's floor sits below the
   // park's opening, and the floor decides. Without early entry it is `openMin`.
   const earliest =
-    freeBefore === null ? dayStartMin(ctx.grid) : freeBefore + transferMinutes;
+    freeBefore === null
+      ? ctx.start
+        ? ctx.start.freeAt + ctx.start.walk[index]
+        : dayStartMin(ctx.grid)
+      : freeBefore + transferMinutes;
   return snapUp(Math.max(earliest, candidate.floorMin), START_STEP_MIN);
 }
 
@@ -877,7 +898,8 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
   for (const index of order) {
     const candidate = ctx.candidates[index];
     const transfer = previous < 0 ? 0 : ctx.transfer[previous][index];
-    const walk = previous < 0 ? 0 : ctx.walk[previous][index];
+    const walk =
+      previous < 0 ? (ctx.start?.walk[index] ?? 0) : ctx.walk[previous][index];
     const grown: PartialSchedule[] = [];
     for (const state of states) {
       for (const placement of placementsFor(
@@ -1025,7 +1047,10 @@ function search(ctx: Context, beamWidth: number): number[] {
       for (let index = 0; index < n; index++) {
         if (label.placed & (1 << index)) continue;
         const transfer = label.last < 0 ? 0 : ctx.transfer[label.last][index];
-        const walk = label.last < 0 ? 0 : ctx.walk[label.last][index];
+        const walk =
+          label.last < 0
+            ? (ctx.start?.walk[index] ?? 0)
+            : ctx.walk[label.last][index];
         // Every worthwhile delay for this ride is a branch of its own, so the
         // beam chooses when to queue as well as in which order.
         const freeBefore = label.last < 0 ? null : label.freeAt;
@@ -1249,6 +1274,7 @@ function buildContext(input: OptimizeInput): Context | null {
   const transfer = legs.map((row) => row.map((leg) => leg.ceilingMinutes));
   const walk = legs.map((row) => row.map((leg) => leg.walkMinutes));
 
+  const { start } = input;
   return {
     grid,
     candidates,
@@ -1256,6 +1282,13 @@ function buildContext(input: OptimizeInput): Context | null {
     transfer,
     walk,
     capped,
+    start:
+      start && clock?.phase === "today"
+        ? {
+            freeAt: clock.nowMinute,
+            walk: candidates.map((to) => walkFromStart(start, to.ride)),
+          }
+        : null,
     fronts: new Map(),
   };
 }
@@ -1447,7 +1480,17 @@ function isExecutable(input: OptimizeInput, ctx: Context): boolean {
         return false;
       }
     }
-    if (i === 0) continue;
+    if (i === 0) {
+      if (
+        ctx.start &&
+        input.start &&
+        entry.startMinute <
+          ctx.start.freeAt +
+            walkFromStart(input.start, there?.ride ?? null, "floorMinutes")
+      )
+        return false;
+      continue;
+    }
     const previous = stops[i - 1];
     const from = ctx.candidates.find((c) => c.entryId === previous.id);
     const to = there;
@@ -1551,6 +1594,7 @@ export function scoreCurrent(input: OptimizeInput): Scored | null {
   const { day, grid, entries, clock } = input;
   if (!canOptimize(day, grid) || !day) return null;
   if (clock?.phase === "past") return null;
+  const start = clock?.phase === "today" ? input.start : null;
 
   // The clock decides which rides this covers, never where they sit: this scores the blocks where
   // they are. A before-figure over five rides against an after-figure over two is not a saving.
@@ -1590,7 +1634,10 @@ export function scoreCurrent(input: OptimizeInput): Scored | null {
         entry.startMinute - snapUp(freeBefore + transfer, START_STEP_MIN),
       );
     }
-    if (fits) walkMinutes += leg?.walkMinutes ?? 0;
+    if (fits)
+      walkMinutes +=
+        leg?.walkMinutes ??
+        (start && freeBefore === null ? walkFromStart(start, ride) : 0);
     // The same rule the scheduler uses: a block the visitor dragged into the
     // night is not when their day ends, it is the thing being fixed.
     if (fits) endMinute = Math.max(endMinute, freeAt + RIDE_DURATION_MIN);

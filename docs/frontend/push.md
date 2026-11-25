@@ -188,7 +188,7 @@ unfollows idempotently. At most 100 per subscription, 60 writes an hour per addr
 
 The app has no browser endpoint and no account. It registers its **install**:
 `POST /v1/push/devices` with `{ installId (UUID), token (APNs hex), kinds,
-newsParks?, locale?, timezone? }` → 200 `{ endpoint, kinds, newsParks }`. The row
+newsParks?, locale?, timezone?, environment? }` → 200 `{ endpoint, kinds, newsParks }`. The row
 is an ordinary `push_subscriptions` row with `endpoint = apns:<installId>`,
 `apnsToken` set and empty web keys, so the app then calls
 `/v1/push/ride-alerts` and `/v1/push/show-follows` with that `endpoint` exactly as
@@ -203,17 +203,78 @@ its alerts and follows. Same 429 bucket as subscribe.
   `news`, `guides`, `plan-change`, plus the trip topics. `PushService.send` drops any message whose kind
   (`pushKindOf`: its `kind`, else its tag prefix) the device did not choose, for
   every producer. An empty list keeps the alerts and sends nothing.
-- **Transport.** `src/push/apns.ts`: ES256 provider token (refreshed every 50
-  minutes), HTTP/2 to `api.push.apple.com` (`APNS_PRODUCTION=false`: sandbox),
-  `apns-expiration` 15 minutes like the web TTL, the tag as collapse id (hashed
-  past 64 bytes). Payload: `aps.alert {title, body}` plus `url` (the same
-  site-relative path a browser opens) and `kind`.
-- **Dead tokens.** 410, or 400 `BadDeviceToken` / `DeviceTokenNotForTopic`,
-  deletes the row; anything else (403, 429, 5xx, timeout) leaves it alone —
-  those hit every device at once and are never one device's fault.
-- **No key, no push.** Without all of `APNS_KEY_ID`, `APNS_TEAM_ID`,
-  `APNS_BUNDLE_ID`, `APNS_KEY`, `GET /v1/push` answers `apns: false`, registering
-  is a 503 and no device is sent anything.
+- **Transport.** `src/push/apns.ts`: ES256 provider token (made new every 50
+  minutes, never within 20, for both environments), HTTP/2 with one connection
+  per environment, `apns-expiration` 15 minutes like the web TTL, the tag as
+  collapse id (hashed past 64 bytes). Payload: `aps.alert {title, body}` plus
+  `url` (the same site-relative path a browser opens) and `kind`.
+- **Both environments, no setting.** A token works only where it was issued:
+  the sandbox (`api.sandbox.push.apple.com`) for a build installed from Xcode,
+  production (`api.push.apple.com`) for TestFlight and the App Store; the other
+  answers 400 `BadDeviceToken`. The app may say which with `environment:
+  "sandbox" | "production"` at registration (its `aps-environment`
+  entitlement: `development` is the sandbox). A row without one
+  (`push_subscriptions.apnsEnvironment` null: an older app, or a new token
+  sent without the field) is tried in production first; `BadDeviceToken` there
+  is asked again in the other environment, and the one that accepts is stored
+  on the row. The same retry runs for a row whose stored environment refuses
+  its token. `APNS_PRODUCTION=false` only makes the sandbox the first try. A
+  server that does not know the field yet answers 400 to a body with it, so the
+  app sends it only once this is deployed.
+- **Dead tokens.** 410, 400 `DeviceTokenNotForTopic`, or 400 `BadDeviceToken`
+  from both environments deletes the row. Anything else (403, 429, 5xx,
+  timeout, a second environment that gave no verdict) leaves it alone — those
+  hit every device at once and are never one device's fault — and its reason is
+  kept in `apnsLastError` until the next send that arrives. A key Apple
+  restricts to one environment answers 403 `BadEnvironmentKeyIdInToken` in the
+  other; then the first environment's `BadDeviceToken` stands. The circuit
+  breaker counts unanswered requests per environment, so a wrong-environment
+  answer never opens it.
+- **No key, no push.** Without a key `GET /v1/push` answers `apns: false`,
+  registering is a 503 and no device is sent anything. The key is the `.p8`
+  file uploaded in the admin (below); the variables `APNS_KEY_ID`,
+  `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_KEY` are the fallback while none is
+  uploaded.
+
+### The APNs key in the admin (`/v1/admin/push/apns`)
+
+The owner uploads Apple's `AuthKey_<KEYID>.p8` on the admin's page "Push
+(iOS)"; nothing is set on the server and nothing restarts. `ApnsAdminService`
+keeps it in the one row of `apns_settings`, the PEM sealed with AES-256-GCM
+under `ASSISTANT_SECRET_KEY` exactly as Parky's Claude key is
+(`src/assistant/assistant-secret.util.ts`); without that variable the upload is
+refused with 409. An uploaded key wins over the `APNS_*` variables, is used
+from the next send on (new connections, new provider token) and makes `GET
+/v1/push` answer `apns: true`. No answer and no audit row carries the key: both
+name it by `fingerprint`, the first 8 hex characters of the SHA-256 over its
+public key. Routes and roles: [admin endpoints](../admin/endpoints.md#push-to-the-ios-app-adminpushapns).
+
+- **Upload** (`PUT key`, JSON `{ content, filename?, keyId?, teamId?,
+  bundleId? }`): `content` is the file's text. The key id comes from the file
+  name unless sent (ten capitals or digits; 400 asking for it when neither has
+  one), `teamId` defaults to `KC5QAXDX94`, `bundleId` to `fan.park.app`. Stored
+  only when the text holds a PKCS#8 EC P-256 private key that signs a provider
+  token; a certificate, an RSA or public key, anything over 4096 characters or
+  anything else is a 400 in German that never repeats the content.
+- **Check** (`POST check`, and after every upload): one request per environment
+  on a connection of its own, a background push (`content-available`, priority
+  5, expiration 0) to 32 random bytes as the device token. 400 `BadDeviceToken`
+  means Apple accepted the provider token, the team and the topic and only
+  misses the device, so nobody is notified; 403 `InvalidProviderToken` is a key
+  id or team that does not fit the key, `TopicDisallowed`/`BadTopic` the bundle
+  id, `BadEnvironmentKeyIdInToken` a key Apple restricts to the other
+  environment. `explainApnsAnswer` (`apns-key.ts`) turns each reason into the
+  German sentence the page shows. The last answer per environment is stored
+  with the key's fingerprint and shown only for the key in use.
+- **Test** (`POST test { deviceId }`): a real alert to one registered device,
+  whatever kinds it chose, with the bookkeeping of any send (environment
+  remembered, dead token deleted). Checks and tests share 20 requests per ten
+  minutes per account.
+- **Status** (`GET`): source (`database`, `environment`, none), ids,
+  fingerprint, who uploaded and when, the checks, devices by environment and
+  kind, and Apple's refusals of the last 24 hours by reason
+  (`push:apns:errors:<UTC hour>` in Redis: a lost counter costs a number, not a
+  notification).
 
 ### `news` — a new post in the news export
 
@@ -284,7 +345,7 @@ baseline, so a blip that reverts in between is never sent and a drift adds up.
 (`push:plan-change:<hash(tripId)>:<slug>:<date>`) until three days after the
 date; an evicted one restarts in silence. At most 150 plan days per tick
 (`MAX_PLAN_DAYS_PER_RUN`), 31 per trip, trips in random order, 60 s of wall
-clock, each day isolated; nothing at all without the `APNS_*` variables. A ride
+clock, each day isolated; nothing at all without an APNs key. A ride
 first seen down is not remembered, so a ride opening in the morning is not
 "running again"; `/plan/day` comes from its shared
 quarter-hour cache and is only read for days with rides or shows within the
@@ -322,5 +383,6 @@ Berlin puts a 21:00 block at 03:00. 22:00–08:00 was rejected: a park open unti
 - A subscription is deleted the first time a push service answers 404 or 410, and
   after 8 consecutive other failures (`MAX_FAILURES`, reset on success).
   `ride_alerts` and `show_follows` cascade with it in the database.
-- Configuration: `VAPID_*`, `PUSH_ENDPOINT_HOSTS`, `APNS_*` and
-  `NEWS_EXPORT_BASE` in `.env.example`.
+- Configuration: `VAPID_*`, `PUSH_ENDPOINT_HOSTS` and `NEWS_EXPORT_BASE` in
+  `.env.example`; the APNs key is uploaded in the admin (`APNS_*` as a
+  fallback).

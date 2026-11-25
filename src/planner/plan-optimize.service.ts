@@ -136,6 +136,17 @@ export class PlanOptimizeService implements OnModuleDestroy {
       );
     }
 
+    // Looked up, never logged or stored: the slug is the one thing the server learns of where
+    // the visitor is.
+    const start = body.from
+      ? await this.planDayService.rideStart(park, body.from.attractionSlug)
+      : undefined;
+    if (start === null) {
+      throw new BadRequestException(
+        `from.attractionSlug: "${body.from?.attractionSlug}" is not a ride of this park`,
+      );
+    }
+
     const clock = dayClockFor(park.timezone, body.date, body.nowMinute);
     // A walked day is refused before anything is loaded for it.
     const day =
@@ -163,6 +174,7 @@ export class PlanOptimizeService implements OnModuleDestroy {
       },
       levers: body.levers,
       preview: body.preview,
+      ...(start && { start }),
     };
 
     try {

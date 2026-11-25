@@ -192,6 +192,23 @@ what a merge carries over: [curation](curation.md#merges); retirement by the syn
 [reclassification and absence](../architecture/attraction-status/reclassification-and-absence.md);
 the rules for a destructive run: [automated retirement](../rules/automated-retirement-and-identity.md).
 
+## Push to the iOS app (`admin/push/apns`)
+
+The APNs key file is uploaded here instead of set as `APNS_*` variables; the key itself never comes
+back, only its `fingerprint`. Mechanism, validation and what each answer of Apple means:
+[push](../frontend/push.md#the-apns-key-in-the-admin-v1adminpushapns). To set APNs up: sign in to the
+admin as owner, open "Push (iOS)", drop Apple's `AuthKey_<KEYID>.p8` on the page. `ASSISTANT_SECRET_KEY`
+must be set on the API, as for Parky's key.
+
+| Method | Path                | Role   | Does                                                                                                                                                                                                                                    |
+| ------ | ------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `push/apns`         | viewer | the key in use (`source`, `keyId`, `teamId`, `bundleId`, `fingerprint`, `uploadedBy`, `uploadedAt`), `checks` per environment, `devices` by environment and kind, `errors` of 24 h                                                      |
+| PUT    | `push/apns/key`     | owner  | `{ content, filename?, keyId?, teamId?, bundleId? }` → the status after a check in both environments; `400` for anything that is not the key, `409` without `ASSISTANT_SECRET_KEY`; audited `push.apns-key.upload` with the fingerprint |
+| DELETE | `push/apns/key`     | owner  | deletes the uploaded key, the `APNS_*` variables apply again if set; audited `push.apns-key.remove`                                                                                                                                     |
+| POST   | `push/apns/check`   | owner  | asks Apple in production and sandbox whether it accepts the key, reaching no device → the status; `429` past 20 checks and tests in ten minutes                                                                                         |
+| GET    | `push/apns/devices` | viewer | the 50 app installs registered last: `tokenTail` (6 characters), `kinds`, `locale`, `environment`, `lastNotifiedAt`, `lastError`                                                                                                        |
+| POST   | `push/apns/test`    | owner  | `{ deviceId }` → `{ state, text, status, reason, environment }`: a test notification to that device and Apple's answer; `404` for a device that is gone                                                                                 |
+
 ## Cache
 
 | Method | Path                       | Role  | Does                                                                                                                                                                              |

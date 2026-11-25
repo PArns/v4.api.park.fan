@@ -2,6 +2,7 @@ import { ApiProperty } from "@nestjs/swagger";
 import {
   ArrayMaxSize,
   IsArray,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -10,6 +11,7 @@ import {
   IsNotEmpty,
 } from "class-validator";
 import { DEVICE_PUSH_KINDS, PUSH_TOPICS } from "../push-config";
+import { APNS_ENVIRONMENTS, type ApnsEnvironment } from "../apns";
 
 /**
  * The subscribe body.
@@ -240,6 +242,19 @@ export class PushDeviceDto {
   @IsString()
   @Matches(/^[A-Za-z0-9_-]{1,32}$/)
   tripId?: string | null;
+
+  @ApiProperty({
+    required: false,
+    enum: APNS_ENVIRONMENTS,
+    description:
+      "Which APNs environment issued the token: `sandbox` for a build " +
+      "installed from Xcode (`aps-environment` `development`), `production` " +
+      "for TestFlight and the App Store. Omitted, the server finds out with " +
+      "the first notification.",
+  })
+  @IsOptional()
+  @IsIn(APNS_ENVIRONMENTS)
+  environment?: ApnsEnvironment;
 }
 
 export class PushDeviceRemoveDto {

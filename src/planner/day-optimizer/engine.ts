@@ -1,6 +1,7 @@
 import { wishesWithAdditions } from "./add-ride-fit";
 import { gridForDay, withEarlyEntry } from "./day-grid";
 import { hasReadableWaitTimes } from "./estimate";
+import type { LegPlace } from "./leg";
 import {
   evaluateFit,
   fitBlocks,
@@ -22,6 +23,7 @@ import {
   movableEntries,
   optimizeDay,
   scoreCurrent,
+  walkFromStart,
   type OptimizeStop,
 } from "./optimize";
 import { planEntries, type PlannedEntry } from "./plan-entries";
@@ -68,6 +70,47 @@ export interface DayOptimizerRequest {
    * holds everything, which is what the button's promise is computed from.
    */
   preview?: boolean;
+  /**
+   * The ride the visitor stands at now, resolved by the caller. Read on the park's today only: the
+   * rest of the day is planned from here, leaving at the clock's minute.
+   */
+  start?: PlanStart;
+}
+
+/** A ride of the park as a start: its name for the receipt, and where it is. */
+export interface PlanStart extends LegPlace {
+  attractionSlug: string;
+  attractionName: string;
+}
+
+/** One entry of a {@link ReplanReceipt}. */
+export interface ReceiptEntry {
+  entryId: string;
+  attractionSlug: string;
+  attractionName: string;
+  /** Where the entry was, as sent. */
+  fromMinute: number;
+  /** Where the plan puts it. */
+  toMinute: number;
+}
+
+/** What a plan from a start changes, in a form a client can show before it applies it. */
+export interface ReplanReceipt {
+  from: { attractionSlug: string; attractionName: string };
+  /** The minute the visitor leaves the start: the clock's now. */
+  nowMinute: number;
+  /** The first ride of the plan, the walk to it from the start, and its start minute. */
+  first: {
+    entryId: string | null;
+    attractionSlug: string;
+    attractionName: string;
+    walkMinutes: number;
+    startMinute: number;
+  } | null;
+  /** Entries whose start minute the plan changes, in plan order. */
+  moved: ReceiptEntry[];
+  /** Entries whose queue is no longer joined before closing: kept, flagged, never dropped. */
+  pastClosing: ReceiptEntry[];
 }
 
 /** Why a day cannot be optimized at all. */
@@ -169,6 +212,58 @@ export interface DayOptimizerResult {
   /** The day as the answer leaves it, in start order; added rides carry `id: null`. */
   entries: PlannedEntry[] | null;
   fit: FitResultView | null;
+  /** Only on a request planned from a start (`start` on the park's today). */
+  receipt?: ReplanReceipt;
+}
+
+/** The receipt for the stops an answer carries, against the entries as sent. */
+function receiptFor(
+  day: OptimizerDay,
+  start: PlanStart,
+  nowMinute: number,
+  entries: readonly PlannerEntry[],
+  stops: readonly OptimizeStop[],
+): ReplanReceipt {
+  const sent = new Map(entries.map((entry) => [entry.id, entry.startMinute]));
+  const lines = (keep: (stop: OptimizeStop, was: number) => boolean) =>
+    stops.flatMap((stop): ReceiptEntry[] => {
+      const was = stop.entryId === null ? undefined : sent.get(stop.entryId);
+      return stop.entryId === null || was === undefined || !keep(stop, was)
+        ? []
+        : [
+            {
+              entryId: stop.entryId,
+              attractionSlug: stop.attractionSlug,
+              attractionName: stop.attractionName,
+              fromMinute: was,
+              toMinute: stop.startMinute,
+            },
+          ];
+    });
+  const first = stops[0];
+  return {
+    from: {
+      attractionSlug: start.attractionSlug,
+      attractionName: start.attractionName,
+    },
+    nowMinute,
+    first: first
+      ? {
+          entryId: first.entryId,
+          attractionSlug: first.attractionSlug,
+          attractionName: first.attractionName,
+          walkMinutes: walkFromStart(
+            start,
+            day.rides.find(
+              (ride) => ride.attractionSlug === first.attractionSlug,
+            ) ?? null,
+          ),
+          startMinute: first.startMinute,
+        }
+      : null,
+    moved: lines((stop, was) => stop.startMinute !== was),
+    pastClosing: lines((stop) => !stop.fits),
+  };
 }
 
 function choiceFrom(input: FitChoiceInput | undefined): FitChoice {
@@ -268,6 +363,18 @@ export function runDayOptimizer(
 
   const { entries } = request;
   answer.movable = movableEntries(entries, clock, day).length;
+  const start = clock.phase === "today" ? request.start : undefined;
+  /** The answer with its receipt, where the day was planned from a start. */
+  const from = (
+    result: DayOptimizerResult,
+    stops: readonly OptimizeStop[],
+  ): DayOptimizerResult =>
+    start && clock.phase === "today"
+      ? {
+          ...result,
+          receipt: receiptFor(day, start, clock.nowMinute, entries, stops),
+        }
+      : result;
 
   if (request.mode === "fit") {
     const rides: OptimizerRide[] = [];
@@ -283,19 +390,23 @@ export function runDayOptimizer(
       wishes: wishesWithAdditions(day, entries, rides, clock),
       blocks: fitBlocks(entries),
       clock,
+      start,
     };
     const fit = fitResult(
       input,
       choiceFrom(request.choice),
       request.levers === true,
     );
-    return {
-      ...answer,
-      status: "fit",
-      add: rides.map((ride) => ride.attractionSlug),
-      fit,
-      entries: planEntries(fit.entries, fit.stops),
-    };
+    return from(
+      {
+        ...answer,
+        status: "fit",
+        add: rides.map((ride) => ride.attractionSlug),
+        fit,
+        entries: planEntries(fit.entries, fit.stops),
+      },
+      fit.stops,
+    );
   }
 
   const add =
@@ -318,21 +429,25 @@ export function runDayOptimizer(
       wishes: fitWishes(day, entries, add, clock),
       blocks: fitBlocks(entries),
       clock,
+      start,
     };
     if (input.wishes.length > 0) {
       const all = fitChoiceAll();
       const outcome = evaluateFit(input, all);
       if (outcome.fitted.length < input.wishes.length) {
-        return {
-          ...answer,
-          status: "needs-fit",
-          fit: fitResult(input, all, true, outcome),
-        };
+        return from(
+          {
+            ...answer,
+            status: "needs-fit",
+            fit: fitResult(input, all, true, outcome),
+          },
+          outcome.stops,
+        );
       }
     }
   }
 
-  const current = scoreCurrent({ day, grid, entries, clock });
+  const current = scoreCurrent({ day, grid, entries, clock, start });
   answer.before = current
     ? {
         totalWaitMinutes: current.totalWaitMinutes,
@@ -344,29 +459,33 @@ export function runDayOptimizer(
       }
     : null;
 
-  const plan = optimizeDay({ day, grid, entries, add, clock });
-  if (!plan) return { ...answer, status: "unchanged" };
+  const plan = optimizeDay({ day, grid, entries, add, clock, start });
+  if (!plan)
+    return from({ ...answer, status: "unchanged" }, current?.stops ?? []);
 
-  return {
-    ...answer,
-    status: "optimized",
-    after: {
-      totalWaitMinutes: plan.totalWaitMinutes,
-      idleMinutes: plan.idleMinutes,
-      walkMinutes: plan.walkMinutes,
-      endMinute: plan.endMinute,
-      overflow: plan.overflow,
-      clashes: clashCount(day, withPlan(entries, plan.stops), clock),
+  return from(
+    {
+      ...answer,
+      status: "optimized",
+      after: {
+        totalWaitMinutes: plan.totalWaitMinutes,
+        idleMinutes: plan.idleMinutes,
+        walkMinutes: plan.walkMinutes,
+        endMinute: plan.endMinute,
+        overflow: plan.overflow,
+        clashes: clashCount(day, withPlan(entries, plan.stops), clock),
+      },
+      plan: {
+        stops: plan.stops,
+        totalWaitMinutes: plan.totalWaitMinutes,
+        idleMinutes: plan.idleMinutes,
+        walkMinutes: plan.walkMinutes,
+        endMinute: plan.endMinute,
+        overflow: plan.overflow,
+        capped: plan.capped,
+      },
+      entries: planEntries(entries, plan.stops),
     },
-    plan: {
-      stops: plan.stops,
-      totalWaitMinutes: plan.totalWaitMinutes,
-      idleMinutes: plan.idleMinutes,
-      walkMinutes: plan.walkMinutes,
-      endMinute: plan.endMinute,
-      overflow: plan.overflow,
-      capped: plan.capped,
-    },
-    entries: planEntries(entries, plan.stops),
-  };
+    plan.stops,
+  );
 }

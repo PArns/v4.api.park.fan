@@ -44,9 +44,9 @@ describe("APNs", () => {
 
     it("reads an escaped PEM, production by default, sandbox on request", () => {
       process.env = { ...ENV, ...APNS_ENV };
-      expect(getApnsConfig()?.host).toBe("https://api.push.apple.com");
+      expect(getApnsConfig()?.first).toBe("production");
       process.env = { ...ENV, ...APNS_ENV, APNS_PRODUCTION: "false" };
-      expect(getApnsConfig()?.host).toBe("https://api.sandbox.push.apple.com");
+      expect(getApnsConfig()?.first).toBe("sandbox");
     });
   });
 
@@ -120,16 +120,22 @@ describe("APNs", () => {
     const now = jest.spyOn(Date, "now").mockImplementation(() => clock);
     try {
       for (let i = 0; i < ApnsClient.BREAKER_FAILURES; i++) {
-        await expect(client.send("ab", request)).resolves.toBe("failed");
+        await expect(client.send("ab", request)).resolves.toMatchObject({
+          outcome: "failed",
+        });
       }
       expect(post).toHaveBeenCalledTimes(ApnsClient.BREAKER_FAILURES);
       // Open: no request at all.
-      await expect(client.send("ab", request)).resolves.toBe("failed");
+      await expect(client.send("ab", request)).resolves.toMatchObject({
+        outcome: "failed",
+      });
       expect(post).toHaveBeenCalledTimes(ApnsClient.BREAKER_FAILURES);
       // After the pause Apple is asked again, and an answer closes it.
       clock += ApnsClient.BREAKER_OPEN_MS;
-      post.mockResolvedValue({ status: 200, body: "" });
-      await expect(client.send("ab", request)).resolves.toBe("sent");
+      post.mockResolvedValue({ status: 200, reason: "" });
+      await expect(client.send("ab", request)).resolves.toMatchObject({
+        outcome: "sent",
+      });
     } finally {
       now.mockRestore();
     }
@@ -185,6 +191,13 @@ describe("APNs", () => {
       kind: "ride-wait" as const,
     };
 
+    const answer = (outcome: "sent" | "dead" | "failed") => ({
+      outcome,
+      environment: "production",
+      status: outcome === "sent" ? 200 : 400,
+      reason: "",
+    });
+
     beforeEach(() => {
       process.env = { ...ENV, ...APNS_ENV };
       repository = {
@@ -192,7 +205,7 @@ describe("APNs", () => {
         increment: jest.fn(),
         delete: jest.fn().mockResolvedValue({ affected: 0 }),
       };
-      apns = { send: jest.fn().mockResolvedValue("sent") };
+      apns = { send: jest.fn().mockResolvedValue(answer("sent")) };
       service = new PushService(
         repository as unknown as Repository<PushSubscription>,
         apns as unknown as ApnsClient,
@@ -206,6 +219,7 @@ describe("APNs", () => {
         expect.objectContaining({
           body: expect.stringContaining('"ride-wait"'),
         }),
+        null,
       );
       expect(webpush.sendNotification).not.toHaveBeenCalled();
     });
@@ -241,13 +255,13 @@ describe("APNs", () => {
     });
 
     it("deletes the device the first time Apple calls its token dead", async () => {
-      apns.send.mockResolvedValue("dead");
+      apns.send.mockResolvedValue(answer("dead"));
       await expect(service.send(device, wait)).resolves.toBe(false);
       expect(repository.delete).toHaveBeenCalledWith({ id: "dev-1" });
     });
 
     it("never blames the row for Apple's or our own bad minute", async () => {
-      apns.send.mockResolvedValue("failed");
+      apns.send.mockResolvedValue(answer("failed"));
       for (let i = 0; i < 10; i++) {
         await expect(service.send(device, wait)).resolves.toBe(false);
       }

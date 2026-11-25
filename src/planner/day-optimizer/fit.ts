@@ -1,4 +1,5 @@
 import type { DayGrid } from "./day-grid";
+import type { LegPlace } from "./leg";
 import {
   movableEntries,
   optimizeDay,
@@ -63,6 +64,8 @@ export interface FitInput {
   /** The free blocks the levers below may take away or cut short. */
   blocks: readonly FitBlock[];
   clock?: DayClock;
+  /** Where the visitor stands today; see `OptimizeInput.start`. */
+  start?: LegPlace | null;
 }
 
 /** The visitor's answers. Everything not named here is planned as offered. */
@@ -308,6 +311,7 @@ export function evaluateFit(input: FitInput, choice: FitChoice): FitOutcome {
     add: replanned.map((wish) => wish.ride as PlanDayRide),
     priority: replanned.map((wish) => wish.attractionSlug),
     clock: input.clock,
+    start: input.start,
   };
 
   const plan = optimizeDay(optimizeInput);

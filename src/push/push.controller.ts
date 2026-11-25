@@ -114,6 +114,7 @@ export class PushController {
         body.locale === undefined ? undefined : normalizeLocale(body.locale),
       timezone: normalizeTimezone(body.timezone),
       tripId: body.tripId,
+      environment: body.environment,
     });
     if (!stored) {
       throw new HttpException(
