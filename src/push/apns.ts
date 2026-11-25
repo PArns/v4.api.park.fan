@@ -81,7 +81,8 @@ function parseKey(pem: string): ParsedKey | null {
   }
 }
 
-let stored: (ApnsCredentials & ParsedKey) | null = null;
+/** The uploaded key, parsed: the PEM text is not kept past the parse. */
+let stored: (Omit<ApnsCredentials, "pem"> & ParsedKey) | null = null;
 let parsed: { raw: string; key: ParsedKey | null } | null = null;
 
 /**
@@ -93,7 +94,15 @@ export function setStoredApnsCredentials(
   credentials: ApnsCredentials | null,
 ): boolean {
   const key = credentials && parseKey(credentials.pem);
-  stored = credentials && key ? { ...credentials, ...key } : null;
+  stored =
+    credentials && key
+      ? {
+          keyId: credentials.keyId,
+          teamId: credentials.teamId,
+          bundleId: credentials.bundleId,
+          ...key,
+        }
+      : null;
   return stored !== null;
 }
 
