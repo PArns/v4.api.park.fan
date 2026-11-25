@@ -1,3 +1,7 @@
+import {
+  lastObserved,
+  readAttractionLastSeen,
+} from "../common/utils/attraction-last-seen.util";
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import {
   readsUnknownFromAbsentSource,
@@ -707,6 +711,10 @@ export class FavoritesService {
         ropeDropParkEntries,
       );
       const nowIso = new Date().toISOString();
+      const seen = await readAttractionLastSeen(
+        this.redis,
+        missedAttractions.map((a) => a.id),
+      );
       for (const attraction of missedAttractions) {
         const dto = AttractionResponseDto.fromEntity(attraction);
         dto.queues = (queuesMap.get(attraction.id) || []).map((qd) => ({
@@ -722,6 +730,7 @@ export class FavoritesService {
           currentGroupEnd: qd.currentGroupEnd ?? null,
           estimatedWait: qd.estimatedWait ?? null,
           lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
+          lastObserved: lastObserved(qd, seen.get(attraction.id)),
         }));
         const parkStatus: "OPERATING" | "CLOSED" =
           (attraction.parkId

@@ -18,3 +18,19 @@ data (queue rows, shows, restaurants, statistics).
   had changed. `max(queues[].lastUpdated)` is not needed for the "as of" line any more.
 - **Absent on a payload built before this field existed**, until that cache entry is rebuilt. Fall
   back to the request's own time then.
+
+## When a ride's wait was last read (`queues[].lastObserved`)
+
+`queues[].lastUpdated` is when the posted wait last **changed**. `queues[].lastObserved` (ISO 8601)
+is when a source last **delivered** the ride, changed or not: the "Aktualisiert" time to show next
+to a wait. Served wherever `lastUpdated` is: park page, attraction page, favorites, park wait times.
+
+- Derived from the Redis key `attraction:last-seen:<attractionId>` that the wait-times sync stamps
+  on every poll in which a real feed lists the ride (14-day TTL). The hourly heartbeat and
+  reverse-reconciliation never stamp it, so a ride whose source stopped answering keeps its old
+  time. One `MGET` per response build, no extra write.
+- Never earlier than the row's own `lastUpdated`; without a last-seen it equals `lastUpdated`.
+  On a heartbeat row (which carries `lastUpdated = now` without a reading) it is the last-seen or
+  `null`.
+- Optional: absent on a payload built before this field existed (cached up to ~5 minutes) and null
+  on a heartbeat row without a last-seen. Fall back to `lastUpdated` then.

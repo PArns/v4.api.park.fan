@@ -99,6 +99,14 @@ export class QueueDataItemDto {
   @ApiProperty({ description: "Last updated timestamp (ISO 8601)" })
   lastUpdated: string; // ISO 8601 - from API (most relevant for users)
 
+  @ApiProperty({
+    description:
+      "When this ride's wait was last successfully read from a source (ISO 8601), changed or not. `lastUpdated` is when the value last changed. Not refreshed while the source is silent. Absent or null: fall back to `lastUpdated`.",
+    required: false,
+    nullable: true,
+  })
+  lastObserved?: string | null;
+
   // Phase 5.5: Wait time trends (last 2-3 hours)
   @ApiProperty({ description: "Wait time trend direction", required: false })
   trend?: {
