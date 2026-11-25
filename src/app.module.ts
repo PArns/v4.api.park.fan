@@ -8,6 +8,7 @@ import { HealthModule } from "./health/health.module";
 import { DestinationsModule } from "./destinations/destinations.module";
 import { ParksModule } from "./parks/parks.module";
 import { ParkSeasonsModule } from "./parks/park-seasons.module";
+import { FacilitiesModule } from "./facilities/facilities.module";
 import { AttractionsModule } from "./attractions/attractions.module";
 import { ShowsModule } from "./shows/shows.module";
 import { RestaurantsModule } from "./restaurants/restaurants.module";
@@ -86,6 +87,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     DestinationsModule,
     ParksModule,
     ParkSeasonsModule,
+    FacilitiesModule,
     AttractionsModule,
     ShowsModule,
     RestaurantsModule,

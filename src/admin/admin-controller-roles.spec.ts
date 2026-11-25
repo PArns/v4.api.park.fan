@@ -4,6 +4,7 @@ import { METHOD_METADATA, PATH_METADATA } from "@nestjs/common/constants";
 import { AdminController } from "./admin.controller";
 import { AdminJobsController } from "./admin-jobs.controller";
 import { AdminRedirectsController } from "./content/admin-redirects.controller";
+import { AdminFacilitiesController } from "../facilities/admin-facilities.controller";
 import { ADMIN_MIN_ROLE_KEY } from "./auth/admin-auth.decorators";
 
 /**
@@ -15,6 +16,7 @@ describe.each([
   ["AdminController", AdminController, 8],
   ["AdminJobsController", AdminJobsController, 18],
   ["AdminRedirectsController", AdminRedirectsController, 1],
+  ["AdminFacilitiesController", AdminFacilitiesController, 4],
 ] as const)("%s write routes", (_name, controller, minRoutes) => {
   const writes = [
     RequestMethod.POST,
