@@ -1,3 +1,7 @@
+import {
+  lastObserved,
+  readAttractionLastSeen,
+} from "../../common/utils/attraction-last-seen.util";
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
@@ -772,6 +776,11 @@ export class ParkIntegrationService {
       // `dto.weather` is set above; the same reading for every ride.
       const cold = tooColdToGetWet(dto.weather?.now);
 
+      const lastSeen = await readAttractionLastSeen(
+        this.redis,
+        dto.attractions.map((a) => a.id),
+      );
+
       for (const attraction of dto.attractions) {
         // Get current queue data for this attraction from the bulk result
         const queueData = queueDataMap.get(attraction.id) || [];
@@ -836,6 +845,7 @@ export class ParkIntegrationService {
             currentGroupEnd: qd.currentGroupEnd ?? null,
             estimatedWait: qd.estimatedWait ?? null,
             lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
+            lastObserved: lastObserved(qd, lastSeen.get(attraction.id)),
           }));
 
           // Set overall status (use first queue's status as representative)
@@ -2201,6 +2211,10 @@ export class ParkIntegrationService {
       queueType,
     );
 
+    const lastSeen = await readAttractionLastSeen(this.redis, [
+      ...new Set(waitTimes.map((w) => w.attraction.id)),
+    ]);
+
     // Group by attraction
     const attractionsMap = new Map<
       string,
@@ -2228,6 +2242,10 @@ export class ParkIntegrationService {
       const { QueueDataItemDto } =
         await import("../../queue-data/dto/queue-data-item.dto");
       const queueDto = QueueDataItemDto.fromEntity(queueData);
+      queueDto.lastObserved = lastObserved(
+        queueData,
+        lastSeen.get(attractionId),
+      );
 
       attractionsMap.get(attractionId)!.queues.push(queueDto);
     }

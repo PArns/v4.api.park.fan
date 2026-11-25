@@ -1,3 +1,4 @@
+import { attractionLastSeenKey } from "../../common/utils/attraction-last-seen.util";
 import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { randomUUID } from "crypto";
@@ -670,7 +671,7 @@ export class WaitTimesProcessor {
    * reverse-reconciliation.
    */
   private attractionLastSeenKey(attractionId: string): string {
-    return `attraction:last-seen:${attractionId}`;
+    return attractionLastSeenKey(attractionId);
   }
 
   private readonly LAST_SEEN_TTL_SECONDS = 14 * 24 * 3600; // 14 days buffer

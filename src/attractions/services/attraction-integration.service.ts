@@ -1,3 +1,7 @@
+import {
+  lastObserved,
+  readAttractionLastSeen,
+} from "../../common/utils/attraction-last-seen.util";
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import {
   readsUnknownFromAbsentSource,
@@ -220,6 +224,7 @@ export class AttractionIntegrationService {
 
     // --- Process queue data (trend detection per queue, already parallelized) ---
     if (queueData.length > 0) {
+      const seen = await readAttractionLastSeen(this.redis, [attraction.id]);
       dto.queues = await Promise.all(
         queueData.map(async (qd) => {
           const queueDto: QueueDataItemDto = {
@@ -235,6 +240,7 @@ export class AttractionIntegrationService {
             currentGroupEnd: qd.currentGroupEnd ?? null,
             estimatedWait: qd.estimatedWait ?? null,
             lastUpdated: (qd.lastUpdated || qd.timestamp).toISOString(),
+            lastObserved: lastObserved(qd, seen.get(attraction.id)),
           };
 
           // Add trend data for wait-time based queues (STANDBY, SINGLE_RIDER, etc.)
