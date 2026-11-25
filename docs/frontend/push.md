@@ -340,6 +340,41 @@ bundleId? }`): `content` is the file's text. The key id comes from the file
   (`push:apns:errors:<UTC hour>` in Redis: a lost counter costs a number, not a
   notification).
 
+### A device's self-test (`POST /v1/push/devices/test`)
+
+The app's hidden "Push-Tests" (presentation mode) asks for a sample of one kind:
+`{ installId, kind, locale? }` → 200 `{ state, status?, reason?, environment? }`,
+`state` one of `sent`, `apns-error` (Apple's `status` and `reason` beside it),
+`not-configured` (no APNs key) or `no-token`.
+
+- **Only to itself.** The target is the token stored for `apns:<installId>`;
+  there is no token or device parameter. The install id is the device's
+  credential exactly as for every other device call (a random UUID only the app
+  and this server know; in the body, not the path, so no access log keeps it).
+  An unknown install answers `no-token`, the same as a row without a token.
+- **Limits.** 20 an hour per install (`push-test-install`) and 60 an hour per
+  address (`push-test`), both counted before the row is read
+  (`PushFollowWriteRateLimitService`). `PUSH_SELF_TEST=false` answers 404: an
+  abuse switch that needs no release. Default on, since the worst a caller can
+  do is send itself notifications.
+- **The real thing.** `kind` is one of `ride-wait`, `ride-reopen`, `next-up`,
+  `plan-change`, `rain-soon`, `morning-plan`, `news`, `guides`
+  (`PUSH_SELF_TEST_KINDS`); `selfTestMessage` (`src/push/push-self-test.ts`)
+  writes it with the kind's own writer and `buildApnsRequest` delivers it, so
+  pictogram, subtitle, thread, category, level, photo and expiry are the real
+  ones. The data is a visit to Phantasialand (Taron with its photo, times from
+  the park's clock now); news and guides are the newest post of the reader's
+  export. Its text says nothing about a test.
+- **Bypassed:** the device's choice of kinds, quiet hours, every cool-down and
+  dedupe, and `TIME_SENSITIVE_CAP` (a test neither goes calm nor uses up the
+  day's share). **Kept:** the circuit breaker, the environment retry and
+  Apple's bookkeeping, so a dead token is deleted.
+- **The marker.** `test: "true"` in the payload, `test=1` on the `url` (what
+  the app's tap and "Umplanen" forward), the collapse id `<kind>:test`
+  (a test replaces the last test, never a real banner), and every id an action
+  writes with is `"test"` (`attractionId`, `entry`), so an app that ignored the
+  marker would still change nothing real.
+
 ### `news` — a new post in the news export
 
 `NewsPushService`, a fourth half of the five-minute job, for devices with
