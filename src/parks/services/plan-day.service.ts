@@ -360,6 +360,47 @@ export class PlanDayService {
   }
 
   /**
+   * One ride of the park as the day optimizer's start point (`from` on `/plan/optimize`): its
+   * name and where it is, or `null` where the park has no such ride. Asked of the catalogue and
+   * not of `/plan/day`, since the ride a visitor stands at need not have a curve that day.
+   */
+  async rideStart(
+    park: Park,
+    slug: string,
+  ): Promise<{
+    attractionSlug: string;
+    attractionName: string;
+    latitude: number | null;
+    longitude: number | null;
+    land: string | null;
+  } | null> {
+    const ride = await this.attractionRepository.findOne({
+      where: { parkId: park.id, slug, retiredAt: IsNull() },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        landName: true,
+        latitude: true,
+        longitude: true,
+      },
+    });
+    if (!ride) return null;
+    // A decimal column arrives as a string; a missing one must stay missing, not become 0.
+    const coordinate = (value: unknown) =>
+      value === null || value === undefined || !Number.isFinite(Number(value))
+        ? null
+        : Number(value);
+    return {
+      attractionSlug: ride.slug,
+      attractionName: ride.name,
+      latitude: coordinate(ride.latitude),
+      longitude: coordinate(ride.longitude),
+      land: ride.landName ?? null,
+    };
+  }
+
+  /**
    * The rides a curated works window shuts on `dateStr`, by slug and name, as
    * park.fan's relay adds them to `/plan/day` (`ridesInWorks`) and the day
    * optimizer reads them: an entry for one is held still instead of priced as

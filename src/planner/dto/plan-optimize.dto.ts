@@ -213,6 +213,17 @@ export class FitChoiceDto {
   priority?: string[];
 }
 
+export class PlanStartDto {
+  @ApiProperty({
+    example: "taron",
+    description: "A ride of this park, by slug.",
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  attractionSlug: string;
+}
+
 export class PlanOptimizeRequestDto {
   @ApiProperty({ example: "2026-11-14", description: "Park-local date." })
   @IsString()
@@ -297,6 +308,16 @@ export class PlanOptimizeRequestDto {
   @IsOptional()
   @IsBoolean()
   preview?: boolean;
+
+  @ApiPropertyOptional({
+    type: () => PlanStartDto,
+    description:
+      "The ride the visitor stands at now. Read only when `date` is the park's today: the rest of the day is planned from there, the first stop no earlier than now plus the walk, and the answer carries a `receipt`. A slug that is not a ride of this park is a 400. Never a position.",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PlanStartDto)
+  from?: PlanStartDto;
 }
 
 export class DayClockDto {
@@ -556,6 +577,78 @@ export class FitResultDto {
   applied: string[] | null;
 }
 
+export class ReceiptEntryDto {
+  @ApiProperty()
+  entryId: string;
+
+  @ApiProperty()
+  attractionSlug: string;
+
+  @ApiProperty()
+  attractionName: string;
+
+  @ApiProperty({ description: "Park-local minute the entry was sent with." })
+  fromMinute: number;
+
+  @ApiProperty({ description: "Park-local minute the plan puts it at." })
+  toMinute: number;
+}
+
+export class ReceiptStartDto {
+  @ApiProperty()
+  attractionSlug: string;
+
+  @ApiProperty()
+  attractionName: string;
+}
+
+export class ReceiptFirstDto {
+  @ApiProperty({ nullable: true, type: String })
+  entryId: string | null;
+
+  @ApiProperty()
+  attractionSlug: string;
+
+  @ApiProperty()
+  attractionName: string;
+
+  @ApiProperty({
+    description: "Minutes on foot from the start ride, at park pace.",
+  })
+  walkMinutes: number;
+
+  @ApiProperty()
+  startMinute: number;
+}
+
+export class ReplanReceiptDto {
+  @ApiProperty({ type: () => ReceiptStartDto })
+  from: ReceiptStartDto;
+
+  @ApiProperty({ description: "The minute the visitor leaves the start." })
+  nowMinute: number;
+
+  @ApiProperty({
+    type: () => ReceiptFirstDto,
+    nullable: true,
+    description: "The first ride of the plan and the walk to it.",
+  })
+  first: ReceiptFirstDto | null;
+
+  @ApiProperty({
+    type: () => [ReceiptEntryDto],
+    description: "Entries whose start minute the plan changes, in plan order.",
+  })
+  moved: ReceiptEntryDto[];
+
+  @ApiProperty({
+    type: () => [ReceiptEntryDto],
+    description:
+      "Entries whose queue is no longer joined before closing: kept and flagged.",
+  })
+  pastClosing: ReceiptEntryDto[];
+}
+
 export class PlanOptimizeResponseDto {
   @ApiProperty({ example: "2026-11-14" })
   date: string;
@@ -623,4 +716,11 @@ export class PlanOptimizeResponseDto {
 
   @ApiProperty({ type: () => FitResultDto, nullable: true })
   fit: FitResultDto | null;
+
+  @ApiPropertyOptional({
+    type: () => ReplanReceiptDto,
+    description:
+      "Only on a request with `from` on the park's today: what the plan changes.",
+  })
+  receipt?: ReplanReceiptDto;
 }

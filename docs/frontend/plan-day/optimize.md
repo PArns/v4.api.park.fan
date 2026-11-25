@@ -33,6 +33,7 @@ POST /v1/parks/:continent/:country/:city/:parkSlug/plan/optimize
 | `choice`    | `fit` only: `dropped[]`, `droppedBlocks[]`, `shortBlocks[]`, `priority[]` (wish keys and block ids); absent is everything ticked                        |
 | `levers`    | `fit` only: also measure what taking out or shortening each free block buys                                                                             |
 | `preview`   | `day`/`headliners` only: skip the fit question, for a button that shows what a press would gain                                                         |
+| `from`      | `{ attractionSlug }`: the ride the visitor stands at now; read on the park's today only ([below](#from-where-the-visitor-stands))                       |
 
 An entry is park.fan's `PlannerEntry`: `startMinute` is park-local minutes since midnight and runs
 past 1440 on a day past midnight (at most 2880). A free block carries
@@ -46,6 +47,38 @@ Past, today or future is the server's call, from the park's timezone. On today's
 starts at `nowMinute` (snapped up to the quarter hour), or at the server's park-local minute when
 none is sent; an entry whose start the clock has passed is fixed. A past date is refused before the
 day is loaded.
+
+### From where the visitor stands
+
+Without `from` the optimizer knows no place: the first stop of the rest of the day costs no walk
+and may start at the next quarter hour, wherever the visitor is. `from: { attractionSlug }` names
+the ride they stand at ("Umplanen ab hier" in the app), and on the park's today:
+
+- the visitor leaves that ride at the clock's minute (`nowMinute` as sent, unsnapped), and the
+  first stop starts no earlier than that plus the walk to it, on foot at park pace with the detour
+  factor, nothing added for leaving a station;
+- that first walk is priced like every other (`0.2 × walk`), so the order begins near the visitor
+  unless a queue elsewhere is worth the way; `before` and `after` both count it;
+- a day whose first entry cannot be reached in time (the fast-walker floor) is not held as the
+  incumbent, so the press moves it instead of answering `unchanged`;
+- everything else is as without it: ticked-off entries, free blocks, shows, entries the clock has
+  passed and rides in works stay where they are;
+- the answer carries a [`receipt`](#receipt).
+
+The slug is checked against the park's catalogue (retired rides excluded), not against
+`/plan/day`: the ride a visitor stands at need not have a curve that day. A slug that is not a
+ride of this park is a **400** (`from.attractionSlug: "…" is not a ride of this park`), and so is
+any other field inside `from`: it takes a slug and never a position. A ride without coordinates is
+walked from at the assumed three minutes. On a future date `from` is checked and then not read,
+and the answer has no `receipt`.
+
+Nothing of `from` is kept: the route stores no plan, no log line names the slug, and no cache key
+holds it. The device works out the nearest ride from its own position; the server learns the ride.
+
+What a re-plan on the day does not know: the forecast is `/plan/day`'s (the hourly model, cached
+15 minutes), not the live queue; a ride that is down right now is planned like any other unless a
+curated works window shuts it; and rain moves nothing (`avoidWet` only filters the headliners
+`headliners` adds).
 
 ## The schedule
 
@@ -99,6 +132,7 @@ As on every public route, a field whose value is `null` is left out of the JSON
 | `plan`              | `optimized`: `stops[]` in plan order plus the totals (`walkMinutes` among them) and `capped`                      |
 | `entries`           | the day as the answer leaves it, in start order; an added ride has `id: null` and `added: true`                   |
 | `fit`               | `needs-fit` and `fit`: the assistant's answer (below)                                                             |
+| `receipt`           | only with `from` on the park's today: what the plan changes ([below](#receipt)); the key is absent otherwise      |
 
 A stop is `{ entryId, attractionSlug, attractionName, startMinute, waitMinutes, fits }`:
 `entryId: null` is a ride being added, `fits` says whether its queue is joined before closing. A
@@ -111,6 +145,142 @@ counts the places where the next thing starts before the one before it is over a
 The waits are raw minutes, not rounded to five. A press can save walking and no queueing: the
 search weighs both, so `after.totalWaitMinutes` may sit a few minutes above `before`'s when
 `after.walkMinutes` is well below it.
+
+### `receipt`
+
+Present on every answer but `refused` when the day was planned from `from`; what a client shows
+before it applies the plan.
+
+| Field           | Notes                                                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `from`          | `{ attractionSlug, attractionName }`: the start as the server read it                                                                             |
+| `nowMinute`     | the minute the visitor leaves it                                                                                                                  |
+| `first`         | `{ entryId?, attractionSlug, attractionName, walkMinutes, startMinute }`: the first ride of the plan and the walk to it; absent with no ride left |
+| `moved[]`       | `{ entryId, attractionSlug, attractionName, fromMinute, toMinute }` for each entry whose start changes, in plan order                             |
+| `pastClosing[]` | the same shape for each entry whose queue is no longer joined before closing: kept at `toMinute`, flagged, never dropped                          |
+
+On `unchanged` `moved` is empty and `first` is the day's own next ride. On `needs-fit` and `fit`
+the receipt describes `fit.stops`. A re-plan that should always answer with a plan, overflow
+flagged, sends `preview: true`; without it a day that no longer fits answers `needs-fit`.
+
+```jsonc
+// POST /v1/parks/europe/germany/bruehl/phantasialand/plan/optimize   (14:03 in the park)
+{
+  "date": "2026-11-25",
+  "mode": "day",
+  "preview": true,
+  "nowMinute": 843,
+  "from": { "attractionSlug": "chiapas" },
+  "entries": [
+    {
+      "id": "r1",
+      "attractionSlug": "maus-au-chocolat",
+      "startMinute": 600,
+      "done": true,
+      "actualWait": 20,
+    },
+    { "id": "r2", "attractionSlug": "black-mamba", "startMinute": 855 },
+    {
+      "id": "lunch",
+      "custom": { "label": "Mittag", "icon": "food", "durationMinutes": 45 },
+      "startMinute": 930,
+    },
+    { "id": "r3", "attractionSlug": "taron", "startMinute": 990 },
+    { "id": "r4", "attractionSlug": "chiapas", "startMinute": 1050 },
+  ],
+}
+```
+
+```jsonc
+{
+  "date": "2026-11-25",
+  "mode": "day",
+  "status": "optimized",
+  "clock": { "phase": "today", "nowMinute": 843 },
+  "movable": 3,
+  "before": {
+    "totalWaitMinutes": 100,
+    "idleMinutes": 90,
+    "walkMinutes": 19,
+    "endMinute": 1080,
+    "overflow": 0,
+    "clashes": 0,
+  },
+  "after": {
+    "totalWaitMinutes": 100,
+    "idleMinutes": 60,
+    "walkMinutes": 19,
+    "endMinute": 1055,
+    "overflow": 0,
+    "clashes": 0,
+  },
+  "plan": {
+    "stops": [
+      {
+        "entryId": "r3",
+        "attractionSlug": "taron",
+        "attractionName": "Taron",
+        "startMinute": 855,
+        "waitMinutes": 45,
+        "fits": true,
+      },
+      {
+        "entryId": "r2",
+        "attractionSlug": "black-mamba",
+        "attractionName": "Black Mamba",
+        "startMinute": 975,
+        "waitMinutes": 30,
+        "fits": true,
+      },
+      {
+        "entryId": "r4",
+        "attractionSlug": "chiapas",
+        "attractionName": "Chiapas",
+        "startMinute": 1025,
+        "waitMinutes": 25,
+        "fits": true,
+      },
+    ],
+    // … the totals, as in `after`
+  },
+  // "entries": the whole day in start order, r1 and lunch where they were
+  "receipt": {
+    "from": { "attractionSlug": "chiapas", "attractionName": "Chiapas" },
+    "nowMinute": 843,
+    "first": {
+      "entryId": "r3",
+      "attractionSlug": "taron",
+      "attractionName": "Taron",
+      "walkMinutes": 5,
+      "startMinute": 855,
+    },
+    "moved": [
+      {
+        "entryId": "r3",
+        "attractionSlug": "taron",
+        "attractionName": "Taron",
+        "fromMinute": 990,
+        "toMinute": 855,
+      },
+      {
+        "entryId": "r2",
+        "attractionSlug": "black-mamba",
+        "attractionName": "Black Mamba",
+        "fromMinute": 855,
+        "toMinute": 975,
+      },
+      {
+        "entryId": "r4",
+        "attractionSlug": "chiapas",
+        "attractionName": "Chiapas",
+        "fromMinute": 1050,
+        "toMinute": 1025,
+      },
+    ],
+    "pastClosing": [],
+  },
+}
+```
 
 ### `fit`
 
@@ -161,6 +331,10 @@ every order of eight rides" after the unit tests, and skips it, saying so, other
 outside the folder that moves what the optimizer sees (the `/plan/day` payload it plans on, a
 scorer weight imported from elsewhere) does not trigger it; run the script by hand then.
 `BENCH=1 pnpm test:planner-exhaustive` adds the timing table.
+
+`start.spec.ts` and `plan-optimize.from.spec.ts` hold `from`: the order follows the walk, done and
+started entries stay, the first start is at or after now plus the walk, the answer without `from`
+is the same string as before, and the slug reaches no log line or cache key.
 
 ## Related
 
