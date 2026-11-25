@@ -6,7 +6,7 @@ import { AssistantRateLimitService } from "./assistant-rate-limit.service";
 import type { AssistantChatService } from "./assistant-chat.service";
 import type { AssistantChallengeService } from "./assistant-challenge.service";
 import type { AssistantRecordsService } from "./assistant-records.service";
-import type { AssistantSettingsService } from "./assistant-settings.service";
+import { AssistantSettingsService } from "./assistant-settings.service";
 
 /** Just enough Redis for the limiter: counters with a lifetime. */
 function fakeRedis() {
@@ -35,6 +35,11 @@ function fakeRedis() {
       Promise.resolve(values.has(key) ? (expires.get(key) ?? -1) : -2),
   };
 }
+
+/** The settings as a browser's session meets them: the app's switch never applies. */
+const NOT_THE_APP = {
+  offForSession: () => Promise.resolve(false),
+} as unknown as AssistantSettingsService;
 
 function fakeResponse() {
   const sent: {
@@ -81,7 +86,7 @@ describe("AssistantController.ask, junk and pauses", () => {
       session: () => "session-1",
     } as unknown as AssistantChallengeService;
     const controller = new AssistantController(
-      {} as AssistantSettingsService,
+      NOT_THE_APP,
       chat,
       {} as AssistantRecordsService,
       rateLimit,
@@ -133,7 +138,7 @@ describe("AssistantController.ask, after Parky ended a chat", () => {
       prepare: jest.fn().mockResolvedValue(prepared),
     } as unknown as AssistantChatService;
     const controller = new AssistantController(
-      {} as AssistantSettingsService,
+      NOT_THE_APP,
       chat,
       {} as AssistantRecordsService,
       rateLimit,
@@ -193,7 +198,7 @@ describe("AssistantController.ask, the short window and Parky's offers", () => {
       answer: jest.fn().mockResolvedValue(undefined),
     } as unknown as AssistantChatService;
     const controller = new AssistantController(
-      {} as AssistantSettingsService,
+      NOT_THE_APP,
       chat,
       {} as AssistantRecordsService,
       rateLimit,
@@ -318,8 +323,9 @@ describe("AssistantController.session, the app's way in with a data key", () => 
       open: jest.fn().mockResolvedValue({ token: "browser-token" }),
       openForKey: jest.fn().mockReturnValue({ token: "app-token" }),
     };
+    const settings = { appOff: jest.fn().mockResolvedValue(false) };
     const controller = new AssistantController(
-      {} as AssistantSettingsService,
+      settings as unknown as AssistantSettingsService,
       {} as AssistantChatService,
       {} as AssistantRecordsService,
       rateLimit,
@@ -335,7 +341,7 @@ describe("AssistantController.session, the app's way in with a data key", () => 
         } as unknown as Request,
         fakeResponse().response,
       );
-    return { open, challenge, rateLimit, store };
+    return { open, challenge, rateLimit, store, settings };
   }
 
   it("issues a session without Turnstile to a key carrying assistant.chat", async () => {
@@ -345,6 +351,21 @@ describe("AssistantController.session, the app's way in with a data key", () => 
       expiresInSeconds: 7200,
     });
     expect(challenge.open).not.toHaveBeenCalled();
+    // The session carries the key's id, which is what makes its chats the app's.
+    expect(challenge.openForKey).toHaveBeenCalledWith("key-app");
+  });
+
+  it("refuses the app's key with 503 off while Parky is switched off for the app, and leaves the browser alone", async () => {
+    const { open, challenge, settings } = setup();
+    settings.appOff.mockResolvedValue(true);
+    await expect(open({}, { "x-api-key": APP_KEY })).rejects.toMatchObject({
+      status: 503,
+      message: "off",
+    });
+    expect(challenge.openForKey).not.toHaveBeenCalled();
+    await expect(open({ turnstileToken: "solved" })).resolves.toMatchObject({
+      sessionToken: "browser-token",
+    });
   });
 
   it("refuses a key without the permission, and a request with neither token nor key", async () => {
@@ -383,5 +404,92 @@ describe("AssistantController.session, the app's way in with a data key", () => 
     expect(
       (await limiter.check({ key: "key-app" }, "keySession")).allowed,
     ).toBe(false);
+  });
+});
+
+describe("Parky switched off for the app alone", () => {
+  const KEY_ID = "0b0e7a52-6d1f-4c7e-9a43-2f6f0c1d9e11";
+
+  /** The real settings service over one stored row, with a readable key and no budget spent. */
+  function settingsWith(row: Record<string, unknown>) {
+    const settings = new AssistantSettingsService(
+      {
+        findOneBy: () => Promise.resolve(row),
+        create: (value: unknown) => value,
+      } as never,
+      { get: () => Promise.resolve(null) } as never,
+    );
+    jest.spyOn(settings, "apiKey").mockResolvedValue("sk-ant-test");
+    return settings;
+  }
+
+  function ask(session: string, row: Record<string, unknown>) {
+    const rateLimit = new AssistantRateLimitService(fakeRedis() as never);
+    const chat = { prepare: jest.fn().mockResolvedValue("not-found") };
+    const controller = new AssistantController(
+      settingsWith(row),
+      chat as unknown as AssistantChatService,
+      {} as AssistantRecordsService,
+      rateLimit,
+      { session: () => session } as unknown as AssistantChallengeService,
+      {} as ModuleRef,
+    );
+    const { response, sent } = fakeResponse();
+    return controller
+      .ask(
+        {
+          locale: "de",
+          pagePath: "/de",
+          message: "Wie voll ist es heute im Phantasialand?",
+          sessionToken: "token",
+        },
+        { headers: {}, socket: { remoteAddress: "203.0.113.9" } } as never,
+        response,
+      )
+      .then(() => ({ sent, chat }));
+  }
+
+  const on = { enabled: true, rolloutPercent: 40, dailyTokenBudget: 0 };
+
+  it("says so in the config, where the site's two fields stay as they were", async () => {
+    await expect(
+      settingsWith({ ...on, appEnabled: false }).publicConfig(),
+    ).resolves.toEqual({
+      enabled: true,
+      rolloutPercent: 40,
+      appEnabled: false,
+    });
+    await expect(
+      settingsWith({ ...on, appEnabled: true }).publicConfig(),
+    ).resolves.toEqual({ enabled: true, rolloutPercent: 40, appEnabled: true });
+    // A row from before the column reads as on; the main switch off is off for the app too.
+    await expect(settingsWith(on).publicConfig()).resolves.toMatchObject({
+      appEnabled: true,
+    });
+    await expect(
+      settingsWith({ ...on, enabled: false, appEnabled: true }).publicConfig(),
+    ).resolves.toEqual({
+      enabled: false,
+      rolloutPercent: 0,
+      appEnabled: false,
+    });
+  });
+
+  it("refuses a question on an app session opened before the switch with 503 off, unasked", async () => {
+    const { sent, chat } = await ask(`nonce~${KEY_ID}`, {
+      ...on,
+      appEnabled: false,
+    });
+    expect(sent.status).toBe(503);
+    expect(sent.body).toEqual({ statusCode: 503, message: "off" });
+    expect(chat.prepare).not.toHaveBeenCalled();
+  });
+
+  it("lets the site's session through as before, and the app's while the switch is on", async () => {
+    const web = await ask("nonce", { ...on, appEnabled: false });
+    expect(web.chat.prepare).toHaveBeenCalled();
+    expect(web.sent.status).toBe(404);
+    const app = await ask(`nonce~${KEY_ID}`, { ...on, appEnabled: true });
+    expect(app.chat.prepare).toHaveBeenCalled();
   });
 });

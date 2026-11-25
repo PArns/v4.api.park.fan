@@ -37,6 +37,10 @@ import { FEEDBACK_STATUSES } from "./entities/site-feedback.entity";
 import { AssistantKnowledgeService } from "./assistant-knowledge.service";
 import { knowledgeTopicSchema, knowledgeWriteSchema } from "./knowledge";
 import { AdminApi } from "../admin/auth/admin-api.decorator";
+import { addIsoDays } from "../common/utils/date.util";
+import { utcDay } from "../common/utils/reader-hash.util";
+
+const TOKEN_STATS_MAX_DAYS = 90;
 
 const listQuery = z.object({
   page: z.coerce.number().int().min(1).max(1000).default(1),
@@ -44,6 +48,12 @@ const listQuery = z.object({
   q: z.string().trim().min(2).max(100).optional(),
   promptVersion: z.coerce.number().int().min(1).max(32767).optional(),
   status: z.enum(FEEDBACK_STATUSES).optional(),
+  source: z.enum(["web", "app"]).optional(),
+});
+
+/** The token statistic's window: UTC days back from today, today included. */
+const tokenStatsQuery = z.object({
+  days: z.coerce.number().int().min(1).max(TOKEN_STATS_MAX_DAYS).default(30),
 });
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -134,11 +144,28 @@ export class AdminAssistantController {
     };
   }
 
+  @Get("stats/tokens")
+  @ApiOperation({
+    summary:
+      "Tokens and cost per UTC day and source (web, app), and who spent most",
+  })
+  tokenStats(@Query() query: unknown) {
+    const { days } = parse(tokenStatsQuery, query);
+    const to = utcDay(new Date());
+    return this.records.tokenStats({ from: addIsoDays(to, -(days - 1)), to });
+  }
+
   @Get("conversations")
   @ApiOperation({ summary: "Stored chats, newest first" })
   conversations(@Query() query: unknown) {
-    const { page, rating, q, promptVersion } = parse(listQuery, query);
-    return this.records.listConversations({ page, rating, q, promptVersion });
+    const { page, rating, q, promptVersion, source } = parse(listQuery, query);
+    return this.records.listConversations({
+      page,
+      rating,
+      q,
+      promptVersion,
+      source,
+    });
   }
 
   @Get("conversations/:id")

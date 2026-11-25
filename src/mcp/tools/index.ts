@@ -29,6 +29,7 @@ import {
   writeAssistantKnowledgeTool,
 } from "./assistant-knowledge.tools";
 import { assistantToolsReportTool } from "./assistant-tools-report.tool";
+import { assistantTokensReportTool } from "./assistant-tokens-report.tool";
 import { assistantReportTool } from "./assistant-report.tool";
 import { downtimeTool } from "./downtime.tool";
 import { weatherClosureProfilesTool } from "./weather-closure-profiles.tool";
@@ -140,6 +141,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   siteFeedbackTool,
   assistantKnowledgeTool,
   assistantToolsReportTool,
+  assistantTokensReportTool,
   assistantReportTool,
   downtimeTool,
   weatherClosureProfilesTool,

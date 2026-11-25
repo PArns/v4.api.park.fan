@@ -13,6 +13,10 @@ export class AssistantSettings {
   @Column({ type: "smallint", default: 0 })
   rolloutPercent: number;
 
+  /** Off stops Parky in park.fan's app alone; the website keeps him. */
+  @Column({ type: "boolean", default: true })
+  appEnabled: boolean;
+
   /** `sealSecret()` output; null when no key was entered. */
   @Column({ type: "text", nullable: true })
   apiKeySealed: string | null;

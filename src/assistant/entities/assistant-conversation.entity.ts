@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { AssistantMessage } from "./assistant-message.entity";
+import type { AssistantSource } from "../assistant-session.util";
 
 /**
  * One chat with Parky. No address is stored: `visitorKey` is a hash of the
@@ -33,6 +34,14 @@ export class AssistantConversation {
   /** Hash of the session token that started the chat; only that session may continue it. */
   @Column({ type: "varchar", length: 32, nullable: true })
   sessionHash: string | null;
+
+  /** `web` for the site's widget, `app` for park.fan's app; chats from before the column are `web`. */
+  @Column({ type: "varchar", length: 8, default: "web" })
+  source: AssistantSource;
+
+  /** The data key whose session started the chat (the app's); its id, never the key. */
+  @Column({ type: "uuid", nullable: true })
+  apiKeyId: string | null;
 
   @Column({ type: "integer", default: 0 })
   messageCount: number;

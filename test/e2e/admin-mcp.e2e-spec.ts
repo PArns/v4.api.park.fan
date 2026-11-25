@@ -258,6 +258,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
         "trip_planner_report",
         "trip_planner_ops",
         "assistant_tools_report",
+        "assistant_tokens_report",
         "assistant_report",
         "seo_landing_pages",
         "seo_trends",

@@ -7,6 +7,7 @@ import { isCanonicalUuid } from "../common/utils/uuid-param.util";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { hashRateLimitKey } from "../common/redis/rate-limit.util";
+import { sessionApiKeyId, sessionSource } from "./assistant-session.util";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import {
   AssistantMessage,
@@ -211,6 +212,8 @@ export class AssistantChatService {
           startPath: request.pagePath,
           visitorKey: ip ? visitorKey(ip) : null,
           sessionHash,
+          source: sessionSource(session),
+          apiKeyId: sessionApiKeyId(session),
         }),
       );
     }

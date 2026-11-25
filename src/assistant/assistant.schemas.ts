@@ -401,6 +401,7 @@ export const feedbackRequestSchema = z.strictObject({
 
 export const settingsUpdateSchema = z.strictObject({
   enabled: z.boolean().optional(),
+  appEnabled: z.boolean().optional(),
   rolloutPercent: z.number().int().min(0).max(100).optional(),
   dailyTokenBudget: z.number().int().min(0).max(1_000_000_000).optional(),
   apiKey: z

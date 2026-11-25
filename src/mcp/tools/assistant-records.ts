@@ -17,6 +17,8 @@ export function chatSummary(chat: AssistantConversation) {
     id: chat.id,
     at: chat.createdAt,
     locale: chat.locale,
+    // `web` for the site's widget, `app` for park.fan's app.
+    source: chat.source,
     messages: chat.messageCount,
     tokens: chat.totalTokens,
     costUsd: Number(chat.costUsd),

@@ -51,9 +51,11 @@ export class AssistantChallengeService {
    * A session token for a caller whose data key carries `assistant.chat` (the controller checked
    * it), with no Turnstile: a native app cannot solve one. "off" when none can be issued.
    */
-  openForKey(): { token: string } | "off" {
+  openForKey(apiKeyId: string): { token: string } | "off" {
     const key = this.key();
-    return key ? { token: issueSessionToken(key) } : "off";
+    return key
+      ? { token: issueSessionToken(key, Date.now(), apiKeyId) }
+      : "off";
   }
 
   /** The session's id when the token was issued by this server and is still valid, else null. */

@@ -84,6 +84,10 @@ export class AssistantController {
   @Header("Cache-Control", "public, max-age=60, s-maxage=60")
   @ApiOperation({
     summary: "Whether the assistant is on, and for what share of visitors",
+    description:
+      "`appEnabled` is what park.fan's app goes by: false when the assistant is off or " +
+      "switched off for the app alone, where `POST session` with a data key and `POST chat` " +
+      "on an app session answer 503 `off`.",
   })
   config(): Promise<AssistantPublicConfig> {
     return this.settings.publicConfig();
@@ -143,8 +147,9 @@ export class AssistantController {
     // The throttle bypass key carries no key id; it is park.fan's own server, never an app.
     const keyId = forecastRequest.apiKey?.id;
     if (!keyId) throw new HttpException("challenge", HttpStatus.UNAUTHORIZED);
+    if (await this.settings.appOff()) return "off";
     refuseOverLimit(await this.rateLimit.check({ key: keyId }, "keySession"));
-    return this.challenge.openForKey();
+    return this.challenge.openForKey(keyId);
   }
 
   @Post("chat")
@@ -183,6 +188,14 @@ export class AssistantController {
         .status(HttpStatus.UNAUTHORIZED)
         .setHeader("Cache-Control", "no-store")
         .json({ statusCode: 401, message: "challenge" });
+      return;
+    }
+    // Switched off for the app: a session opened before the switch ends with it, as a 503 `off`.
+    if (await this.settings.offForSession(session)) {
+      response
+        .status(HttpStatus.SERVICE_UNAVAILABLE)
+        .setHeader("Cache-Control", "no-store")
+        .json({ statusCode: 503, message: "off" });
       return;
     }
     const pause = await this.rateLimit.cooldown(session);

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import {
   maskApiKey,
   openSecret,
@@ -17,6 +17,8 @@ import {
   sessionKey,
   SESSION_TTL_SECONDS,
   verifySessionToken,
+  sessionApiKeyId,
+  sessionSource,
 } from "./assistant-session.util";
 import { costUsd } from "./assistant-chat.service";
 import { pageSubject } from "./assistant-page.service";
@@ -84,6 +86,61 @@ describe("session token", () => {
     const later = [version, Number(expires) + 3600, nonce, sig].join(".");
     expect(verifySessionToken(key, later, now)).toBeNull();
     expect(verifySessionToken(key, "nonsense", now)).toBeNull();
+  });
+
+  it("reads a chat's source from what the server signed: the app's data key or none", () => {
+    const keyId = "0b0e7a52-6d1f-4c7e-9a43-2f6f0c1d9e11";
+    const web = verifySessionToken(key, issueSessionToken(key, now), now);
+    const app = verifySessionToken(
+      key,
+      issueSessionToken(key, now, keyId),
+      now,
+    );
+    expect(sessionSource(web as string)).toBe("web");
+    expect(sessionApiKeyId(web as string)).toBeNull();
+    expect(sessionSource(app as string)).toBe("app");
+    expect(sessionApiKeyId(app as string)).toBe(keyId);
+    // A browser's token with a key id glued on no longer carries the server's signature.
+    const [version, expires, nonce, signature] = issueSessionToken(
+      key,
+      now,
+    ).split(".");
+    expect(
+      verifySessionToken(
+        key,
+        [version, expires, `${nonce}~${keyId}`, signature].join("."),
+        now,
+      ),
+    ).toBeNull();
+    // Nor does the app's token with its key id cut off, to pass as a browser's.
+    const [, appExpires, appNonce, appSignature] = issueSessionToken(
+      key,
+      now,
+      keyId,
+    ).split(".");
+    expect(
+      verifySessionToken(
+        key,
+        ["s1", appExpires, appNonce.split("~")[0], appSignature].join("."),
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("still takes a token issued before sessions carried a key id, as the website's", () => {
+    const expires = Math.floor(now / 1000) + SESSION_TTL_SECONDS;
+    const nonce = "AAAAAAAAAAAAAAAA";
+    const signed = createHmac("sha256", key)
+      .update(`s1.${expires}.${nonce}`)
+      .digest("base64url");
+    const session = verifySessionToken(
+      key,
+      `s1.${expires}.${nonce}.${signed}`,
+      now,
+    );
+    expect(session).toBe(nonce);
+    expect(sessionSource(session as string)).toBe("web");
+    expect(sessionApiKeyId(session as string)).toBeNull();
   });
 });
 

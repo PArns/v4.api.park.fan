@@ -13,6 +13,8 @@ import {
   type FeedbackStatus,
 } from "./entities/site-feedback.entity";
 import { likeContains } from "../common/utils/like-pattern.util";
+import type { AssistantSource } from "./assistant-session.util";
+import { NO_API_KEY } from "./entities/assistant-usage-day-stat.entity";
 
 /** How long chats are kept; feedback is kept until it is deleted by hand. */
 export const CONVERSATION_RETENTION_DAYS = 7;
@@ -25,6 +27,52 @@ export const RECORDS_PAGE_SIZE = 50;
 
 /** Feedback Parky passes on from one chat at most: a second, different issue still goes in. */
 export const CHAT_FEEDBACK_PER_CONVERSATION = 2;
+
+/** Chats, messages, tokens by kind and cost: one cell of the token statistic. */
+export interface UsageSums {
+  chats: number;
+  messages: number;
+  /** Fresh input and cache writes. */
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  /**
+   * Every token. More than the three kinds add up to where chats were pruned before the kinds
+   * were kept per day: of those only the total is known.
+   */
+  totalTokens: number;
+  costUsd: number;
+}
+
+/** Entries per list of top consumers. */
+const TOP_CONSUMERS = 20;
+
+/** One chat's tokens by kind, beside its row `c`. */
+const CHAT_TOKENS = `LEFT JOIN LATERAL (
+    SELECT sum("inputTokens") AS input, sum("outputTokens") AS output,
+           sum("cacheReadTokens") AS cache_read
+      FROM assistant_messages WHERE "conversationId" = c.id) AS m ON true`;
+
+/** The chats of a window of UTC days, `$1` to `$2`. */
+const IN_WINDOW = `c."createdAt" >= $1::timestamptz
+   AND c."createdAt" < $2::timestamptz + interval '1 day'`;
+
+const USAGE_KEYS = [
+  "chats",
+  "messages",
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "totalTokens",
+  "costUsd",
+] as const;
+
+/** A row's sums as numbers: Postgres hands bigint and numeric over as text. */
+function usageOf(row: Record<string, unknown>): UsageSums {
+  return Object.fromEntries(
+    USAGE_KEYS.map((key) => [key, Number(row[key] ?? 0)]),
+  ) as unknown as UsageSums;
+}
 
 /** What a tool report reads: a window of UTC days, narrowed or not. */
 export interface ToolStatsQuery {
@@ -183,6 +231,7 @@ export class AssistantRecordsService {
   async listConversations(params: {
     rating?: number;
     q?: string;
+    source?: AssistantSource;
     /** Only chats whose latest answer ran on this prompt version. */
     promptVersion?: number;
     page: number;
@@ -281,8 +330,11 @@ export class AssistantRecordsService {
   private chatsWhere(params: {
     rating?: number;
     q?: string;
+    source?: AssistantSource;
   }): SelectQueryBuilder<AssistantConversation> {
     const query = this.conversations.createQueryBuilder("c");
+    if (params.source)
+      query.andWhere("c.source = :source", { source: params.source });
     if (params.rating !== undefined)
       query.andWhere("c.rating = :rating", { rating: params.rating });
     if (params.q) {
@@ -298,7 +350,7 @@ export class AssistantRecordsService {
   async conversation(id: string) {
     const conversation = await this.conversations.findOneBy({ id });
     if (!conversation) return null;
-    const [messages, feedback] = await Promise.all([
+    const [messages, feedback, key] = await Promise.all([
       this.messages.find({
         where: { conversationId: id },
         order: { createdAt: "ASC" },
@@ -307,8 +359,20 @@ export class AssistantRecordsService {
         where: { conversationId: id },
         order: { createdAt: "ASC" },
       }),
+      conversation.apiKeyId
+        ? (this.conversations.query(
+            `SELECT name FROM api_keys WHERE id = $1::uuid`,
+            [conversation.apiKeyId],
+          ) as Promise<Array<{ name: string }>>)
+        : [],
     ]);
-    return { ...conversation, messages, feedback };
+    return {
+      ...conversation,
+      // The data key's name as the admin lists it; null once the key is deleted.
+      apiKeyName: key[0]?.name ?? null,
+      messages,
+      feedback,
+    };
   }
 
   async listFeedback(params: {
@@ -377,6 +441,154 @@ export class AssistantRecordsService {
   }
 
   /**
+   * Who spends the tokens over a window of UTC days: per day and source the chats, messages,
+   * tokens by kind and cost (the kept chats plus the sums the prune kept, as `stats()`), the data
+   * keys' sums over the same window, and from the kept chats the visitors and single chats that
+   * spent most. Numbers and ids only: a visitor is the day's `visitorKey`, a key its id and name,
+   * never a message's text.
+   */
+  async tokenStats(window: { from: string; to: string }) {
+    const params = [
+      `${window.from}T00:00:00.000Z`,
+      `${window.to}T00:00:00.000Z`,
+    ];
+    const sums = `count(*) AS chats, coalesce(sum(c."messageCount"), 0) AS messages,
+                  coalesce(sum(c."totalTokens"), 0) AS "totalTokens",
+                  coalesce(sum(c."costUsd"), 0) AS "costUsd"`;
+    const [days, visitors, apiKeys, chats] = (await Promise.all([
+      this.conversations.query(
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, source,
+                sum(chats) AS chats, sum(messages) AS messages,
+                sum(input) AS "inputTokens", sum(output) AS "outputTokens",
+                sum(cache_read) AS "cacheReadTokens", sum(total) AS "totalTokens",
+                sum(cost) AS "costUsd"
+           FROM (
+             SELECT (c."createdAt" AT TIME ZONE 'UTC')::date AS day, c.source,
+                    count(*) AS chats, coalesce(sum(c."messageCount"), 0) AS messages,
+                    coalesce(sum(m.input), 0) AS input, coalesce(sum(m.output), 0) AS output,
+                    coalesce(sum(m.cache_read), 0) AS cache_read,
+                    coalesce(sum(c."totalTokens"), 0) AS total,
+                    coalesce(sum(c."costUsd"), 0) AS cost
+               FROM assistant_conversations c ${CHAT_TOKENS}
+              WHERE ${IN_WINDOW}
+              GROUP BY 1, 2
+             UNION ALL
+             SELECT day, source, chats, messages, "inputTokens", "outputTokens",
+                    "cacheReadTokens", "inputTokens" + "outputTokens" + "cacheReadTokens",
+                    "costUsd"
+               FROM assistant_usage_day_stats
+              WHERE day >= ($1::timestamptz AT TIME ZONE 'UTC')::date
+                AND day <= ($2::timestamptz AT TIME ZONE 'UTC')::date
+             UNION ALL
+             -- Pruned before the source was kept: the old sums' surplus, all from the website.
+             SELECT d.day, 'web', d.chats - coalesce(u.chats, 0),
+                    d.messages - coalesce(u.messages, 0), 0, 0, 0,
+                    d.tokens - coalesce(u.total, 0), d."costUsd" - coalesce(u.cost, 0)
+               FROM assistant_day_stats d
+               LEFT JOIN (
+                 SELECT day, sum(chats) AS chats, sum(messages) AS messages,
+                        sum("inputTokens" + "outputTokens" + "cacheReadTokens") AS total,
+                        sum("costUsd") AS cost
+                   FROM assistant_usage_day_stats GROUP BY day) u USING (day)
+              WHERE d.day >= ($1::timestamptz AT TIME ZONE 'UTC')::date
+                AND d.day <= ($2::timestamptz AT TIME ZONE 'UTC')::date
+                AND d.chats > coalesce(u.chats, 0)
+           ) AS all_parts
+          GROUP BY 1, 2 ORDER BY 1, 2`,
+        params,
+      ),
+      this.conversations.query(
+        `SELECT c."visitorKey", c.source,
+                to_char(min(c."createdAt") AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, ${sums}
+           FROM assistant_conversations c
+          WHERE ${IN_WINDOW} AND c."visitorKey" IS NOT NULL
+          GROUP BY 1, 2 ORDER BY sum(c."totalTokens") DESC, 1 LIMIT ${TOP_CONSUMERS}`,
+        params,
+      ),
+      // Per key over the whole window: the kept chats and what the prune kept of the older ones.
+      this.conversations.query(
+        `SELECT u."apiKeyId", k.name, sum(u.chats) AS chats, sum(u.messages) AS messages,
+                sum(u.total) AS "totalTokens", sum(u.cost) AS "costUsd"
+           FROM (
+             SELECT c."apiKeyId", count(*) AS chats,
+                    coalesce(sum(c."messageCount"), 0) AS messages,
+                    coalesce(sum(c."totalTokens"), 0) AS total,
+                    coalesce(sum(c."costUsd"), 0) AS cost
+               FROM assistant_conversations c
+              WHERE ${IN_WINDOW} AND c."apiKeyId" IS NOT NULL
+              GROUP BY 1
+             UNION ALL
+             SELECT "apiKeyId", chats, messages,
+                    "inputTokens" + "outputTokens" + "cacheReadTokens", "costUsd"
+               FROM assistant_usage_day_stats
+              WHERE day >= ($1::timestamptz AT TIME ZONE 'UTC')::date
+                AND day <= ($2::timestamptz AT TIME ZONE 'UTC')::date
+                AND "apiKeyId" <> '${NO_API_KEY}'::uuid
+           ) AS u LEFT JOIN api_keys k ON k.id = u."apiKeyId"
+          GROUP BY 1, 2 ORDER BY sum(u.total) DESC, 1 LIMIT ${TOP_CONSUMERS}`,
+        params,
+      ),
+      this.conversations.query(
+        `SELECT c.id, c."createdAt", c.source, c."apiKeyId", c."visitorKey",
+                c."messageCount" AS messages, c."totalTokens", c."costUsd"
+           FROM assistant_conversations c
+          WHERE ${IN_WINDOW}
+          ORDER BY c."costUsd" DESC, c."totalTokens" DESC, c.id LIMIT ${TOP_CONSUMERS}`,
+        params,
+      ),
+    ])) as Array<Array<Record<string, unknown>>>;
+
+    const dayRows = days.map((row) => ({
+      day: row.day as string,
+      source: row.source as AssistantSource,
+      ...usageOf(row),
+    }));
+    const total = (source?: AssistantSource): UsageSums => {
+      const sum = usageOf({});
+      for (const row of dayRows) {
+        if (source && row.source !== source) continue;
+        for (const key of USAGE_KEYS) sum[key] += row[key];
+      }
+      sum.costUsd = Number(sum.costUsd.toFixed(6));
+      return sum;
+    };
+    const consumer = (row: Record<string, unknown>) => ({
+      chats: Number(row.chats),
+      messages: Number(row.messages),
+      totalTokens: Number(row.totalTokens),
+      costUsd: Number(row.costUsd),
+    });
+    return {
+      ...window,
+      /** The top visitors and chats read the kept chats only: this many days back. */
+      keptDays: CONVERSATION_RETENTION_DAYS,
+      days: dayRows,
+      totals: { all: total(), web: total("web"), app: total("app") },
+      topVisitors: visitors.map((row) => ({
+        visitorKey: row.visitorKey as string,
+        source: row.source as AssistantSource,
+        day: row.day as string,
+        ...consumer(row),
+      })),
+      topApiKeys: apiKeys.map((row) => ({
+        apiKeyId: row.apiKeyId as string,
+        name: (row.name as string | null) ?? null,
+        ...consumer(row),
+      })),
+      topConversations: chats.map((row) => ({
+        id: row.id as string,
+        createdAt: row.createdAt as Date,
+        source: row.source as AssistantSource,
+        apiKeyId: (row.apiKeyId as string | null) ?? null,
+        visitorKey: (row.visitorKey as string | null) ?? null,
+        messages: Number(row.messages),
+        totalTokens: Number(row.totalTokens),
+        costUsd: Number(row.costUsd),
+      })),
+    };
+  }
+
+  /**
    * Deletes one chat with its messages, for the admin. Feedback sent from it stays and only
    * loses its link. False when there is no such chat.
    */
@@ -423,6 +635,28 @@ export class AssistantRecordsService {
                messages = assistant_day_stats.messages + EXCLUDED.messages,
                tokens = assistant_day_stats.tokens + EXCLUDED.tokens,
                "costUsd" = assistant_day_stats."costUsd" + EXCLUDED."costUsd"`,
+            [ids],
+          );
+          await manager.query(
+            `INSERT INTO assistant_usage_day_stats
+                    (day, source, "apiKeyId", chats, messages, "inputTokens", "outputTokens",
+                     "cacheReadTokens", "costUsd")
+             SELECT (c."createdAt" AT TIME ZONE 'UTC')::date, c.source,
+                    coalesce(c."apiKeyId", '${NO_API_KEY}'::uuid), count(*),
+                    coalesce(sum(c."messageCount"), 0), coalesce(sum(m.input), 0),
+                    coalesce(sum(m.output), 0), coalesce(sum(m.cache_read), 0),
+                    coalesce(sum(c."costUsd"), 0)
+               FROM assistant_conversations c ${CHAT_TOKENS}
+              WHERE c.id = ANY($1::uuid[])
+              GROUP BY 1, 2, 3
+             ON CONFLICT (day, source, "apiKeyId") DO UPDATE SET
+               chats = assistant_usage_day_stats.chats + EXCLUDED.chats,
+               messages = assistant_usage_day_stats.messages + EXCLUDED.messages,
+               "inputTokens" = assistant_usage_day_stats."inputTokens" + EXCLUDED."inputTokens",
+               "outputTokens" = assistant_usage_day_stats."outputTokens" + EXCLUDED."outputTokens",
+               "cacheReadTokens" =
+                 assistant_usage_day_stats."cacheReadTokens" + EXCLUDED."cacheReadTokens",
+               "costUsd" = assistant_usage_day_stats."costUsd" + EXCLUDED."costUsd"`,
             [ids],
           );
           await manager.query(

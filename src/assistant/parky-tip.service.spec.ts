@@ -586,6 +586,7 @@ describe("ParkyTipService", () => {
     settings.publicConfig.mockResolvedValue({
       enabled: false,
       rolloutPercent: 0,
+      appEnabled: false,
     });
     expect((await service.dayTip(park, date, "fr"))?.text).toBeNull();
     expect(await service.dayTip(park, addIsoDays(today, -1), "de")).toBeNull();
@@ -628,6 +629,7 @@ describe("ParkyTipService", () => {
     settings.publicConfig.mockResolvedValue({
       enabled: false,
       rolloutPercent: 0,
+      appEnabled: false,
     });
     expect(await service.tip(park, addIsoDays(today, 2), "de")).toBeNull();
     expect(create).not.toHaveBeenCalled();

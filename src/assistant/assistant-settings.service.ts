@@ -10,6 +10,7 @@ import {
   readMasterKey,
   sealSecret,
 } from "./assistant-secret.util";
+import { sessionSource } from "./assistant-session.util";
 
 const SETTINGS_ID = 1;
 const TOKENS_PREFIX = "assistant:tokens:";
@@ -21,6 +22,7 @@ const TWO_DAYS_SECONDS = 2 * 24 * 60 * 60;
 /** What the admin may change; every field optional. `apiKey: null` removes the key. */
 export interface AssistantSettingsUpdate {
   enabled?: boolean;
+  appEnabled?: boolean;
   rolloutPercent?: number;
   dailyTokenBudget?: number;
   apiKey?: string | null;
@@ -29,6 +31,8 @@ export interface AssistantSettingsUpdate {
 /** The settings as the admin sees them: the key only masked. */
 export interface AssistantSettingsView {
   enabled: boolean;
+  /** False when Parky is switched off for park.fan's app alone. */
+  appEnabled: boolean;
   rolloutPercent: number;
   dailyTokenBudget: number;
   apiKeyMasked: string | null;
@@ -43,6 +47,8 @@ export interface AssistantSettingsView {
 export interface AssistantPublicConfig {
   enabled: boolean;
   rolloutPercent: number;
+  /** What park.fan's app shows Parky by: `enabled` and the app's own switch. The site ignores it. */
+  appEnabled: boolean;
 }
 
 /**
@@ -75,6 +81,7 @@ export class AssistantSettingsService {
     const row = await this.row();
     return {
       enabled: row.enabled ?? false,
+      appEnabled: row.appEnabled ?? true,
       rolloutPercent: row.rolloutPercent ?? 0,
       dailyTokenBudget: row.dailyTokenBudget ?? 0,
       apiKeyMasked: row.apiKeyMasked ?? null,
@@ -91,6 +98,7 @@ export class AssistantSettingsService {
   ): Promise<AssistantSettingsView> {
     const row = await this.row();
     if (change.enabled !== undefined) row.enabled = change.enabled;
+    if (change.appEnabled !== undefined) row.appEnabled = change.appEnabled;
     if (change.rolloutPercent !== undefined)
       row.rolloutPercent = change.rolloutPercent;
     if (change.dailyTokenBudget !== undefined)
@@ -129,7 +137,21 @@ export class AssistantSettingsService {
     return {
       enabled: usable,
       rolloutPercent: usable ? (row.rolloutPercent ?? 0) : 0,
+      appEnabled: usable && (row.appEnabled ?? true),
     };
+  }
+
+  /**
+   * True when this session is the app's and Parky is switched off there. A browser's session
+   * never is: the site's switch only decides who is shown the widget, as before.
+   */
+  async offForSession(session: string): Promise<boolean> {
+    return sessionSource(session) === "app" && (await this.appOff());
+  }
+
+  /** True when Parky is switched off for park.fan's app. */
+  async appOff(): Promise<boolean> {
+    return !((await this.row()).appEnabled ?? true);
   }
 
   async budgetSpent(row?: AssistantSettings): Promise<boolean> {

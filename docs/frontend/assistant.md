@@ -7,22 +7,23 @@ park.fan's `docs/features/assistant.md`.
 
 ## Endpoints
 
-| Endpoint                                            | Who               | What                                                         |
-| --------------------------------------------------- | ----------------- | ------------------------------------------------------------ |
-| `GET /v1/assistant/config`                          | park.fan's server | `{ enabled, rolloutPercent }`, a minute at the edge          |
-| `POST /v1/assistant/session`                        | browser (CORS)    | a solved Turnstile token in, a session token out             |
-| `POST /v1/assistant/session` without a token        | park.fan's app    | a data key with `assistant.chat` in, a session token out     |
-| `POST /v1/assistant/chat`                           | browser           | one question, answered as server-sent events                 |
-| `POST /v1/assistant/rating`                         | browser           | 👍/👎 for one answer                                         |
-| `POST /v1/assistant/feedback`                       | browser           | feedback about the site                                      |
-| `GET /v1/parks/…/parky-tip`                         | park.fan's server | Parky's one sentence on a calendar day (see below)           |
-| `GET/PUT /v1/admin/assistant/settings`              | admin, PUT owner  | switch, share, daily token budget, key (stored, never shown) |
-| `POST /v1/admin/assistant/settings/test`            | owner             | a one-token request with the stored key                      |
-| `GET /v1/admin/assistant/stats`                     | admin             | 30 days of chats, tokens, cost, ratings, open feedback       |
-| `GET/DELETE /v1/admin/assistant/conversations[/id]` | admin, DELETE ed. | stored chats with tool calls, tokens and cost; delete one    |
-| `GET/PATCH /v1/admin/assistant/feedback`            | admin, PATCH ed.  | feedback list, status `new`/`done`/`archived`                |
-| `GET /v1/admin/assistant/knowledge[/topic]`         | admin             | Parky's knowledge base; one topic with its edits             |
-| `PUT/DELETE /v1/admin/assistant/knowledge/:topic`   | editor            | write a topic (`readWhen`, `text`, `enabled`), delete one    |
+| Endpoint                                            | Who               | What                                                            |
+| --------------------------------------------------- | ----------------- | --------------------------------------------------------------- |
+| `GET /v1/assistant/config`                          | park.fan's server | `{ enabled, rolloutPercent, appEnabled }`, a minute at the edge |
+| `POST /v1/assistant/session`                        | browser (CORS)    | a solved Turnstile token in, a session token out                |
+| `POST /v1/assistant/session` without a token        | park.fan's app    | a data key with `assistant.chat` in, a session token out        |
+| `POST /v1/assistant/chat`                           | browser           | one question, answered as server-sent events                    |
+| `POST /v1/assistant/rating`                         | browser           | 👍/👎 for one answer                                            |
+| `POST /v1/assistant/feedback`                       | browser           | feedback about the site                                         |
+| `GET /v1/parks/…/parky-tip`                         | park.fan's server | Parky's one sentence on a calendar day (see below)              |
+| `GET/PUT /v1/admin/assistant/settings`              | admin, PUT owner  | switch, share, daily token budget, key (stored, never shown)    |
+| `POST /v1/admin/assistant/settings/test`            | owner             | a one-token request with the stored key                         |
+| `GET /v1/admin/assistant/stats`                     | admin             | 30 days of chats, tokens, cost, ratings, open feedback          |
+| `GET /v1/admin/assistant/stats/tokens`              | admin             | tokens and cost per day and source, and who spent most          |
+| `GET/DELETE /v1/admin/assistant/conversations[/id]` | admin, DELETE ed. | stored chats with tool calls, tokens and cost; delete one       |
+| `GET/PATCH /v1/admin/assistant/feedback`            | admin, PATCH ed.  | feedback list, status `new`/`done`/`archived`                   |
+| `GET /v1/admin/assistant/knowledge[/topic]`         | admin             | Parky's knowledge base; one topic with its edits                |
+| `PUT/DELETE /v1/admin/assistant/knowledge/:topic`   | editor            | write a topic (`readWhen`, `text`, `enabled`), delete one       |
 
 ## The challenge
 
@@ -46,6 +47,20 @@ limit and the abuse handling count per session as above, and the config's switch
 `turnstileToken` takes the browser's path whatever key it carries. `assistant.chat` is granted
 like any permission; park.fan's own `internal` keys hold it by their usage, keys from before
 permissions (`LEGACY_KEY_PERMISSIONS`) do not.
+
+**Web or app.** A session opened with a data key carries the key's id in its token, under the
+signature (`<random>~<keyId>` as the nonce); a browser's carries none. A new chat stores what its
+session says as `source` (`web` or `app`) and `apiKeyId`, so no header a client sends decides it.
+A token issued before the key id existed verifies as before and counts as `web`, for its two
+hours.
+
+**Parky off in the app alone** (`appEnabled` in the admin's settings, on by default). While it is
+off, `POST session` with a data key and `POST chat` on an app session answer 503
+`{"statusCode":503,"message":"off"}`; a browser's session never meets this check. `GET config` is
+cached and carries no key, so it says it for everybody: `appEnabled` is false when the switch is
+off or `enabled` is false. The app shows Parky only when `enabled` is true and `appEnabled` is not
+false, and treats a 503 `off` from `session` or `chat` as "not available". The website reads
+`enabled` and `rolloutPercent` only, which mean what they did.
 
 ## The chat
 
@@ -1327,6 +1342,13 @@ messages, tokens, cost and thumbs up and down, no text and no visitor key, so `G
 adds the batch's tool calls to `assistant_tool_day_stats`: per UTC day, prompt version, tool,
 outcome and the trip region an input named, only the number of calls, so the MCP's
 `assistant_tools_report` reads beyond the 7 days ([Parky's tools](../admin/mcp.md#parkys-tools)).
+And it adds the batch to `assistant_usage_day_stats`: per UTC day, source and data key (a fixed
+all-zero id for chats no key opened) the chats, messages, input, output and cache-read tokens and
+the cost. `GET /v1/admin/assistant/stats/tokens?days=1..90` (30 by default) reads those with the
+kept chats: `days[]` per day and source, `totals.{all,web,app}`, `topApiKeys` over the whole
+window, and `topVisitors` and `topConversations` from the kept chats only (`keptDays`). A day
+pruned before the table existed has only its total in `assistant_day_stats`; it counts as `web`
+with the token kinds at 0.
 The daily token budget lives in Redis and reads no chat row.
 
 **A tool call's record.** Each answer's `toolCalls` holds the tool's name, its input as given (minus
