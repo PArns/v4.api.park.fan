@@ -308,7 +308,7 @@ services:
       - CHRONOS_SHADOW_ENABLED=${CHRONOS_SHADOW_ENABLED:-true}
       # Park facilities from OpenStreetMap (docs/frontend/facilities.md). Off: the
       # public route answers 404; import and review in the admin work either way.
-      - FACILITIES_ENABLED=${FACILITIES_ENABLED:-false}
+      - FACILITIES_ENABLED=${FACILITIES_ENABLED:-true}
       # /plan/day composed days from the H5 profile in 15-minute slots, served up
       # to day 21: the leads the forward archive had decided on 2026-11-14 (days
       # 2–5 −1.46 min, days 6–21 −1.79 min against the old composer). Raise the cap
