@@ -162,6 +162,7 @@ what the crons already fetch.
 | --- | --- | --- |
 | Daily, `weather:daily:{lat}:{lon}:{days}` | 2 h per ~1 km coordinate | the crons only |
 | Hourly for ML, `weather:hourly:v2:park:{id}` (client: `weather:hourly:utc:…`) | 6 h + ≤ 1 h jitter | on demand |
+| Hourly days for `/weather/hourly`, `weather:hourly-detail:{lat}:{lon}` | 2 h per ~1 km coordinate (11 variables × 17 days ≈ 1.3 units a call) | on demand; the park's days are cut at read time |
 | Nowcast, `weather:nowcast:raw:{parkId}` | park-hours aware (`nowcastCacheTtlSeconds`) | on demand (park page, `rain-soon` push) |
 
 The nowcast is the only surface refreshed every 30 min, and on demand, so crawlers kept closed parks on
@@ -180,6 +181,7 @@ in training. Storing hourly observations and retraining on them is PAR-1146, whi
 
 ## Key files
 
-`src/external-apis/weather/open-meteo.client.ts` (client: daily, hourly, nowcast, archive),
+`src/external-apis/weather/open-meteo.client.ts` (client: daily, hourly, hourly detail, nowcast, archive),
+`src/parks/utils/weather-hourly.util.ts` (the park's days for `/weather/hourly`),
 `src/parks/weather.service.ts` (save, query, nowcast, normals), `src/queues/processors/weather.processor.ts`,
 `src/queues/processors/weather-historical.processor.ts`.

@@ -12,10 +12,12 @@ import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import {
   CurrentConditions,
   DailyWeather,
+  HOURLY_DETAIL_CACHE_TTL,
   MinutelyNowcastResponse,
   NowcastStep,
   OpenMeteoClient,
 } from "../external-apis/weather/open-meteo.client";
+import { buildParkHourly, ParkHourly } from "./utils/weather-hourly.util";
 import { WeatherForecastItemDto } from "../ml/dto/prediction-request.dto";
 import {
   formatInParkTimezone,
@@ -540,6 +542,34 @@ export class WeatherService {
     );
     const offsetMs = wallMs - asUtc;
     return asUtc - offsetMs;
+  }
+
+  /**
+   * The park's hour-by-hour days for `/weather/hourly`, cut at read time from
+   * one coordinate's cached upstream answer (`getHourlyDetail`). `null` without
+   * coordinates or when Open-Meteo fails.
+   */
+  async getHourlyDays(
+    park: Pick<Park, "id" | "latitude" | "longitude" | "timezone">,
+  ): Promise<ParkHourly | null> {
+    if (park.latitude == null || park.longitude == null) return null;
+    try {
+      const raw = await this.openMeteoClient.getHourlyDetail(
+        park.latitude,
+        park.longitude,
+      );
+      return buildParkHourly(
+        raw,
+        park.timezone || "UTC",
+        Date.now(),
+        HOURLY_DETAIL_CACHE_TTL,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to fetch hourly weather for park ${park.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   }
 
   /**
