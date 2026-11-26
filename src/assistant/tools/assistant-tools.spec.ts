@@ -3,6 +3,7 @@ import { PlanOptimizeService } from "../../planner/plan-optimize.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
+import { FacilitiesService } from "../../facilities/facilities.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
@@ -443,6 +444,7 @@ import {
   showsCard,
   showsOnDay,
   reopeningOf,
+  parkShutAt,
   performancesOf,
   reopenSearchFrom,
   storedToolInput,
@@ -853,12 +855,13 @@ async function run(
   input: unknown,
   providers: Map<unknown, unknown>,
   locale = "en",
+  extra: Record<string, unknown> = {},
 ) {
   const onError = jest.fn();
   const result = await runAssistantTool(
     name,
     input,
-    context(providers, locale),
+    { ...context(providers, locale), ...extra },
     onError,
   );
   expect(onError).not.toHaveBeenCalled();
@@ -994,6 +997,141 @@ describe("find_restaurants", () => {
 
   it("folds case and accents for the query", () => {
     expect(foldText("Crème Glacée")).toBe("creme glacee");
+  });
+});
+
+describe("places near a ride", () => {
+  // Phantasialand's own positions: Cocorico sits under Talocan, Zambesi across the park.
+  const entities = {
+    attractions: [
+      {
+        id: "talocan",
+        name: "Talocan",
+        latitude: "50.7994214",
+        longitude: "6.8811600",
+      },
+      {
+        id: "taron",
+        name: "Taron",
+        latitude: "50.7996591",
+        longitude: "6.8829768",
+      },
+    ],
+    shows: [],
+    restaurants: [
+      {
+        id: "zambesi",
+        name: "Restaurant Zambesi",
+        latitude: "50.7982550",
+        longitude: "6.8812602",
+      },
+      {
+        id: "cocorico",
+        name: "Restaurante Cocorico",
+        latitude: "50.7992805",
+        longitude: "6.8812974",
+      },
+      {
+        id: "cantina",
+        name: "La Cantina Tacana",
+        latitude: "50.7991622",
+        longitude: "6.8821973",
+      },
+      { id: "nowhere", name: "Food Truck", latitude: null, longitude: null },
+    ],
+  };
+  const providers = new Map<unknown, unknown>([
+    [
+      ParksService,
+      {
+        findById: jest.fn(async () => ({ ...park })),
+        loadParkRelations: jest.fn(async (p: object) => ({
+          ...p,
+          ...entities,
+        })),
+      },
+    ],
+    [
+      ParkIntegrationService,
+      {
+        buildIntegratedResponse: jest.fn(async () => ({
+          status: "OPERATING",
+          restaurants: entities.restaurants.map(({ id, name }) => ({
+            id,
+            name,
+          })),
+        })),
+      },
+    ],
+  ]);
+
+  it("lists the restaurants nearest a ride first, with the walk", async () => {
+    const { json } = await run(
+      "find_restaurants",
+      { park: PARK_ID, near: "talocan" },
+      providers,
+    );
+    expect(json.near).toEqual({ id: "talocan", name: "Talocan", kind: "ride" });
+    expect(json.restaurants.map((r: { id: string }) => r.id)).toEqual([
+      "cocorico",
+      "cantina",
+      "zambesi",
+      "nowhere",
+    ]);
+    expect(json.restaurants[0]).toMatchObject({ metres: 20, walkMinutes: 1 });
+    expect(json.restaurants[3].metres).toBeUndefined();
+  });
+
+  it("keeps the walk out of the card but hands it to the model", async () => {
+    const { action, json } = await run(
+      "show_card",
+      { kind: "restaurants", park: PARK_ID, near: "Talocan", query: "rest" },
+      providers,
+    );
+    const card = (action as { card: { restaurants: object[] } }).card;
+    expect(card.restaurants).toEqual([
+      {
+        name: "Restaurante Cocorico",
+        status: null,
+        land: null,
+        cuisine: null,
+        requiresReservation: null,
+      },
+      {
+        name: "Restaurant Zambesi",
+        status: null,
+        land: null,
+        cuisine: null,
+        requiresReservation: null,
+      },
+    ]);
+    expect(json.near).toMatchObject({ name: "Talocan" });
+    expect(json.restaurants[1]).toMatchObject({ id: "zambesi", metres: 130 });
+  });
+
+  it("measures from one place to several and names the ones it cannot place", async () => {
+    const { json } = await run(
+      "get_walking_distance",
+      {
+        park: PARK_ID,
+        from: "Taron",
+        to: ["Cocorico", "Food Truck", "Space Mountain"],
+      },
+      providers,
+    );
+    expect(json.from).toEqual({ id: "taron", name: "Taron", kind: "ride" });
+    expect(json.distances[0]).toEqual({
+      id: "cocorico",
+      name: "Restaurante Cocorico",
+      kind: "restaurant",
+      metres: 130,
+      walkMinutes: 3,
+    });
+    expect(json.distances[1]).toMatchObject({
+      name: "Food Truck",
+      why: expect.any(String),
+    });
+    expect(json.distances[2]).toMatchObject({ asked: "Space Mountain" });
   });
 });
 
@@ -3299,6 +3437,216 @@ describe("performancesOf (PAR-1355)", () => {
         true,
         "12:00",
       ),
+    ).toBeNull();
+  });
+});
+
+describe("places around the user and the way there", () => {
+  // Phantasialand: Taron, the toilet beside it, and a visitor standing at Talocan.
+  const entities = {
+    latitude: "50.7997",
+    longitude: "6.8812",
+    attractions: [
+      {
+        id: "talocan",
+        slug: "talocan",
+        name: "Talocan",
+        latitude: "50.7994214",
+        longitude: "6.8811600",
+      },
+      {
+        id: "taron",
+        slug: "taron",
+        name: "Taron",
+        latitude: "50.7996591",
+        longitude: "6.8829768",
+      },
+    ],
+    shows: [],
+    restaurants: [
+      {
+        id: "cocorico",
+        name: "Restaurante Cocorico",
+        latitude: "50.7992805",
+        longitude: "6.8812974",
+      },
+    ],
+  };
+  const toilet = {
+    id: "0f6f2b4e-1c1a-4c3e-9a51-6b1c2d3e4f50",
+    type: "toilets",
+    latitude: 50.7995,
+    longitude: 6.8828,
+    name: null,
+    wheelchair: "yes",
+    changingTable: true,
+    fee: null,
+  };
+  const providers = (available = true) =>
+    new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({ ...park })),
+          loadParkRelations: jest.fn(async (p: object) => ({
+            ...p,
+            ...entities,
+          })),
+        },
+      ],
+      [
+        ParkIntegrationService,
+        {
+          buildIntegratedResponse: jest.fn(async () => ({
+            status: "OPERATING",
+            attractions: [
+              {
+                id: "talocan",
+                name: "Talocan",
+                status: "OPERATING",
+                queues: [{ queueType: "STANDBY", waitTime: 10 }],
+              },
+              {
+                id: "taron",
+                name: "Taron",
+                status: "OPERATING",
+                queues: [{ queueType: "STANDBY", waitTime: 35 }],
+              },
+            ],
+            restaurants: [{ id: "cocorico", name: "Restaurante Cocorico" }],
+          })),
+        },
+      ],
+      [
+        FacilitiesService,
+        {
+          publicFor: jest.fn(async () => ({
+            available,
+            facilities: available ? [toilet] : [],
+          })),
+        },
+      ],
+    ]);
+  const atTalocan = { lat: 50.7994, lng: 6.8812 };
+
+  it("asks for the position when none came with the message", async () => {
+    const { json } = await run(
+      "find_nearby",
+      { park: PARK_ID, fromMe: true },
+      providers(),
+    );
+    expect(json).toMatchObject({ needsPosition: true });
+  });
+
+  it("lists what is around the user without handing over the position", async () => {
+    const { json } = await run(
+      "find_nearby",
+      { park: PARK_ID, fromMe: true, kinds: ["rides", "toilets"] },
+      providers(),
+      "de",
+      { location: atTalocan },
+    );
+    expect(json.from).toEqual({ fromTheUser: true });
+    expect(json.rides.map((r: { id: string }) => r.id)).toEqual([
+      "talocan",
+      "taron",
+    ]);
+    expect(json.rides[0]).toMatchObject({ waitMinutes: 10, metres: 0 });
+    expect(json.toilets[0]).toMatchObject({
+      wheelchair: "yes",
+      changingTable: true,
+    });
+    expect(json.credit.say).toContain("OpenStreetMap");
+    expect(JSON.stringify(json)).not.toContain("50.7994,");
+  });
+
+  it("says toilets are not mapped yet where the park has none approved", async () => {
+    const { json } = await run(
+      "find_nearby",
+      { park: PARK_ID, near: "Taron", kinds: ["toilets"] },
+      providers(false),
+    );
+    expect(json.toilets).toMatchObject({ notKnown: true });
+    expect(json.credit).toBeUndefined();
+  });
+
+  it("tells a user far from the park that they are not there", async () => {
+    const { json } = await run(
+      "find_nearby",
+      { park: PARK_ID, fromMe: true },
+      providers(),
+      "de",
+      { location: { lat: 52.52, lng: 13.405 } },
+    );
+    expect(json).toMatchObject({ notAtPark: true });
+  });
+
+  it("measures from the user to named rides", async () => {
+    const { json } = await run(
+      "get_walking_distance",
+      { park: PARK_ID, fromMe: true, to: ["Taron"] },
+      providers(),
+      "de",
+      { location: atTalocan },
+    );
+    expect(json.distances[0]).toMatchObject({ name: "Taron", metres: 130 });
+  });
+
+  it("draws the way to a ride and to a toilet, crediting OpenStreetMap for the toilet", async () => {
+    const ride = await run(
+      "show_card",
+      { kind: "navigate", park: PARK_ID, to: "taron" },
+      providers(),
+    );
+    expect(ride.action).toMatchObject({
+      type: "card",
+      card: {
+        kind: "navigate",
+        name: "Taron",
+        place: "ride",
+        latitude: 50.7996591,
+        mapsUrl: expect.stringContaining("travelmode=walking"),
+      },
+    });
+    expect(
+      (ride.action as { card: { credit?: unknown } }).card.credit,
+    ).toBeUndefined();
+    const loo = await run(
+      "show_card",
+      { kind: "navigate", park: PARK_ID, to: toilet.id },
+      providers(),
+    );
+    expect(loo.action).toMatchObject({
+      card: {
+        place: "toilets",
+        credit: { text: "© OpenStreetMap contributors" },
+      },
+    });
+  });
+});
+
+describe("parkShutAt", () => {
+  const day = { status: "OPERATING", openHour: 11, closeHour: 20 };
+
+  it("tells the night and the morning from the open hours", () => {
+    expect(parkShutAt(day, 22)).toBe("closed_for_the_night");
+    expect(parkShutAt(day, 8)).toBe("not_open_yet");
+    expect(parkShutAt(day, 14)).toBeNull();
+  });
+
+  it("keeps a day that runs past midnight open in its small hours", () => {
+    const late = { status: "OPERATING", openHour: 10, closeHour: 1 };
+    expect(parkShutAt(late, 0)).toBeNull();
+    expect(parkShutAt(late, 23)).toBeNull();
+    expect(parkShutAt(late, 7)).toBe("not_open_yet");
+  });
+
+  it("calls a closed day closed and says nothing without hours", () => {
+    expect(
+      parkShutAt({ status: "CLOSED", openHour: null, closeHour: null }, 12),
+    ).toBe("closed_today");
+    expect(
+      parkShutAt({ status: "UNKNOWN", openHour: null, closeHour: null }, 12),
     ).toBeNull();
   });
 });

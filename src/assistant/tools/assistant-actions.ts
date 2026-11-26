@@ -110,6 +110,22 @@ export type AssistantCard =
       }>;
     }
   | {
+      /** Where to walk inside a park: the widget points an arrow at it from the visitor's own position. */
+      kind: "navigate";
+      name: string;
+      place: "ride" | "show" | "restaurant" | "toilets" | "drinking_water";
+      park: string;
+      /** The target's position, never the visitor's. */
+      latitude: number;
+      longitude: number;
+      /** Walking directions in Google Maps, for the way the arrow cannot show. */
+      mapsUrl: string;
+      /** The ride's page; null for a place without one. */
+      url: string | null;
+      /** For a point from OpenStreetMap: the credit the ODbL asks for beside it. */
+      credit?: { text: string; url: string };
+    }
+  | {
       kind: "parks";
       parks: Array<{
         name: string;

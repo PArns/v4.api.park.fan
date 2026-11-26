@@ -314,6 +314,7 @@ export class AssistantChatService {
           opener: chat.history.length === 0 ? (request.opener ?? null) : null,
           dayTip,
           liveRegions: request.liveRegions ?? null,
+          positionShared: Boolean(request.location),
           interview: request.interview ?? null,
           alerts: request.alerts,
           favorites: request.favorites,

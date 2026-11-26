@@ -320,8 +320,9 @@ export const chatRequestSchema = z.strictObject({
     .regex(/^[A-Za-z_+\-/0-9]+$/)
     .optional(),
   /**
-   * Sent only after the visitor pressed „Standort teilen" in the chat; rounded here to two
-   * decimals (about a kilometre), never stored or logged.
+   * Sent only after the visitor pressed „Standort teilen" in the chat; rounded here to four
+   * decimals (about ten metres, enough for the nearest toilet inside a park), used for that one
+   * answer, never stored, logged or handed to the model, which sees distances only.
    */
   location: z
     .strictObject({
@@ -329,8 +330,8 @@ export const chatRequestSchema = z.strictObject({
       lng: z.number().min(-180).max(180),
     })
     .transform(({ lat, lng }) => ({
-      lat: Math.round(lat * 100) / 100,
-      lng: Math.round(lng * 100) / 100,
+      lat: Math.round(lat * 10_000) / 10_000,
+      lng: Math.round(lng * 10_000) / 10_000,
     }))
     .optional(),
   planner: lenient(plannerSnapshotSchema),
