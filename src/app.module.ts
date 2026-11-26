@@ -21,6 +21,7 @@ import { SearchModule } from "./search/search.module";
 import { RedisModule } from "./common/redis/redis.module";
 import { LocationModule } from "./location/location.module";
 import { DiscoveryModule } from "./discovery/discovery.module";
+import { RankingsModule } from "./rankings/rankings.module";
 import { SitemapModule } from "./sitemap/sitemap.module";
 import { GeoipModule } from "./geoip/geoip.module";
 import { FavoritesModule } from "./favorites/favorites.module";
@@ -108,6 +109,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     GeoipModule,
     LocationModule,
     DiscoveryModule,
+    RankingsModule,
     SitemapModule,
 
     // Favorites

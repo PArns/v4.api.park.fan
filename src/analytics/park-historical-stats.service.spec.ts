@@ -1094,4 +1094,39 @@ describe("ParkHistoricalStatsService", () => {
     );
     expect(writtenKey).toMatch(asRegex);
   });
+  describe("getYearAttractionStats", () => {
+    afterEach(() => jest.useRealTimers());
+
+    it("bounds a running year at yesterday, park-local, and keeps the raw averages", async () => {
+      jest.useFakeTimers({ now: new Date("2026-11-26T10:00:00Z") });
+      const rows = await service.getYearAttractionStats(park, 2026);
+
+      const topCall = aggregateQuery.mock.calls.find(([sql]) =>
+        (sql as string).includes("ORDER BY avg_p90 DESC"),
+      )!;
+      expect(topCall[1].slice(2, 4)).toEqual(["2026-01-01", "2026-11-25"]);
+      expect(rows[0]).toMatchObject({
+        attractionSlug: "blue-fire",
+        avgP90: 68,
+        avgP50: 38,
+        dataTo: "2026-11-25",
+      });
+      expect(redis.set.mock.calls[0][0]).toBe(
+        `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:1:20:year:2026`,
+      );
+    });
+
+    it("ends a past year on 31 December and returns nothing for a future one", async () => {
+      jest.useFakeTimers({ now: new Date("2026-11-26T10:00:00Z") });
+      await service.getYearAttractionStats(park, 2025);
+      const topCall = aggregateQuery.mock.calls.find(([sql]) =>
+        (sql as string).includes("ORDER BY avg_p90 DESC"),
+      )!;
+      expect(topCall[1].slice(2, 4)).toEqual(["2025-01-01", "2025-12-31"]);
+
+      aggregateQuery.mockClear();
+      expect(await service.getYearAttractionStats(park, 2027)).toEqual([]);
+      expect(aggregateQuery).not.toHaveBeenCalled();
+    });
+  });
 });
