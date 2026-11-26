@@ -45,6 +45,12 @@ import {
 } from "../../parks/services/best-days.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { ParksService } from "../../parks/parks.service";
+import {
+  defaultRankingYear,
+  FIRST_RANKING_YEAR,
+  RankingsService,
+} from "../../rankings/rankings.service";
+import { generateSlug } from "../../common/utils/slug.util";
 import type {
   CalendarDay,
   WeatherSummary,
@@ -1249,6 +1255,9 @@ const isoDay = z.string().regex(ISO_DATE_PATTERN);
 
 /** A rider's height in cm, as the planner and the height filters take it. */
 const riderHeight = z.number().int().min(50).max(250);
+
+/** How deep `get_wait_ranking` reads the ranking, so a ride far down the list still has a place. */
+const RANKING_TOOL_DEPTH = 200;
 
 /** How far back `get_park_history` reads a single day: a year, as its year-back view. */
 const HISTORY_DAYS = 366;
@@ -3055,6 +3064,132 @@ export const ASSISTANT_TOOLS = [
           comparable < today && {
             comparableDayLastYear: await shown(comparable),
           }),
+      };
+    },
+  }),
+  tool({
+    name: "get_wait_ranking",
+    status: "rides",
+    description:
+      "park.fan's year ranking of rides by wait in one country: every ride with at least " +
+      "minMeasuredDays measured days in the year, ordered by its typical peak wait (the year's " +
+      "average of the hourly 90th percentile; typicalMinutes is the median beside it). For " +
+      '"which rides had the longest waits in Germany this year", "is Taron the longest queue in ' +
+      'Germany", "where does Black Mamba rank". Give park (the ranking of its country) or ' +
+      "country; with ride, that ride's own place comes back as askedRide, also when it is far " +
+      "down the list. The year defaults to the current one (the previous one in January and " +
+      "February); a running year counts up to measuredUntil. Link page for the whole list.",
+    input: z.object({
+      park: parkRef
+        .optional()
+        .describe("A park whose country to rank; or give country"),
+      country: z
+        .string()
+        .min(2)
+        .max(80)
+        .optional()
+        .describe('The country in English, like "Germany" or "united-states"'),
+      year: z
+        .number()
+        .int()
+        .min(FIRST_RANKING_YEAR)
+        .max(2100)
+        .optional()
+        .describe("The calendar year; default the current one"),
+      ride: z
+        .string()
+        .min(2)
+        .max(120)
+        .optional()
+        .describe("A ride's name or slug to find its place"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(25)
+        .optional()
+        .describe("How many places from the top to list; default 10"),
+    }),
+    run: async ({ park: reference, country, year, ride, limit }, ctx) => {
+      let scope: { continentSlug: string; countrySlug: string } | null = null;
+      if (reference) {
+        const found = await resolvePark(mcp(ctx), reference);
+        if (isAmbiguous(found)) return found;
+        scope = {
+          continentSlug: found.continentSlug,
+          countrySlug: found.countrySlug,
+        };
+      } else if (country) {
+        const slug = generateSlug(country);
+        const { data } = await ctx
+          .get(ParksService)
+          .findAllWithFilters({ countrySlug: slug, limit: 1 });
+        const any =
+          data[0] ??
+          (
+            await ctx
+              .get(ParksService)
+              .findAllWithFilters({ country, limit: 1 })
+          ).data[0];
+        if (any) {
+          scope = {
+            continentSlug: any.continentSlug,
+            countrySlug: any.countrySlug,
+          };
+        }
+      }
+      if (!scope) {
+        throw new McpToolError(
+          country
+            ? `No parks in "${country}"; name the country in English`
+            : "Give a park or a country",
+        );
+      }
+
+      const rankedYear = year ?? defaultRankingYear();
+      const ranking = await ctx
+        .get(RankingsService)
+        .getAttractionRanking(scope, rankedYear, RANKING_TOOL_DEPTH);
+      const row = (a: (typeof ranking.attractions)[number]) => ({
+        rank: a.rank,
+        ride: a.attractionName,
+        park: a.parkName,
+        peakMinutes: a.avgWaitP90,
+        typicalMinutes: a.avgWaitP50,
+        measuredDays: a.sampleDays,
+        url: attractionPageUrl(
+          {
+            continentSlug: a.continentSlug,
+            countrySlug: a.countrySlug,
+            citySlug: a.citySlug,
+            slug: a.parkSlug,
+          },
+          { slug: a.attractionSlug },
+        ),
+      });
+      const askedKey = ride ? nameKey(ride) : null;
+      const asked = askedKey
+        ? ranking.attractions.find(
+            (a) =>
+              nameKey(a.attractionName) === askedKey ||
+              nameKey(a.attractionSlug) === askedKey,
+          )
+        : undefined;
+      return {
+        year: rankedYear,
+        country: scope.countrySlug,
+        yearComplete: ranking.meta.yearComplete,
+        measuredUntil: ranking.meta.dataTo ?? null,
+        minMeasuredDays: ranking.meta.minAttractionDays,
+        ridesRanked: ranking.meta.totalRanked,
+        // The English segment; the site 308s it to the reader's spelling, as with a glossary link.
+        page: `${getFrontendUrl()}/${ctx.locale}/longest-wait-times/${scope.continentSlug}/${scope.countrySlug}/${rankedYear}`,
+        rides: ranking.attractions.slice(0, limit ?? 10).map(row),
+        ...(ride && {
+          askedRide: asked
+            ? row(asked)
+            : `${ride} is not in the ${rankedYear} ranking: fewer than ${ranking.meta.minAttractionDays} measured days, no wait times, or not among the first ${RANKING_TOOL_DEPTH}`,
+        }),
       };
     },
   }),

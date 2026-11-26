@@ -17,6 +17,23 @@ import {
   RankedAttractionDto,
 } from "./dto/attraction-ranking.dto";
 
+/**
+ * The first year the measured history ranks: most parks' history starts in the last days of 2025,
+ * so no ride reaches the 20-day floor in 2025. The frontend's `FIRST_RANKING_YEAR` says the same.
+ */
+export const FIRST_RANKING_YEAR = 2026;
+
+/**
+ * The year an unnamed ranking means: the running one from March on, the previous one before,
+ * when a new year has too few measured days to rank. The frontend's `currentRankingYear` follows
+ * the same rule, so Parky and the site quote the same year.
+ */
+export function defaultRankingYear(now: Date = new Date()): number {
+  const year = now.getUTCFullYear();
+  const shown = now.getUTCMonth() < 2 ? year - 1 : year;
+  return Math.max(FIRST_RANKING_YEAR, shown);
+}
+
 /** Parks whose year rows are computed at once on a cold cache. */
 const PARK_CONCURRENCY = 4;
 const CACHE_TTL_SECONDS = 24 * 60 * 60;

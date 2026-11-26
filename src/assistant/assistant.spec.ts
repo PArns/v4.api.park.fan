@@ -878,6 +878,7 @@ describe("assistant tools", () => {
       "get_walking_distance",
       "find_nearby",
       "get_park_history",
+      "get_wait_ranking",
       "get_shows",
       "get_ride",
       "compare_rides",
