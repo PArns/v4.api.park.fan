@@ -182,7 +182,10 @@ needs a new share.
 ### The way there
 
 `show_card` kind `navigate` with `park` and `to` (a ride, show or restaurant by name or id, or a
-toilet's or drinking water's id from `find_nearby`) draws a card with the target's own position:
+toilet's or drinking water's id from `find_nearby`) draws a card with the target's own position.
+`park` may be left out (PAR-1438): a toilet's or a water point's id names its park, and for any
+other target the park the visitor stands in is taken from the shared position. With neither, the
+tool answers an error that says to pass `park`. The card:
 
 ```jsonc
 {
