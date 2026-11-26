@@ -128,7 +128,7 @@ export const API_PERMISSION_DESCRIPTIONS: Record<ApiPermission, string> = {
   "stats.live":
     "park.fan's live analysis: crowd level, occupancy, trend, the comparison with a typical day.",
   "stats.history":
-    "Measured history: park statistics, hourly profiles, a ride's day curve and history, typical waits, rope drop, downtime. Includes stats.typical-waits.",
+    "Measured history: park statistics, hourly profiles, a ride's day curve and history, typical waits, rope drop, downtime, the year rankings of rides (/v1/rankings). Includes stats.typical-waits.",
   "stats.typical-waits":
     "Each ride's typical waits and which rides are a park's headliners, in the park and ride detail (`typicalWaits`, `isHeadliner`), without the rest of the history.",
   "stats.platform":

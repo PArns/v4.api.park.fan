@@ -37,6 +37,7 @@ chat runs around them (the answer loop, the limits, the cards' shapes, the promp
 | `get_park_weather` | the weather now, the next 12 hours and the warnings in force                                | 2026-10-31, PAR-1187 |
 | `get_best_days`    | a park's ten quietest open days ahead                                                       | 2026-10-31, PAR-1187 |
 | `get_park_history` | the same day a year back, or one past day                                                   | 2026-11-05, PAR-1235 |
+| `get_wait_ranking` | a country's rides ranked by their typical peak wait in one year, or one ride's place        | 2026-11-26, PAR-1442 |
 | `get_park_day`     | one day as the planner builds it: hours, crowd, weather, each ride's opening, peak and lull | 2026-11-06, PAR-1243 |
 | `get_days`         | particular days at one park, up to a year ahead                                             | 2026-11-10, PAR-1276 |
 | `get_hours`        | how a day's waits run hour by hour                                                          | 2026-11-10, PAR-1276 |

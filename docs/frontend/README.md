@@ -50,6 +50,7 @@ page for the field or endpoint you are reading or changing.
 | [calendar-schedule-status](./calendar-schedule-status.md)         | calendar `UNKNOWN` vs `CLOSED`, `hasOperatingSchedule`, `scheduleCoverage`                                               |
 | [park-stats-and-peak-time](./park-stats-and-peak-time.md)         | `/stats` history and the peak-hour fields                                                                                |
 | [park-hourly-profile](./park-hourly-profile.md)                   | `/stats/hourly`: the park's day shape                                                                                    |
+| [attraction-rankings](./attraction-rankings.md)                   | `/v1/rankings/attractions/*`: a country's or continent's rides by their wait in one year                                 |
 | [ride-day-curve](./ride-day-curve.md)                             | `/stats/day`: one ride's day curve                                                                                       |
 | [ride-typical-waits](./ride-typical-waits.md)                     | `typicalWaits`: a ride's typical and busy peak wait                                                                      |
 | [effective-status](./effective-status.md)                         | a ride's `status` vs `effectiveStatus`: which to read, how each is derived                                               |

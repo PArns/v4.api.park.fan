@@ -460,6 +460,7 @@ import { HolidaysService } from "../../holidays/holidays.service";
 import { FavoritesService } from "../../favorites/favorites.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { ShowsService } from "../../shows/shows.service";
+import { RankingsService } from "../../rankings/rankings.service";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { addIsoDays, eachIsoDate } from "../../common/utils/date.util";
 import type { Show } from "../../shows/entities/show.entity";
@@ -4539,5 +4540,100 @@ describe("storedToolInput", () => {
       }),
     ).toEqual({ park: "phantasialand", by: "speed", riderHeightCm: "set" });
     expect(storedToolInput({ rideId: "x" })).toEqual({ rideId: "x" });
+  });
+});
+
+describe("get_wait_ranking", () => {
+  const entry = (rank: number, name: string, slug: string) => ({
+    rank,
+    attractionSlug: slug,
+    attractionName: name,
+    land: null,
+    parkSlug: "phantasialand",
+    parkName: "Phantasialand",
+    continentSlug: "europe",
+    countrySlug: "germany",
+    citySlug: "bruehl",
+    avgWaitP50: 40,
+    avgWaitP90: 45,
+    sampleDays: 260,
+  });
+  const ranking = {
+    attractions: [
+      entry(1, "Taron", "taron"),
+      entry(2, "F.L.Y.", "fly"),
+      entry(3, "Black Mamba", "black-mamba"),
+    ],
+    meta: {
+      year: 2026,
+      continentSlug: "europe",
+      countrySlug: "germany",
+      yearComplete: false,
+      dataTo: "2026-11-25",
+      minAttractionDays: 60,
+      parkCount: 1,
+      totalRanked: 3,
+      generatedAt: "2026-11-26T00:00:00.000Z",
+    },
+  };
+
+  it("ranks the park's country and finds the asked ride far down the list", async () => {
+    const getAttractionRanking = jest.fn(async () => ranking);
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            ...park,
+            continentSlug: "europe",
+            countrySlug: "germany",
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+      [RankingsService, { getAttractionRanking }],
+    ]);
+    const { json } = await run(
+      "get_wait_ranking",
+      { park: PARK_ID, year: 2026, ride: "Black Mamba", limit: 2 },
+      providers,
+      "de",
+    );
+
+    expect(getAttractionRanking).toHaveBeenCalledWith(
+      { continentSlug: "europe", countrySlug: "germany" },
+      2026,
+      200,
+    );
+    expect(json.rides.map((r: { ride: string }) => r.ride)).toEqual([
+      "Taron",
+      "F.L.Y.",
+    ]);
+    expect(json.askedRide).toMatchObject({ rank: 3, ride: "Black Mamba" });
+    expect(json.page).toBe(
+      `${getFrontendUrl()}/de/longest-wait-times/europe/germany/2026`,
+    );
+    expect(json.measuredUntil).toBe("2026-11-25");
+  });
+
+  it("finds the country by its English name and says when a ride is not ranked", async () => {
+    const findAllWithFilters = jest.fn(async () => ({
+      data: [{ continentSlug: "europe", countrySlug: "germany" }],
+      total: 1,
+    }));
+    const providers = new Map<unknown, unknown>([
+      [ParksService, { findAllWithFilters }],
+      [RankingsService, { getAttractionRanking: jest.fn(async () => ranking) }],
+    ]);
+    const { json } = await run(
+      "get_wait_ranking",
+      { country: "Germany", year: 2026, ride: "Wakobato" },
+      providers,
+    );
+    expect(findAllWithFilters).toHaveBeenCalledWith({
+      countrySlug: "germany",
+      limit: 1,
+    });
+    expect(json.askedRide).toMatch(/not in the 2026 ranking/);
   });
 });

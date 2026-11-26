@@ -8,6 +8,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { subDays, subYears } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
+import { getYesterdayDateInTimezone } from "../common/utils/date.util";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { safeJsonParse } from "../common/utils/json.util";
@@ -73,7 +74,36 @@ const MIN_SAMPLES_PER_HOUR = 2;
  * `typicalWaits` aggregate uses for its `displayable` gate, so the two
  * surfaces refuse the same thin evidence.
  */
-const DEFAULT_MIN_ATTRACTION_DAYS = 20;
+export const DEFAULT_MIN_ATTRACTION_DAYS = 20;
+
+/**
+ * Measured days a ride needs in a calendar year to enter the year rankings. Higher than the
+ * rolling window's floor: a Halloween maze runs on 25 to 30 event nights, all of them full, and
+ * with 20 days Traumatica's mazes led Germany's 2026 ranking ahead of every ride open all season.
+ * Sixty days is a season's worth of weekends.
+ */
+export const YEAR_RANKING_MIN_ATTRACTION_DAYS = 60;
+
+/**
+ * Rows a park may contribute to a year ranking: every ride over the floor.
+ * Europa-Park, the deepest park, has about 120.
+ */
+const MAX_YEAR_RANKING_ROWS = 500;
+
+/** One ride's raw averages over one calendar year, for the rankings. */
+export interface YearAttractionStat {
+  attractionSlug: string;
+  attractionName: string;
+  land: string | null;
+  /** Average of the hourly P50s, unrounded. */
+  avgP50: number;
+  /** Average of the hourly P90s, unrounded; what the rankings sort by. */
+  avgP90: number;
+  sampleDays: number;
+  /** First and last park-local day of the window. */
+  dataFrom: string;
+  dataTo: string;
+}
 
 /**
  * How many ranked rides the day curve may choose between.
@@ -232,6 +262,55 @@ export class ParkHistoricalStatsService {
         displayable: (result.meta?.totalSampleDays ?? 0) >= minSampleDays,
       },
     };
+  }
+
+  /**
+   * Every ride of one park with enough measured days in one calendar year, by
+   * the same query as `topAttractions`, so a ride's place in a country ranking
+   * and in its park's own table come from one number. The floor is the year
+   * rankings' own ({@link YEAR_RANKING_MIN_ATTRACTION_DAYS}).
+   * The year is park-local and ends yesterday while it is still running.
+   * Raw averages, not rounded: the ranking across parks sorts on them, and
+   * rounding first would tie half of every country at the same five minutes.
+   *
+   * Cached under the park's historical-stats key, so whatever clears a park's
+   * statistics clears its year rows too.
+   */
+  async getYearAttractionStats(
+    park: Park,
+    year: number,
+  ): Promise<YearAttractionStat[]> {
+    const startStr = `${year}-01-01`;
+    const yesterday = getYesterdayDateInTimezone(park.timezone);
+    const endStr = yesterday < `${year}-12-31` ? yesterday : `${year}-12-31`;
+    if (endStr < startStr) return [];
+
+    const cacheKey = `${this.statsCacheKey(park.id, 1, YEAR_RANKING_MIN_ATTRACTION_DAYS)}:year:${year}`;
+    const cached = safeJsonParse<YearAttractionStat[]>(
+      await this.redis.get(cacheKey),
+    );
+    if (cached) return cached;
+
+    const rows = await this.queryTopAttractions(
+      park.id,
+      park.timezone,
+      startStr,
+      endStr,
+      MAX_YEAR_RANKING_ROWS,
+      YEAR_RANKING_MIN_ATTRACTION_DAYS,
+    );
+    const stats: YearAttractionStat[] = rows.map((r) => ({
+      attractionSlug: r.slug as string,
+      attractionName: r.name as string,
+      land: (r.land as string | null) ?? null,
+      avgP50: Number(r.avg_p50),
+      avgP90: Number(r.avg_p90),
+      sampleDays: Number(r.sample_days),
+      dataFrom: startStr,
+      dataTo: endStr,
+    }));
+    await this.redis.set(cacheKey, JSON.stringify(stats), "EX", this.CACHE_TTL);
+    return stats;
   }
 
   /**
