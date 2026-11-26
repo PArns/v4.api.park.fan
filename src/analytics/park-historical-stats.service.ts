@@ -77,6 +77,14 @@ const MIN_SAMPLES_PER_HOUR = 2;
 export const DEFAULT_MIN_ATTRACTION_DAYS = 20;
 
 /**
+ * Measured days a ride needs in a calendar year to enter the year rankings. Higher than the
+ * rolling window's floor: a Halloween maze runs on 25 to 30 event nights, all of them full, and
+ * with 20 days Traumatica's mazes led Germany's 2026 ranking ahead of every ride open all season.
+ * Sixty days is a season's worth of weekends.
+ */
+export const YEAR_RANKING_MIN_ATTRACTION_DAYS = 60;
+
+/**
  * Rows a park may contribute to a year ranking: every ride over the floor.
  * Europa-Park, the deepest park, has about 120.
  */
@@ -258,8 +266,9 @@ export class ParkHistoricalStatsService {
 
   /**
    * Every ride of one park with enough measured days in one calendar year, by
-   * the same query and the same floor as `topAttractions`, so a ride's place
-   * in a country ranking and in its park's own table come from one number.
+   * the same query as `topAttractions`, so a ride's place in a country ranking
+   * and in its park's own table come from one number. The floor is the year
+   * rankings' own ({@link YEAR_RANKING_MIN_ATTRACTION_DAYS}).
    * The year is park-local and ends yesterday while it is still running.
    * Raw averages, not rounded: the ranking across parks sorts on them, and
    * rounding first would tie half of every country at the same five minutes.
@@ -276,7 +285,7 @@ export class ParkHistoricalStatsService {
     const endStr = yesterday < `${year}-12-31` ? yesterday : `${year}-12-31`;
     if (endStr < startStr) return [];
 
-    const cacheKey = `${this.statsCacheKey(park.id, 1, DEFAULT_MIN_ATTRACTION_DAYS)}:year:${year}`;
+    const cacheKey = `${this.statsCacheKey(park.id, 1, YEAR_RANKING_MIN_ATTRACTION_DAYS)}:year:${year}`;
     const cached = safeJsonParse<YearAttractionStat[]>(
       await this.redis.get(cacheKey),
     );
@@ -288,7 +297,7 @@ export class ParkHistoricalStatsService {
       startStr,
       endStr,
       MAX_YEAR_RANKING_ROWS,
-      DEFAULT_MIN_ATTRACTION_DAYS,
+      YEAR_RANKING_MIN_ATTRACTION_DAYS,
     );
     const stats: YearAttractionStat[] = rows.map((r) => ({
       attractionSlug: r.slug as string,

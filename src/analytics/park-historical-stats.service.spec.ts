@@ -1112,7 +1112,7 @@ describe("ParkHistoricalStatsService", () => {
         dataTo: "2026-11-25",
       });
       expect(redis.set.mock.calls[0][0]).toBe(
-        `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:1:20:year:2026`,
+        `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:1:60:year:2026`,
       );
     });
 

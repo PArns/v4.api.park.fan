@@ -4570,7 +4570,7 @@ describe("get_wait_ranking", () => {
       countrySlug: "germany",
       yearComplete: false,
       dataTo: "2026-11-25",
-      minAttractionDays: 20,
+      minAttractionDays: 60,
       parkCount: 1,
       totalRanked: 3,
       generatedAt: "2026-11-26T00:00:00.000Z",

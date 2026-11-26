@@ -38,7 +38,7 @@ export class RankingsController {
   @ApiOperation({
     summary: "Year ranking of rides by wait in a continent",
     description:
-      "Every ride in the continent's parks with at least 20 measured days in the year, ordered by the average of its hourly P90 waits (the same figure and floor as a park's `topAttractions`). While the year runs, the window ends yesterday in each park's time zone. Cached for 24 hours.",
+      "Every ride in the continent's parks with at least 60 measured days in the year, ordered by the average of its hourly P90 waits (the figure a park's `topAttractions` orders by). While the year runs, the window ends yesterday in each park's time zone. Cached for 24 hours.",
   })
   @ApiQuery({ name: "year", required: true, example: 2026 })
   @ApiQuery({ name: "limit", required: false, example: 50 })
@@ -63,7 +63,7 @@ export class RankingsController {
   @ApiOperation({
     summary: "Year ranking of rides by wait in a country",
     description:
-      "Every ride in the country's parks with at least 20 measured days in the year, ordered by the average of its hourly P90 waits (the same figure and floor as a park's `topAttractions`). While the year runs, the window ends yesterday in each park's time zone. Cached for 24 hours.",
+      "Every ride in the country's parks with at least 60 measured days in the year, ordered by the average of its hourly P90 waits (the figure a park's `topAttractions` orders by). While the year runs, the window ends yesterday in each park's time zone. Cached for 24 hours.",
   })
   @ApiQuery({ name: "year", required: true, example: 2026 })
   @ApiQuery({ name: "limit", required: false, example: 50 })

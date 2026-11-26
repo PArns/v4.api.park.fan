@@ -9,11 +9,16 @@ with the longest waits of one calendar year in a continent or a country. Needs
 
 Every row is the ride's own row in its park's
 [`topAttractions`](./park-stats-and-peak-time.md), computed over the calendar
-year instead of the rolling window: the same query, the same 20-day floor
-(`meta.minAttractionDays`), the same exclusions (retired rides, days a park
-schedule calls closed, hours outside opening hours, single-sample hours). So a
-ride's order among its park's rides is the same here as on the park's statistics
-page.
+year instead of the rolling window: the same query and the same exclusions
+(retired rides, days a park schedule calls closed, hours outside opening hours,
+single-sample hours). So a ride's order among its park's rides is the same here
+as on the park's statistics page, among the rides both list.
+
+The floor is higher than `topAttractions`' 20 days: **60 measured days in the
+year** (`meta.minAttractionDays`, `YEAR_RANKING_MIN_ATTRACTION_DAYS`). A
+Halloween maze runs on 25 to 30 event nights, every one of them full; with 20
+days, Traumatica's mazes led Germany's 2026 ranking ahead of every ride open all
+season.
 
 | Field                        | Meaning                                                      |
 | ---------------------------- | ------------------------------------------------------------ |
@@ -38,13 +43,13 @@ own time zone; `meta.dataTo` is the latest last day across the ranked parks and
 on 1 January.
 
 The measured history starts in late 2025 for most parks, so 2026 is the first
-year with a full ranking; for 2025 only the last days exist and few rides pass
-the 20-day floor.
+year with a full ranking; for 2025 only the last days exist and no ride passes
+the floor.
 
 ## Caching
 
 Each park's year rows are cached for 24 hours under its historical-stats key
-(`park:historical-stats:v<n>:<park>:1:20:year:<year>`), so whatever clears a
+(`park:historical-stats:v<n>:<park>:1:60:year:<year>`), so whatever clears a
 park's statistics clears them too. The merged ranking is cached for 24 hours
 per scope and year, and the response carries a 24-hour HTTP cache.
 

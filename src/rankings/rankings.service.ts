@@ -7,8 +7,8 @@ import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { ParksService } from "../parks/parks.service";
 import { Park } from "../parks/entities/park.entity";
 import {
-  DEFAULT_MIN_ATTRACTION_DAYS,
   ParkHistoricalStatsService,
+  YEAR_RANKING_MIN_ATTRACTION_DAYS,
   YearAttractionStat,
 } from "../analytics/park-historical-stats.service";
 import { HISTORICAL_STATS_CACHE_VERSION } from "../common/cache/cache-keys";
@@ -19,13 +19,13 @@ import {
 
 /**
  * The first year the measured history ranks: most parks' history starts in the last days of 2025,
- * so no ride reaches the 20-day floor in 2025. The frontend's `FIRST_RANKING_YEAR` says the same.
+ * so no ride reaches the year rankings' floor in 2025. The frontend's `FIRST_RANKING_YEAR` says the same.
  */
 export const FIRST_RANKING_YEAR = 2026;
 
 /**
  * The year an unnamed ranking means: the running one from March on, the previous one before,
- * when a new year has too few measured days to rank. The frontend's `currentRankingYear` follows
+ * when a new year's ranking holds only the few indoor rides open since January. The frontend's `currentRankingYear` follows
  * the same rule, so Parky and the site quote the same year.
  */
 export function defaultRankingYear(now: Date = new Date()): number {
@@ -178,7 +178,7 @@ export function rankAttractions(
         rows.length > 0 &&
         rows.every(({ stat }) => stat.dataTo === `${year}-12-31`),
       dataTo,
-      minAttractionDays: DEFAULT_MIN_ATTRACTION_DAYS,
+      minAttractionDays: YEAR_RANKING_MIN_ATTRACTION_DAYS,
       parkCount: perPark.filter((stats) => stats.length > 0).length,
       totalRanked: attractions.length,
       generatedAt: new Date().toISOString(),

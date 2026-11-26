@@ -63,7 +63,7 @@ describe("rankAttractions", () => {
       totalRanked: 4,
       dataTo: "2026-11-25",
       yearComplete: false,
-      minAttractionDays: 20,
+      minAttractionDays: 60,
     });
   });
 
