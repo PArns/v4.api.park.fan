@@ -443,6 +443,7 @@ import {
   showsCard,
   showsOnDay,
   reopeningOf,
+  parkShutAt,
   performancesOf,
   reopenSearchFrom,
   storedToolInput,
@@ -994,6 +995,141 @@ describe("find_restaurants", () => {
 
   it("folds case and accents for the query", () => {
     expect(foldText("Crème Glacée")).toBe("creme glacee");
+  });
+});
+
+describe("places near a ride", () => {
+  // Phantasialand's own positions: Cocorico sits under Talocan, Zambesi across the park.
+  const entities = {
+    attractions: [
+      {
+        id: "talocan",
+        name: "Talocan",
+        latitude: "50.7994214",
+        longitude: "6.8811600",
+      },
+      {
+        id: "taron",
+        name: "Taron",
+        latitude: "50.7996591",
+        longitude: "6.8829768",
+      },
+    ],
+    shows: [],
+    restaurants: [
+      {
+        id: "zambesi",
+        name: "Restaurant Zambesi",
+        latitude: "50.7982550",
+        longitude: "6.8812602",
+      },
+      {
+        id: "cocorico",
+        name: "Restaurante Cocorico",
+        latitude: "50.7992805",
+        longitude: "6.8812974",
+      },
+      {
+        id: "cantina",
+        name: "La Cantina Tacana",
+        latitude: "50.7991622",
+        longitude: "6.8821973",
+      },
+      { id: "nowhere", name: "Food Truck", latitude: null, longitude: null },
+    ],
+  };
+  const providers = new Map<unknown, unknown>([
+    [
+      ParksService,
+      {
+        findById: jest.fn(async () => ({ ...park })),
+        loadParkRelations: jest.fn(async (p: object) => ({
+          ...p,
+          ...entities,
+        })),
+      },
+    ],
+    [
+      ParkIntegrationService,
+      {
+        buildIntegratedResponse: jest.fn(async () => ({
+          status: "OPERATING",
+          restaurants: entities.restaurants.map(({ id, name }) => ({
+            id,
+            name,
+          })),
+        })),
+      },
+    ],
+  ]);
+
+  it("lists the restaurants nearest a ride first, with the walk", async () => {
+    const { json } = await run(
+      "find_restaurants",
+      { park: PARK_ID, near: "talocan" },
+      providers,
+    );
+    expect(json.near).toEqual({ id: "talocan", name: "Talocan", kind: "ride" });
+    expect(json.restaurants.map((r: { id: string }) => r.id)).toEqual([
+      "cocorico",
+      "cantina",
+      "zambesi",
+      "nowhere",
+    ]);
+    expect(json.restaurants[0]).toMatchObject({ metres: 20, walkMinutes: 1 });
+    expect(json.restaurants[3].metres).toBeUndefined();
+  });
+
+  it("keeps the walk out of the card but hands it to the model", async () => {
+    const { action, json } = await run(
+      "show_card",
+      { kind: "restaurants", park: PARK_ID, near: "Talocan", query: "rest" },
+      providers,
+    );
+    const card = (action as { card: { restaurants: object[] } }).card;
+    expect(card.restaurants).toEqual([
+      {
+        name: "Restaurante Cocorico",
+        status: null,
+        land: null,
+        cuisine: null,
+        requiresReservation: null,
+      },
+      {
+        name: "Restaurant Zambesi",
+        status: null,
+        land: null,
+        cuisine: null,
+        requiresReservation: null,
+      },
+    ]);
+    expect(json.near).toMatchObject({ name: "Talocan" });
+    expect(json.restaurants[1]).toMatchObject({ id: "zambesi", metres: 130 });
+  });
+
+  it("measures from one place to several and names the ones it cannot place", async () => {
+    const { json } = await run(
+      "get_walking_distance",
+      {
+        park: PARK_ID,
+        from: "Taron",
+        to: ["Cocorico", "Food Truck", "Space Mountain"],
+      },
+      providers,
+    );
+    expect(json.from).toEqual({ id: "taron", name: "Taron", kind: "ride" });
+    expect(json.distances[0]).toEqual({
+      id: "cocorico",
+      name: "Restaurante Cocorico",
+      kind: "restaurant",
+      metres: 130,
+      walkMinutes: 3,
+    });
+    expect(json.distances[1]).toMatchObject({
+      name: "Food Truck",
+      why: expect.any(String),
+    });
+    expect(json.distances[2]).toMatchObject({ asked: "Space Mountain" });
   });
 });
 
@@ -3299,6 +3435,32 @@ describe("performancesOf (PAR-1355)", () => {
         true,
         "12:00",
       ),
+    ).toBeNull();
+  });
+});
+
+describe("parkShutAt", () => {
+  const day = { status: "OPERATING", openHour: 11, closeHour: 20 };
+
+  it("tells the night and the morning from the open hours", () => {
+    expect(parkShutAt(day, 22)).toBe("closed_for_the_night");
+    expect(parkShutAt(day, 8)).toBe("not_open_yet");
+    expect(parkShutAt(day, 14)).toBeNull();
+  });
+
+  it("keeps a day that runs past midnight open in its small hours", () => {
+    const late = { status: "OPERATING", openHour: 10, closeHour: 1 };
+    expect(parkShutAt(late, 0)).toBeNull();
+    expect(parkShutAt(late, 23)).toBeNull();
+    expect(parkShutAt(late, 7)).toBe("not_open_yet");
+  });
+
+  it("calls a closed day closed and says nothing without hours", () => {
+    expect(
+      parkShutAt({ status: "CLOSED", openHour: null, closeHour: null }, 12),
+    ).toBe("closed_today");
+    expect(
+      parkShutAt({ status: "UNKNOWN", openHour: null, closeHour: null }, 12),
     ).toBeNull();
   });
 });

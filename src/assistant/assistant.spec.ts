@@ -867,6 +867,7 @@ describe("assistant tools", () => {
       "get_park_live",
       "find_rides",
       "find_restaurants",
+      "get_walking_distance",
       "get_park_history",
       "get_shows",
       "get_ride",

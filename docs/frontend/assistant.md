@@ -304,6 +304,15 @@ Version 62 (PAR-1393) reads the whole weather: a day's from `get_days` or `get_p
 which he once read as "12,6 %"), the hours ahead and the warnings from `get_park_weather`. He never
 says the amount as the chance or the other way round, and stormy gusts, a thunderstorm or a storm
 warning "can" stop tall rides and outdoor shows, never "will": the park decides.
+Version 67 (PAR-1437) gives Parky the park's map: food near a ride, show or restaurant goes through
+`find_restaurants` or the restaurants card with `near`, the walk between places through
+`get_walking_distance` ([places in a park](#places-in-a-park)), and a place described by what is
+around it ("the restaurant under Talocan") is looked for with `near`, never with `query`, which only
+matches names. A walk is said in minutes, never as a direction or a land the result does not name,
+and a meal block carries the restaurant's name. `get_ride`'s `park_closed` has him say when the park
+opens next. Reply chips offer likely real answers ("Saturday", "Europa-Park"), never one that only
+announces typing ("I know the date"), which the prompt's own example had invited. The checklist
+gains a line against any word on an earlier answer or a quoted day tip.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -313,7 +322,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 113 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 132 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, the live regions, interview, alerts and favourites snapshots, the day tip, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -355,7 +364,7 @@ with `source: "chat"` and the `kind`, once per answer, at most twice per chat
 
 The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
-`find_restaurants`,
+`find_restaurants`, `get_walking_distance` ([places in a park](#places-in-a-park)),
 `get_ride` (with the ride profile below, and `today`: the ride's own `opensAt` and
 `runsOnWeekdays` from `PlanDayService`), `compare_rides`, `get_ride_forecast` (per hour, from
 `PlanDayService`; on a day a maintenance window shuts the ride, no hours and
@@ -481,6 +490,24 @@ contains `query` (case and accents folded: "eis" finds "Eiscafé"), at most 25 w
 name, `status` only where the restaurant has a live reading of its own (the payload's fallback is
 a guess from the park's status), `cuisine` and `requiresReservation` only when known, `land`, and
 the park's `pageUrl`. A food stop goes into the plan with `plan_add_block`.
+
+### Places in a park
+
+`find_restaurants` and the restaurants card take `near`: a ride, show or restaurant of the same
+park, by id or name (`findPlace` in `tools/assistant-places.ts`: the id, else the exact name with
+case, accents and punctuation folded, else the only name containing it or contained in it; several
+come back to pick from). The list then runs nearest first, at most eight, each with `metres` and
+`walkMinutes`; restaurants without a position come last without either, and the anchor itself is
+left out. The card's rows stay as they are: the walk goes to the model only. `get_walking_distance`
+measures from one place to up to eight others; a name it cannot place comes back with `asked` and
+the reason, so the others still answer.
+
+`metres` is the straight line rounded to 10 m. `walkMinutes` is the day planner's ceiling for a
+transfer's walk (`planner/day-optimizer/leg.ts`): the straight line times `DETOUR_MAX` (1.6) at
+`WALK_PARK_M_PER_MIN` (67 m a minute), at least one. Both use the entities' coordinates as the
+source sent them; 0/0 counts as no position. The case that asked for it: on 26 November a visitor
+wanted the restaurant "under Talocan" at Phantasialand, and `query` found none, since Restaurante
+Cocorico's name says nothing about the ride 20 m away.
 
 Park and ride page URLs reach the model in the chat's language: `localizePageUrls`
 (`tools/assistant-actions.ts`), run on every result in `runAssistantTool`, turns
@@ -994,7 +1021,11 @@ outages), `works` (`closedUntil`, the works period's last closed day, null while
 month), `maintenance` (the park's feed says `REFURBISHMENT` and no curated window runs today:
 `windowKnown: false`; the outage's start is left out, since it is the day's first reading and
 often before the gates opened; `get_park_live`'s maintenance rows lose `since` for the same
-reason) or `unknown`. `works` and `season` also carry `reopensOn`: the first operating day of the
+reason), `park_closed` or `unknown`. `park_closed` replaces `unknown` while the park itself is shut
+at the park's current hour by the day's plan (`parkShutAt`: before `openHour`, after `closeHour`
+unless the day runs past midnight, or a day without opening hours whose status is `CLOSED`), with
+`parkOpensOn`: today before the gates open, else the first operating day from tomorrow. A ride read
+CLOSED at 22:47 had Parky say its return was not known, while the park simply opened at 11:00. `works` and `season` also carry `reopensOn`: the first operating day of the
 park's published calendar (`ParksService.getFirstOperatingDayFrom`, the query behind
 `nextSchedule`) after the last closed day or from the first of the next season month; null when
 the calendar has none yet, absent when nothing says when the closure ends.
@@ -1315,21 +1346,21 @@ session needs its session token and no data key, since the token already says wh
 
 ```jsonc
 {
-  "conversationId": "<uuid>",   // from the chat's `start` event
-  "messageId": "<uuid>",        // the answer's id, from its `done` event
-  "reason": "wrong",            // "wrong" | "inappropriate" | "other"
-  "note": "…",                  // optional, trimmed, at most 500 characters
-  "sessionToken": "s1.…"
+  "conversationId": "<uuid>", // from the chat's `start` event
+  "messageId": "<uuid>", // the answer's id, from its `done` event
+  "reason": "wrong", // "wrong" | "inappropriate" | "other"
+  "note": "…", // optional, trimmed, at most 500 characters
+  "sessionToken": "s1.…",
 }
 ```
 
-| Answer | When | Body |
-| ------ | ---- | ---- |
-| 204 | stored | none |
-| 400 | a field is missing (`sessionToken` too), not a UUID, an unknown `reason`, a `note` over 500 characters, an extra key | `{ statusCode: 400, message: "<which fields>" }` |
-| 401 | the token is not ours, or older than two hours | `{ statusCode: 401, message: "challenge" }` |
-| 404 | the answer is not Parky's (a question), not in that chat, the chat is another session's or is gone | `{ statusCode: 404, message: "No such answer" }` |
-| 429 | more than 5 reports in an hour on this session (`report`, apart from the feedback's 5) | `{ statusCode: 429, message: "Too many requests", retryAfter }` and `Retry-After` |
+| Answer | When                                                                                                                 | Body                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 204    | stored                                                                                                               | none                                                                              |
+| 400    | a field is missing (`sessionToken` too), not a UUID, an unknown `reason`, a `note` over 500 characters, an extra key | `{ statusCode: 400, message: "<which fields>" }`                                  |
+| 401    | the token is not ours, or older than two hours                                                                       | `{ statusCode: 401, message: "challenge" }`                                       |
+| 404    | the answer is not Parky's (a question), not in that chat, the chat is another session's or is gone                   | `{ statusCode: 404, message: "No such answer" }`                                  |
+| 429    | more than 5 reports in an hour on this session (`report`, apart from the feedback's 5)                               | `{ statusCode: 429, message: "Too many requests", retryAfter }` and `Retry-After` |
 
 The report is stored at the answer, in three nullable columns of `assistant_messages`
 (`reportReason`, `reportNote`, `reportedAt`), and the chat gets `reportedAt` so the list finds it.
@@ -1356,12 +1387,12 @@ DELETE /v1/assistant/conversations/<uuid>
 Authorization: Bearer <sessionToken>
 ```
 
-| Answer | When | Body |
-| ------ | ---- | ---- |
-| 204 | no chat with this id belongs to this session (any more) | none |
-| 400 | `:id` is not a UUID | the error envelope |
-| 401 | no `Authorization: Bearer` header, a token that is not ours, or one older than two hours | `{ statusCode: 401, message: "challenge" }` |
-| 429 | more than 60 deletes in an hour on this session (`conversationDelete`) | as above |
+| Answer | When                                                                                     | Body                                        |
+| ------ | ---------------------------------------------------------------------------------------- | ------------------------------------------- |
+| 204    | no chat with this id belongs to this session (any more)                                  | none                                        |
+| 400    | `:id` is not a UUID                                                                      | the error envelope                          |
+| 401    | no `Authorization: Bearer` header, a token that is not ours, or one older than two hours | `{ statusCode: 401, message: "challenge" }` |
+| 429    | more than 60 deletes in an hour on this session (`conversationDelete`)                   | as above                                    |
 
 204 is the answer for a chat just deleted, one deleted before, one that never existed and one that
 is another session's, which is left untouched: the call is idempotent and says nothing about

@@ -29,6 +29,13 @@ import {
 } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import {
+  byWalkFrom,
+  findPlace,
+  isAmbiguousPlace,
+  parkPlaces,
+  walkBetween,
+} from "./assistant-places";
+import {
   BEST_DAYS_WINDOW,
   BestDaysService,
 } from "../../parks/services/best-days.service";
@@ -813,10 +820,11 @@ async function rideDetails(
       (r) => r.attractionId === rideId.toLowerCase(),
     );
     if (plan && planned) ride.today = rideOpeningOf(planned, plan);
+    const clock = formatInTimeZone(new Date(), park.timezone, "HH:mm");
     const performances = performancesOf(
       ride as RidePerformances,
       plan ? plan.context.openHour !== null : null,
-      formatInTimeZone(new Date(), park.timezone, "HH:mm"),
+      clock,
     );
     if (performances) {
       ride.today = {
@@ -830,10 +838,23 @@ async function rideDetails(
     const reopening = performances
       ? null
       : reopeningOf(ride as RideClosure, Number(today.slice(5, 7)));
+    // At night every ride reads closed; "no date known" would then hide that the park opens tomorrow.
+    const shut =
+      reopening?.reason === "unknown" && plan
+        ? parkShutAt(plan.context, Number(clock.slice(0, 2)))
+        : null;
     // A maintenance status's start is the first reading of the day, often before the gates
     // opened, and read back as "observed at 08:15" it sounds like a breakdown.
     if (reopening?.reason === "maintenance") delete ride.outage;
-    if (reopening) {
+    if (shut) {
+      ride.reopening = {
+        reason: "park_closed",
+        parkOpensOn:
+          shut === "not_open_yet"
+            ? today
+            : await firstOpenDay(ctx, park.id, addIsoDays(today, 1)),
+      };
+    } else if (reopening) {
       const from = reopenSearchFrom(reopening, today);
       ride.reopening = {
         ...reopening,
@@ -1582,6 +1603,31 @@ export function reopeningOf(ride: RideClosure, month: number) {
 }
 
 /**
+ * Whether the park is shut at park-local `hour`: not open yet, closed for the night, or closed
+ * the whole day; null while it is open or its hours are unknown. A day that runs past midnight
+ * (`closeHour` below `openHour`) is still open in its small hours.
+ */
+export function parkShutAt(
+  context: {
+    status?: string;
+    openHour: number | null;
+    closeHour: number | null;
+  },
+  hour: number,
+): "not_open_yet" | "closed_for_the_night" | "closed_today" | null {
+  const { openHour, closeHour } = context;
+  if (openHour === null) {
+    return context.status === "CLOSED" ? "closed_today" : null;
+  }
+  if (closeHour === null) return hour < openHour ? "not_open_yet" : null;
+  const wraps = closeHour < openHour;
+  if (wraps && hour <= closeHour) return null;
+  if (hour < openHour) return "not_open_yet";
+  if (!wraps && hour > closeHour) return "closed_for_the_night";
+  return null;
+}
+
+/**
  * The park-local day to look for the park's next opening from: the day after a works period's
  * last closed day, the next day of the park season the ride is bound to, or the first of the next
  * season month (next year when it has come round).
@@ -1723,14 +1769,22 @@ async function showsOf(
  * A park's restaurants as the park page shows them (deduplicated by name, with live status),
  * optionally only those whose name or cuisine holds `query`. Absent facts stay null.
  */
+/**
+ * A park's restaurants as find_restaurants and the restaurants card list them, filtered by
+ * `query`; with `near` (a ride, show or restaurant of the park) nearest first, each with its walk.
+ */
 async function restaurantsOf(
   ctx: AssistantToolContext,
   reference: string,
   query: string | undefined,
+  near?: string,
 ) {
   const found = await resolvePark(mcp(ctx), reference);
   if (isAmbiguous(found)) return found;
   const park = await ctx.get(ParksService).loadParkRelations(found);
+  const places = parkPlaces(park);
+  const anchor = near ? findPlace(places, near, park.name) : null;
+  if (anchor && isAmbiguousPlace(anchor)) return anchor;
   const dto = await ctx
     .get(ParkIntegrationService)
     .buildIntegratedResponse(park, false, false);
@@ -1744,22 +1798,39 @@ async function restaurantsOf(
         foldText(`${r.name} ${r.cuisineType ?? ""}`).includes(needle),
       )
     : all;
+  const row = (r: (typeof all)[number]) => ({
+    id: r.id,
+    name: r.name,
+    // Without a reading of its own the payload guesses from the park's status; that is
+    // no statement about the stand (docs/rules/absent-facts.md).
+    status: r.lastUpdated ? (r.status ?? null) : null,
+    land: lands.get(r.id) ?? null,
+    cuisine: r.cuisineType || null,
+    requiresReservation: r.requiresReservation ?? null,
+  });
+  const byId = new Map(places.map((p) => [p.id, p]));
+  const restaurants = anchor
+    ? byWalkFrom(anchor, matched, (r) => byId.get(r.id)).map(
+        ({ item, walk }) => ({ ...row(item), walk }),
+      )
+    : matched.map((r) => ({ ...row(r), walk: null }));
   return {
     park: park.name,
     parkStatus: dto.status ?? null,
     pageUrl: parkPageUrl(park),
     total: all.length,
-    matched: matched.length,
-    restaurants: matched.map((r) => ({
-      id: r.id,
-      name: r.name,
-      // Without a reading of its own the payload guesses from the park's status; that is
-      // no statement about the stand (docs/rules/absent-facts.md).
-      status: r.lastUpdated ? (r.status ?? null) : null,
-      land: lands.get(r.id) ?? null,
-      cuisine: r.cuisineType || null,
-      requiresReservation: r.requiresReservation ?? null,
-    })),
+    matched: restaurants.length,
+    ...(anchor && {
+      near: {
+        id: anchor.id,
+        name: anchor.name,
+        kind: anchor.kind,
+        ...(anchor.latitude === null && {
+          why: "no position on file for it, so the list is not by distance",
+        }),
+      },
+    }),
+    restaurants,
   };
 }
 
@@ -1800,6 +1871,12 @@ export function showsCard(
 
 /** Most restaurants one answer lists; Phantasialand has 46. */
 const MAX_RESTAURANTS = 25;
+
+/** The nearest few are the answer to "near X"; the far end of the park is not. */
+const MAX_NEAR_RESTAURANTS = 8;
+
+/** A ride, show or restaurant of one park, by its name or id. */
+const placeRef = z.string().trim().min(2).max(100);
 
 /** Lower case without accents, so "eis" finds "Eiscafé" and "creme" finds "Crème". */
 export function foldText(text: string): string {
@@ -2518,30 +2595,89 @@ export const ASSISTANT_TOOLS = [
     description:
       "A park's restaurants, snack bars and food stands, optionally only those whose name or " +
       'cuisine contains query (e.g. "eis", "ice", "pizza"): name, status now where the park ' +
-      "reports it, cuisine and reservation where known, land, and the park's pageUrl. For " +
-      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan, ' +
-      "set_favorite takes its id. No menus, prices or opening hours. show_card kind restaurants " +
-      "returns the same rows: call one, never both.",
+      "reports it, cuisine and reservation where known, land, and the park's pageUrl. With " +
+      "near (a ride, show or restaurant of the park) the nearest first, each with metres and " +
+      'walkMinutes: for "where can we eat near Taron", "the restaurant under Talocan", ' +
+      '"something quick after Black Mamba". For "where can I eat", "every ice-cream stand"; ' +
+      "plan_add_block puts a stop in the plan, set_favorite takes its id. No menus, prices or " +
+      "opening hours. show_card kind restaurants returns the same rows: call one, never both.",
     input: z.object({
       park: parkRef,
       query: z.string().trim().min(2).max(60).optional(),
+      near: placeRef
+        .optional()
+        .describe(
+          'A ride, show or restaurant of the park, by name or id, e.g. "Talocan": nearest first',
+        ),
     }),
-    run: async ({ park: reference, query }, ctx) => {
-      const found = await restaurantsOf(ctx, reference, query);
+    run: async ({ park: reference, query, near }, ctx) => {
+      const found = await restaurantsOf(ctx, reference, query, near);
       if ("ambiguous" in found) return found;
       return {
         ...found,
-        restaurants: found.restaurants.slice(0, MAX_RESTAURANTS).map((r) => ({
-          // The id is what set_favorite takes.
-          id: r.id,
-          name: r.name,
-          status: r.status,
-          ...(r.cuisine && { cuisine: r.cuisine }),
-          ...(r.requiresReservation !== null && {
-            requiresReservation: r.requiresReservation,
-          }),
-          ...(r.land && { land: r.land }),
-        })),
+        restaurants: found.restaurants
+          .slice(0, near ? MAX_NEAR_RESTAURANTS : MAX_RESTAURANTS)
+          .map((r) => ({
+            // The id is what set_favorite takes.
+            id: r.id,
+            name: r.name,
+            status: r.status,
+            ...(r.cuisine && { cuisine: r.cuisine }),
+            ...(r.requiresReservation !== null && {
+              requiresReservation: r.requiresReservation,
+            }),
+            ...(r.land && { land: r.land }),
+            ...(r.walk && r.walk),
+          })),
+      };
+    },
+  }),
+  tool({
+    name: "get_walking_distance",
+    status: "parks",
+    description:
+      "How far apart places inside one park are: from one ride, show or restaurant to up to " +
+      "eight others, each with metres (straight line) and walkMinutes (park pace along the " +
+      'paths, as the day planner reckons it). For "how far is Taron from Black Mamba", "is ' +
+      'Cocorico close to Chiapas", "which of these is nearest". What is nearest to a place: ' +
+      "find_restaurants with near for food; between parks, get_travel_time.",
+    input: z.object({
+      park: parkRef,
+      from: placeRef.describe("A ride, show or restaurant, by name or id"),
+      to: z
+        .array(placeRef)
+        .min(1)
+        .max(8)
+        .describe("Rides, shows or restaurants of the same park"),
+    }),
+    run: async ({ park: reference, from, to }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const park = await ctx.get(ParksService).loadParkRelations(found);
+      const places = parkPlaces(park);
+      const start = findPlace(places, from, park.name);
+      if (isAmbiguousPlace(start)) return start;
+      const distances = to.map((ref) => {
+        let target: ReturnType<typeof findPlace>;
+        try {
+          target = findPlace(places, ref, park.name);
+        } catch (error) {
+          if (!(error instanceof McpToolError)) throw error;
+          return { asked: ref, why: error.message };
+        }
+        if (isAmbiguousPlace(target)) return { asked: ref, ...target };
+        const walk = walkBetween(start, target);
+        return {
+          id: target.id,
+          name: target.name,
+          kind: target.kind,
+          ...(walk ?? { why: "no position on file for one of the two" }),
+        };
+      });
+      return {
+        park: park.name,
+        from: { id: start.id, name: start.name, kind: start.kind },
+        distances,
       };
     },
   }),
@@ -4752,8 +4888,8 @@ export const ASSISTANT_TOOLS = [
       "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
       "a park's shows with their times on a day (kind shows), its restaurants and food " +
-      "stands, optionally matching query (kind restaurants), park.fan's own guides and news " +
-      "with cover and teaser (kind posts: query, or the slugs of posts you already have; with " +
+      "stands, optionally matching query or nearest to a place (kind restaurants, near), " +
+      "park.fan's own guides and news with cover and teaser (kind posts: query, or the slugs of posts you already have; with " +
       "question the result also holds the first post's text, as search_posts does), or " +
       "glossary terms with their definition (kind glossary, query the word), or one of the " +
       "ideas get_trip_plan or change_trip listed in this answer for the trip on screen (kind " +
@@ -4879,10 +5015,16 @@ export const ASSISTANT_TOOLS = [
         .describe(
           'For kind ride, instead of rideId: the ride\'s name, e.g. "Taron", with park',
         ),
+      near: placeRef
+        .optional()
+        .describe(
+          "For kind restaurants: a ride, show or restaurant of the park; the nearest first",
+        ),
     }),
     run: async (
       {
         kind,
+        near,
         park,
         parks,
         rideId,
@@ -4942,30 +5084,32 @@ export const ASSISTANT_TOOLS = [
       }
       if (kind === "restaurants") {
         if (!park) throw new McpToolError("kind restaurants needs park");
-        const found = await restaurantsOf(ctx, park, query);
+        const found = await restaurantsOf(ctx, park, query, near);
         if ("ambiguous" in found) return found;
+        const rows = found.restaurants.slice(
+          0,
+          near ? MAX_NEAR_RESTAURANTS : MAX_RESTAURANT_CARD,
+        );
         const card: AssistantCard = {
           kind: "restaurants",
           park: found.park,
           url: found.pageUrl ? siteOnlyPath(found.pageUrl) : null,
-          // The id is for set_favorite, not part of the card.
-          restaurants: found.restaurants
-            .slice(0, MAX_RESTAURANT_CARD)
-            .map(({ id: _id, ...shown }) => shown),
+          // The id is for set_favorite and the walk for the model, neither part of the card.
+          restaurants: rows.map(({ id: _id, walk: _walk, ...shown }) => shown),
         };
         return new ActionOutcome(
           { type: "card", card },
           {
             shown: `${card.restaurants.length} of ${found.matched} places to eat at ${found.park}`,
+            ...(found.near && { near: found.near }),
             // With their ids, which set_favorite takes.
-            restaurants: found.restaurants
-              .slice(0, MAX_RESTAURANT_CARD)
-              .map(({ id, name, cuisine, land }) => ({
-                id,
-                name,
-                ...(cuisine && { cuisine }),
-                ...(land && { land }),
-              })),
+            restaurants: rows.map(({ id, name, cuisine, land, walk }) => ({
+              id,
+              name,
+              ...(cuisine && { cuisine }),
+              ...(land && { land }),
+              ...(walk && walk),
+            })),
           },
         );
       }

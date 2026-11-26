@@ -1327,6 +1327,157 @@ const PROBE_CASES: EvalCase[] = [
   },
 ];
 
+/** Inside one park: food near a ride, walks between places, a ride shut with its park. */
+const PLACE_CASES: EvalCase[] = [
+  {
+    id: "food-near-ride",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    message: "Wo können wir in der Nähe von Talocan was essen?",
+    want: [
+      {
+        tool: ["find_restaurants", "show_card"],
+        input: { near: "*" },
+      },
+    ],
+  },
+  {
+    // The chat of 26 November: a restaurant named by the ride above it, not by its own name.
+    id: "restaurant-under-ride",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    planner: PLAN,
+    message:
+      "Plan uns am 7. eine Essenspause um 12:30 ein, wir waren letztes Mal im Restaurant unter der Talocan.",
+    want: [
+      { tool: ["find_restaurants", "show_card"], input: { near: "*" } },
+      // The plan holds a lunch at 12:30 already: relabelling it is as right as a new block.
+      { tool: ["plan_add_block", "plan_update_block"] },
+    ],
+    results: {
+      find_restaurants: {
+        park: "Phantasialand",
+        near: { id: "talocan", name: "Talocan", kind: "ride" },
+        restaurants: [
+          {
+            id: "cocorico",
+            name: "Restaurante Cocorico",
+            status: null,
+            metres: 20,
+            walkMinutes: 1,
+          },
+          {
+            id: "cantina",
+            name: "La Cantina Tacana",
+            status: null,
+            metres: 70,
+            walkMinutes: 2,
+          },
+        ],
+      },
+    },
+    answer: [{ must: "Cocorico" }],
+  },
+  {
+    id: "walk-between-rides",
+    locale: "en",
+    pagePath: "/en/parks/europe/germany/bruehl/phantasialand",
+    pageSubject: PHL_SUBJECT,
+    message: "How far is it from Taron to Black Mamba on foot?",
+    want: [{ tool: "get_walking_distance" }],
+  },
+  {
+    // The chat of 24 November: Taron at 22:47, every ride closed with the park.
+    id: "ride-closed-at-night",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/bruehl/phantasialand/taron",
+    pageSubject: `the ride "Taron" (ride id ${TARON_ID}) in ${PHL_SUBJECT}`,
+    now: "2026-11-24 22:47",
+    message: "wann läuft taron wieder?",
+    want: [{ tool: ["get_ride", "show_card"] }],
+    results: {
+      get_ride: {
+        id: TARON_ID,
+        name: "Taron",
+        status: "CLOSED",
+        reopening: { reason: "park_closed", parkOpensOn: "2026-11-25" },
+        worksPeriods: [],
+      },
+      show_card: {
+        id: TARON_ID,
+        name: "Taron",
+        status: "CLOSED",
+        reopening: { reason: "park_closed", parkOpensOn: "2026-11-25" },
+        worksPeriods: [],
+      },
+    },
+    answer: [
+      { must: "morgen|25\\. November|Mittwoch" },
+      { must: "^(?![\\s\\S]*nicht bekannt)" },
+    ],
+  },
+  {
+    // The chat of 25 November: a new lookup moved a ride's best hour, and Parky took his word back.
+    id: "no-word-on-earlier-answer",
+    locale: "en",
+    pagePath:
+      "/en/parks/north-america/united-states/orlando/universal-islands-of-adventure",
+    pageSubject:
+      'the park "Universal Islands of Adventure" in "Orlando, United States" (park id a1594244-0325-46fa-b0ce-2a9ab106f433)',
+    history: [
+      ["user", "How do we make the most of Tuesday, 29 December?"],
+      [
+        "assistant",
+        "Start at rope drop with VelociCoaster, then Jurassic Park. Harry Potter and the Forbidden Journey is quieter in the evening, so save Hogsmeade for later.",
+      ],
+    ],
+    earlierLookups: [["get_park_day"]],
+    message: "what is a good plan to ride all the headliners that day",
+    want: [{ tool: "get_park_day" }],
+    results: {
+      get_park_day: {
+        park: "Universal Islands of Adventure",
+        date: "2026-12-29",
+        hours: { open: "09:00", close: "22:00" },
+        crowdLevel: "high",
+        rides: [
+          {
+            name: "Jurassic World VelociCoaster",
+            shortestAt: "09:00",
+            shortestWait: 65,
+            peakWait: 115,
+          },
+          {
+            name: "Harry Potter and the Forbidden Journey",
+            shortestAt: "09:00",
+            shortestWait: 30,
+            peakWait: 70,
+          },
+          {
+            name: "Hagrid's Magical Creatures Motorbike Adventure",
+            shortestAt: "19:00",
+            shortestWait: 100,
+            peakWait: 135,
+          },
+          {
+            name: "The Incredible Hulk Coaster",
+            shortestAt: "10:00",
+            shortestWait: 35,
+            peakWait: 60,
+          },
+        ],
+      },
+    },
+    answer: [
+      {
+        must: "^(?![\\s\\S]*(I said|said earlier|earlier answer|correction|actually at))",
+      },
+    ],
+  },
+];
+
 export const EVAL_CASES: EvalCase[] = [
   {
     id: "post-express-pass",
@@ -2360,4 +2511,5 @@ export const EVAL_CASES: EvalCase[] = [
   ...REGION_CASES,
   ...CHAT_REVIEW_CASES,
   ...PROBE_CASES,
+  ...PLACE_CASES,
 ];
