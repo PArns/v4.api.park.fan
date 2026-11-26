@@ -4611,7 +4611,7 @@ describe("get_wait_ranking", () => {
     ]);
     expect(json.askedRide).toMatchObject({ rank: 3, ride: "Black Mamba" });
     expect(json.page).toBe(
-      `${getFrontendUrl()}/de/longest-wait-times/europe/germany/2026`,
+      `${getFrontendUrl()}/de/parks/europe/germany/longest-wait-times/2026`,
     );
     expect(json.measuredUntil).toBe("2026-11-25");
   });
