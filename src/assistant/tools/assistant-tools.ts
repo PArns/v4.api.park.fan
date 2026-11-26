@@ -29,10 +29,14 @@ import {
 } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import {
+  type AmbiguousPlace,
   byWalkFrom,
   findPlace,
   isAmbiguousPlace,
+  type ParkPlace,
   parkPlaces,
+  type Spot,
+  userSpot,
   walkBetween,
 } from "./assistant-places";
 import {
@@ -77,6 +81,11 @@ import { Park } from "../../parks/entities/park.entity";
 import { frontendParkPath } from "../../common/utils/frontend-url.util";
 import { Show as ShowEntity } from "../../shows/entities/show.entity";
 import { Restaurant } from "../../restaurants/entities/restaurant.entity";
+import { FacilitiesService } from "../../facilities/facilities.service";
+import {
+  FACILITY_TYPES,
+  OSM_ATTRIBUTION,
+} from "../../facilities/facility.types";
 import { FavoritesService } from "../../favorites/favorites.service";
 import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
@@ -1770,6 +1779,153 @@ async function showsOf(
  * optionally only those whose name or cuisine holds `query`. Absent facts stay null.
  */
 /**
+ * The navigate card: the target's own position and a walking route in Google Maps. The widget
+ * reads the visitor's position itself, after a press, so none of it passes through here.
+ */
+async function navigateCard(
+  ctx: AssistantToolContext,
+  reference: string,
+  to: string,
+) {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const park = await ctx.get(ParksService).loadParkRelations(found);
+  type Target = {
+    name: string;
+    place: Extract<AssistantCard, { kind: "navigate" }>["place"];
+    latitude: number | null;
+    longitude: number | null;
+    url: string | null;
+    credit?: { text: string; url: string };
+  };
+  let target: Target | null = null;
+  const facilities = isCanonicalUuid(to.toLowerCase())
+    ? await ctx
+        .get(FacilitiesService)
+        .publicFor(park.id)
+        .catch(() => null)
+    : null;
+  const facility = facilities?.facilities.find(
+    (f) => f.id === to.toLowerCase(),
+  );
+  if (facility) {
+    target = {
+      name: facility.name ?? facility.type,
+      place: facility.type,
+      latitude: facility.latitude,
+      longitude: facility.longitude,
+      url: null,
+      credit: { text: OSM_ATTRIBUTION.text, url: OSM_ATTRIBUTION.url },
+    };
+  } else {
+    const place = findPlace(parkPlaces(park), to, park.name);
+    if (isAmbiguousPlace(place)) return place;
+    const ride =
+      place.kind === "ride"
+        ? park.attractions?.find((a) => a.id === place.id)
+        : undefined;
+    target = {
+      name: place.name,
+      place: place.kind,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      url: ride
+        ? (() => {
+            const page = attractionPageUrl(park, ride);
+            return page ? siteOnlyPath(page) : null;
+          })()
+        : null,
+    };
+  }
+  if (target.latitude === null || target.longitude === null) {
+    return {
+      name: target.name,
+      navigate: null,
+      why: "no position on file for it",
+    };
+  }
+  const card: AssistantCard = {
+    kind: "navigate",
+    name: target.name,
+    place: target.place,
+    park: park.name,
+    latitude: target.latitude,
+    longitude: target.longitude,
+    mapsUrl: walkingRouteUrl(target.latitude, target.longitude),
+    url: target.url,
+    ...(target.credit && { credit: target.credit }),
+  };
+  const walk = ctx.location
+    ? walkBetween(
+        { latitude: ctx.location.lat, longitude: ctx.location.lng },
+        target,
+      )
+    : null;
+  return new ActionOutcome(
+    { type: "card", card },
+    {
+      shown: `the way to ${target.name}: an arrow from the user's position once they press it, and a walking route in Google Maps`,
+      ...(walk && { fromTheUser: walk }),
+      ...(target.credit && {
+        credit: "Toilets and drinking water: © OpenStreetMap contributors",
+      }),
+    },
+  );
+}
+
+/** Google Maps' walking route to a point, from wherever the phone is. */
+export function walkingRouteUrl(latitude: number, longitude: number): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=walking`;
+}
+
+/** Where a "nearest" list is measured from: a place of the park, the user, or why neither. */
+type Anchor =
+  | { anchor: ParkPlace | (Spot & { id: string; kind: "you"; name: string }) }
+  | AmbiguousPlace
+  | { needsPosition: true; why: string }
+  | { notAtPark: true; why: string };
+
+/**
+ * The anchor of `near` (a ride, show or restaurant of the park) or of `fromMe` (the position the
+ * user shared with this message, never handed to the model), or null for neither.
+ */
+function anchorFor(
+  ctx: AssistantToolContext,
+  park: Park,
+  places: readonly ParkPlace[],
+  near: string | undefined,
+  fromMe: boolean | undefined,
+): Anchor | null {
+  if (near && fromMe) throw new McpToolError("Give near or fromMe, not both");
+  if (near) {
+    const found = findPlace(places, near, park.name);
+    return isAmbiguousPlace(found) ? found : { anchor: found };
+  }
+  if (!fromMe) return null;
+  const me = userSpot(ctx.location, park);
+  return "spot" in me
+    ? { anchor: { ...me.spot, kind: "you", name: "the user" } }
+    : me;
+}
+
+/** The anchor as a result names it; the user's position stays out. */
+function anchorView(
+  anchor: Exclude<Anchor, AmbiguousPlace> & { anchor: unknown },
+) {
+  const a = (anchor as { anchor: ParkPlace | { kind: "you" } }).anchor;
+  if (a.kind === "you") return { fromTheUser: true };
+  const place = a as ParkPlace;
+  return {
+    id: place.id,
+    name: place.name,
+    kind: place.kind,
+    ...(place.latitude === null && {
+      why: "no position on file for it, so the list is not by distance",
+    }),
+  };
+}
+
+/**
  * A park's restaurants as find_restaurants and the restaurants card list them, filtered by
  * `query`; with `near` (a ride, show or restaurant of the park) nearest first, each with its walk.
  */
@@ -1778,13 +1934,15 @@ async function restaurantsOf(
   reference: string,
   query: string | undefined,
   near?: string,
+  fromMe?: boolean,
 ) {
   const found = await resolvePark(mcp(ctx), reference);
   if (isAmbiguous(found)) return found;
   const park = await ctx.get(ParksService).loadParkRelations(found);
   const places = parkPlaces(park);
-  const anchor = near ? findPlace(places, near, park.name) : null;
-  if (anchor && isAmbiguousPlace(anchor)) return anchor;
+  const from = anchorFor(ctx, park, places, near, fromMe);
+  if (from && !("anchor" in from)) return from;
+  const anchor = from?.anchor ?? null;
   const dto = await ctx
     .get(ParkIntegrationService)
     .buildIntegratedResponse(park, false, false);
@@ -1820,16 +1978,7 @@ async function restaurantsOf(
     pageUrl: parkPageUrl(park),
     total: all.length,
     matched: restaurants.length,
-    ...(anchor && {
-      near: {
-        id: anchor.id,
-        name: anchor.name,
-        kind: anchor.kind,
-        ...(anchor.latitude === null && {
-          why: "no position on file for it, so the list is not by distance",
-        }),
-      },
-    }),
+    ...(from && { near: anchorView(from) }),
     restaurants,
   };
 }
@@ -1877,6 +2026,22 @@ const MAX_NEAR_RESTAURANTS = 8;
 
 /** A ride, show or restaurant of one park, by its name or id. */
 const placeRef = z.string().trim().min(2).max(100);
+
+/** What find_nearby lists: the park's own places and the facilities from OpenStreetMap. */
+const NEARBY_KINDS = [
+  "rides",
+  "shows",
+  "restaurants",
+  ...FACILITY_TYPES,
+] as const;
+
+/** Measure from the user's shared position instead of a place. */
+const fromMeFlag = z
+  .boolean()
+  .optional()
+  .describe(
+    "Instead of near: from the position the user shared with this message (inside the park)",
+  );
 
 /** Lower case without accents, so "eis" finds "Eiscafé" and "creme" finds "Crème". */
 export function foldText(text: string): string {
@@ -2609,10 +2774,11 @@ export const ASSISTANT_TOOLS = [
         .describe(
           'A ride, show or restaurant of the park, by name or id, e.g. "Talocan": nearest first',
         ),
+      fromMe: fromMeFlag,
     }),
-    run: async ({ park: reference, query, near }, ctx) => {
-      const found = await restaurantsOf(ctx, reference, query, near);
-      if ("ambiguous" in found) return found;
+    run: async ({ park: reference, query, near, fromMe }, ctx) => {
+      const found = await restaurantsOf(ctx, reference, query, near, fromMe);
+      if (!("restaurants" in found)) return found;
       return {
         ...found,
         restaurants: found.restaurants
@@ -2636,27 +2802,31 @@ export const ASSISTANT_TOOLS = [
     name: "get_walking_distance",
     status: "parks",
     description:
-      "How far apart places inside one park are: from one ride, show or restaurant to up to " +
-      "eight others, each with metres (straight line) and walkMinutes (park pace along the " +
-      'paths, as the day planner reckons it). For "how far is Taron from Black Mamba", "is ' +
-      'Cocorico close to Chiapas", "which of these is nearest". What is nearest to a place: ' +
-      "find_restaurants with near for food; between parks, get_travel_time.",
+      "How far apart places inside one park are: from one ride, show or restaurant, or from " +
+      "the user (fromMe), to up to eight others, each with metres (straight line) and " +
+      "walkMinutes (park pace along the paths, as the day planner reckons it). For " +
+      '"how far is Taron from Black Mamba", "how far am I from Chiapas", "which is closer". ' +
+      "What is around a place or the user: find_nearby; between parks, get_travel_time.",
     input: z.object({
       park: parkRef,
-      from: placeRef.describe("A ride, show or restaurant, by name or id"),
+      from: placeRef
+        .optional()
+        .describe("A ride, show or restaurant, by name or id"),
+      fromMe: fromMeFlag,
       to: z
         .array(placeRef)
         .min(1)
         .max(8)
         .describe("Rides, shows or restaurants of the same park"),
     }),
-    run: async ({ park: reference, from, to }, ctx) => {
+    run: async ({ park: reference, from, fromMe, to }, ctx) => {
+      if (!from === !fromMe) throw new McpToolError("Give from or fromMe");
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
       const park = await ctx.get(ParksService).loadParkRelations(found);
       const places = parkPlaces(park);
-      const start = findPlace(places, from, park.name);
-      if (isAmbiguousPlace(start)) return start;
+      const start = anchorFor(ctx, park, places, from, fromMe);
+      if (!start || !("anchor" in start)) return start;
       const distances = to.map((ref) => {
         let target: ReturnType<typeof findPlace>;
         try {
@@ -2666,7 +2836,7 @@ export const ASSISTANT_TOOLS = [
           return { asked: ref, why: error.message };
         }
         if (isAmbiguousPlace(target)) return { asked: ref, ...target };
-        const walk = walkBetween(start, target);
+        const walk = walkBetween(start.anchor, target);
         return {
           id: target.id,
           name: target.name,
@@ -2674,11 +2844,125 @@ export const ASSISTANT_TOOLS = [
           ...(walk ?? { why: "no position on file for one of the two" }),
         };
       });
-      return {
+      return { park: park.name, from: anchorView(start), distances };
+    },
+  }),
+  tool({
+    name: "find_nearby",
+    status: "parks",
+    description:
+      "What is around a place inside one park, or around the user (fromMe): the nearest rides " +
+      "(status and standby wait now), shows, restaurants, toilets and drinking water, each " +
+      'with metres and walkMinutes. For "what is near Talocan", "the nearest toilet", "where ' +
+      'can I fill my bottle", "a ride close to me with a short wait". Toilets and drinking ' +
+      "water come from OpenStreetMap: name the credit the result gives when you use them. " +
+      "Food with a cuisine or name: find_restaurants with near or fromMe.",
+    input: z.object({
+      park: parkRef,
+      near: placeRef
+        .optional()
+        .describe("A ride, show or restaurant of the park, by name or id"),
+      fromMe: fromMeFlag,
+      kinds: z
+        .array(z.enum(NEARBY_KINDS))
+        .min(1)
+        .optional()
+        .describe("Only these; default all"),
+      limit: z.number().int().min(1).max(5).default(3).describe("Per kind"),
+    }),
+    run: async ({ park: reference, near, fromMe, kinds, limit }, ctx) => {
+      if (!near === !fromMe) throw new McpToolError("Give near or fromMe");
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const park = await ctx.get(ParksService).loadParkRelations(found);
+      const places = parkPlaces(park);
+      const from = anchorFor(ctx, park, places, near, fromMe);
+      if (!from || !("anchor" in from)) return from;
+      const wanted = new Set(kinds ?? NEARBY_KINDS);
+      const nearest = <T extends { id: string }>(
+        items: readonly T[],
+        spot: (item: T) => Spot | undefined,
+      ) =>
+        byWalkFrom(from.anchor, items, spot)
+          .filter((row) => row.walk !== null)
+          .slice(0, limit);
+      const byId = new Map(places.map((p) => [p.id, p]));
+      const result: Record<string, unknown> = {
         park: park.name,
-        from: { id: start.id, name: start.name, kind: start.kind },
-        distances,
+        from: anchorView(from),
       };
+      if (wanted.has("rides") || wanted.has("restaurants")) {
+        const dto = await ctx
+          .get(ParkIntegrationService)
+          .buildIntegratedResponse(park, false, false);
+        if (wanted.has("rides")) {
+          result.rides = nearest(dto.attractions ?? [], (r) =>
+            byId.get(r.id),
+          ).map(({ item, walk }) => ({
+            id: item.id,
+            name: item.name,
+            status: item.effectiveStatus ?? item.status ?? null,
+            waitMinutes:
+              item.queues?.find((q) => q.queueType === "STANDBY")?.waitTime ??
+              null,
+            ...walk,
+          }));
+        }
+        if (wanted.has("restaurants")) {
+          result.restaurants = nearest(dto.restaurants ?? [], (r) =>
+            byId.get(r.id),
+          ).map(({ item, walk }) => ({
+            id: item.id,
+            name: item.name,
+            ...(item.cuisineType && { cuisine: item.cuisineType }),
+            ...walk,
+          }));
+        }
+      }
+      if (wanted.has("shows")) {
+        result.shows = nearest(
+          places.filter((p) => p.kind === "show"),
+          (p) => p,
+        ).map(({ item, walk }) => ({ id: item.id, name: item.name, ...walk }));
+      }
+      if (wanted.has("toilets") || wanted.has("drinking_water")) {
+        const facilities = await ctx
+          .get(FacilitiesService)
+          .publicFor(park.id)
+          .catch(() => null);
+        for (const type of FACILITY_TYPES) {
+          if (!wanted.has(type)) continue;
+          if (!facilities?.available) {
+            result[type] = {
+              notKnown: true,
+              why: "not mapped for this park yet",
+            };
+            continue;
+          }
+          result[type] = nearest(
+            facilities.facilities
+              .filter((f) => f.type === type)
+              .map((f) => ({ ...f, id: f.id })),
+            (f) => f,
+          ).map(({ item, walk }) => ({
+            id: item.id,
+            ...(item.name && { name: item.name }),
+            ...(item.wheelchair && { wheelchair: item.wheelchair }),
+            ...(item.changingTable !== null && {
+              changingTable: item.changingTable,
+            }),
+            ...(item.fee !== null && { fee: item.fee }),
+            ...walk,
+          }));
+        }
+        if (facilities?.available) {
+          result.credit = {
+            say: "Toilets and drinking water: © OpenStreetMap contributors",
+            url: OSM_ATTRIBUTION.url,
+          };
+        }
+      }
+      return result;
     },
   }),
   tool({
@@ -4889,6 +5173,9 @@ export const ASSISTANT_TOOLS = [
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
       "a park's shows with their times on a day (kind shows), its restaurants and food " +
       "stands, optionally matching query or nearest to a place (kind restaurants, near), " +
+      "the way to one place inside the park, as an arrow from the user's position and a " +
+      "walking route in Google Maps (kind navigate, to: a ride, show, restaurant, or a toilet's " +
+      "or drinking water's id from find_nearby), " +
       "park.fan's own guides and news with cover and teaser (kind posts: query, or the slugs of posts you already have; with " +
       "question the result also holds the first post's text, as search_posts does), or " +
       "glossary terms with their definition (kind glossary, query the word), or one of the " +
@@ -4909,10 +5196,16 @@ export const ASSISTANT_TOOLS = [
         "tiles",
         "shows",
         "restaurants",
+        "navigate",
         "posts",
         "glossary",
         "idea",
       ]),
+      to: placeRef
+        .optional()
+        .describe(
+          "For kind navigate: the ride, show or restaurant by name or id, or a toilet's or drinking water's id from find_nearby",
+        ),
       idea: z
         .number()
         .int()
@@ -5020,11 +5313,16 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "For kind restaurants: a ride, show or restaurant of the park; the nearest first",
         ),
+      fromMe: fromMeFlag.describe(
+        "For kind restaurants and navigate: from the position the user shared with this message",
+      ),
     }),
     run: async (
       {
         kind,
+        to,
         near,
+        fromMe,
         park,
         parks,
         rideId,
@@ -5082,10 +5380,15 @@ export const ASSISTANT_TOOLS = [
           },
         );
       }
+      if (kind === "navigate") {
+        if (!park || !to)
+          throw new McpToolError("kind navigate needs park and to");
+        return navigateCard(ctx, park, to);
+      }
       if (kind === "restaurants") {
         if (!park) throw new McpToolError("kind restaurants needs park");
-        const found = await restaurantsOf(ctx, park, query, near);
-        if ("ambiguous" in found) return found;
+        const found = await restaurantsOf(ctx, park, query, near, fromMe);
+        if (!("restaurants" in found)) return found;
         const rows = found.restaurants.slice(
           0,
           near ? MAX_NEAR_RESTAURANTS : MAX_RESTAURANT_CARD,

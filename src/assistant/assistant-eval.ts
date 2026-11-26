@@ -139,6 +139,7 @@ function caseContext(testCase: EvalCase): string {
     liveRegions: testCase.liveRegions ?? null,
     earlierLookups: testCase.earlierLookups,
     dayTip: testCase.dayTip,
+    positionShared: testCase.positionShared,
   });
 }
 

@@ -3,6 +3,7 @@ import {
   byWalkFrom,
   findPlace,
   parkPlaces,
+  userSpot,
   walkBetween,
   type ParkPlace,
 } from "./assistant-places";
@@ -88,5 +89,26 @@ describe("byWalkFrom", () => {
     ];
     const rows = byWalkFrom(anchor, all, (p) => p);
     expect(rows.map((r) => r.item.id)).toEqual(["near", "far", "none"]);
+  });
+});
+
+describe("userSpot", () => {
+  const park = {
+    name: "Phantasialand",
+    latitude: "50.7997",
+    longitude: "6.8812",
+  };
+
+  it("asks for a position the message did not bring", () => {
+    expect(userSpot(null, park)).toMatchObject({ needsPosition: true });
+  });
+
+  it("takes a position at the park and refuses one far away", () => {
+    expect(userSpot({ lat: 50.7994, lng: 6.8812 }, park)).toMatchObject({
+      spot: { id: "me", latitude: 50.7994 },
+    });
+    expect(userSpot({ lat: 50.9, lng: 6.88 }, park)).toMatchObject({
+      notAtPark: true,
+    });
   });
 });

@@ -81,7 +81,8 @@ the interview left out). Without that list Parky found no source for his own fig
 turn and took them back: the QUICK Pass Ultimate's 80 € for F.L.Y. once Taron's 12 € came in, a
 weekend's waits he called given "without looking" after `get_days` (PAR-1392).
 `location` is sent only after the visitor pressed „Standort teilen" in the chat and is rounded to
-two decimals here; it is never stored or logged. `opener` is the greeting the window opened with,
+four decimals here, about ten metres; it is never stored or logged and never reaches the model
+([the user's position](./assistant-tools.md#the-users-position)). `opener` is the greeting the window opened with,
 sent with a chat's first question only: a greeting can name the visitor's next planned day or ask
 how yesterday's went, and a bare „ja" may answer it. One line, at most 300 characters, quoted in
 "This chat" as the page's line (data, not instructions), and only while the chat has no history.
@@ -306,13 +307,17 @@ says the amount as the chance or the other way round, and stormy gusts, a thunde
 warning "can" stop tall rides and outdoor shows, never "will": the park decides.
 Version 67 (PAR-1437) gives Parky the park's map: food near a ride, show or restaurant goes through
 `find_restaurants` or the restaurants card with `near`, the walk between places through
-`get_walking_distance` ([places in a park](#places-in-a-park)), and a place described by what is
+`get_walking_distance` ([places in a park](./assistant-tools.md#places-in-a-park)), and a place described by what is
 around it ("the restaurant under Talocan") is looked for with `near`, never with `query`, which only
 matches names. A walk is said in minutes, never as a direction or a land the result does not name,
 and a meal block carries the restaurant's name. `get_ride`'s `park_closed` has him say when the park
 opens next. Reply chips offer likely real answers ("Saturday", "Europa-Park"), never one that only
 announces typing ("I know the date"), which the prompt's own example had invited. The checklist
-gains a line against any word on an earlier answer or a quoted day tip.
+gains a line against any word on an earlier answer or a quoted day tip. The same version brings toilets,
+drinking water and the user's position: `find_nearby` lists what is around a place or the user,
+`fromMe` measures from the position shared with the message, which Parky asks for with
+`request_location` and a line saying what for, never guessing it, and `show_card` kind `navigate`
+shows the way; an answer that names a toilet or a tap ends with OpenStreetMap's credit.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -362,9 +367,10 @@ with `source: "chat"` and the `kind`, once per answer, at most twice per chat
 (`CHAT_FEEDBACK_PER_CONVERSATION`) and never the same words twice, and draws on the form's limits
 (below). Anything refused stores nothing and tells the model so.
 
-The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
+The tools (`tools/assistant-tools.ts`) are a fixed list; [Parky's tools](./assistant-tools.md) names
+every one with the day it came. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
-`find_restaurants`, `get_walking_distance` ([places in a park](#places-in-a-park)),
+`find_restaurants`, `get_walking_distance` and `find_nearby` ([places in a park](./assistant-tools.md#places-in-a-park)),
 `get_ride` (with the ride profile below, and `today`: the ride's own `opensAt` and
 `runsOnWeekdays` from `PlanDayService`), `compare_rides`, `get_ride_forecast` (per hour, from
 `PlanDayService`; on a day a maintenance window shuts the ride, no hours and
@@ -493,21 +499,8 @@ the park's `pageUrl`. A food stop goes into the plan with `plan_add_block`.
 
 ### Places in a park
 
-`find_restaurants` and the restaurants card take `near`: a ride, show or restaurant of the same
-park, by id or name (`findPlace` in `tools/assistant-places.ts`: the id, else the exact name with
-case, accents and punctuation folded, else the only name containing it or contained in it; several
-come back to pick from). The list then runs nearest first, at most eight, each with `metres` and
-`walkMinutes`; restaurants without a position come last without either, and the anchor itself is
-left out. The card's rows stay as they are: the walk goes to the model only. `get_walking_distance`
-measures from one place to up to eight others; a name it cannot place comes back with `asked` and
-the reason, so the others still answer.
-
-`metres` is the straight line rounded to 10 m. `walkMinutes` is the day planner's ceiling for a
-transfer's walk (`planner/day-optimizer/leg.ts`): the straight line times `DETOUR_MAX` (1.6) at
-`WALK_PARK_M_PER_MIN` (67 m a minute), at least one. Both use the entities' coordinates as the
-source sent them; 0/0 counts as no position. The case that asked for it: on 26 November a visitor
-wanted the restaurant "under Talocan" at Phantasialand, and `query` found none, since Restaurante
-Cocorico's name says nothing about the ride 20 m away.
+Food near a ride, the nearest toilet, the walk between two places, the user's shared position and
+the way there have their page: [Parky's tools](./assistant-tools.md#places-in-a-park).
 
 Park and ride page URLs reach the model in the chat's language: `localizePageUrls`
 (`tools/assistant-actions.ts`), run on every result in `runAssistantTool`, turns

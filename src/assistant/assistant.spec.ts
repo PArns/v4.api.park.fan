@@ -541,6 +541,14 @@ describe("request schemas", () => {
     sessionToken: "s1.1.n.sig",
   };
 
+  it("keeps a shared position to about ten metres, enough inside a park", () => {
+    const parsed = chatRequestSchema.parse({
+      ...chat,
+      location: { lat: 50.79942137, lng: 6.88116004 },
+    });
+    expect(parsed.location).toEqual({ lat: 50.7994, lng: 6.8812 });
+  });
+
   it("keeps the ridden rides' ids, drops anything else and caps the list", () => {
     const id = "66666666-6666-4666-8666-666666666666";
     const parsed = chatRequestSchema.parse({
@@ -868,6 +876,7 @@ describe("assistant tools", () => {
       "find_rides",
       "find_restaurants",
       "get_walking_distance",
+      "find_nearby",
       "get_park_history",
       "get_shows",
       "get_ride",

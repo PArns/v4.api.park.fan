@@ -27,6 +27,8 @@ export interface EvalCase {
   history?: Array<["user" | "assistant", string]>;
   /** The tools behind each earlier answer, as "This chat" lists them. */
   earlierLookups?: string[][];
+  /** The user shared their position with this message. */
+  positionShared?: boolean;
   /** The day tip the chat was opened from, as "This chat" carries it on the first question. */
   dayTip?: { park: string; text: string | null; facts: string };
   message: string;
@@ -1329,6 +1331,88 @@ const PROBE_CASES: EvalCase[] = [
 
 /** Inside one park: food near a ride, walks between places, a ride shut with its park. */
 const PLACE_CASES: EvalCase[] = [
+  {
+    // No position came with the question: Parky asks for it before anything that needs it.
+    id: "toilet-near-me-asks",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    message: "Wo ist die nächste Toilette?",
+    allowBefore: ["find_nearby"],
+    want: [{ tool: "request_location" }],
+    results: {
+      find_nearby: {
+        needsPosition: true,
+        why: "the user shared no position with this message: ask with request_location, or ask where they stand",
+      },
+    },
+  },
+  {
+    id: "toilet-near-me-shared",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    positionShared: true,
+    history: [
+      ["user", "Wo ist die nächste Toilette?"],
+      [
+        "assistant",
+        "Teil mir kurz deinen Standort, dann finde ich die nächste Toilette von dort, wo du gerade stehst.",
+      ],
+    ],
+    earlierLookups: [["request_location"]],
+    message: "Hier ist mein Standort.",
+    want: [{ tool: "find_nearby", input: { fromMe: true } }],
+    results: {
+      find_nearby: {
+        park: "Phantasialand",
+        from: { fromTheUser: true },
+        toilets: [
+          {
+            id: "f1",
+            wheelchair: "yes",
+            changingTable: true,
+            metres: 60,
+            walkMinutes: 2,
+          },
+          { id: "f2", metres: 140, walkMinutes: 4 },
+        ],
+        credit: {
+          say: "Toilets and drinking water: © OpenStreetMap contributors",
+          url: "https://www.openstreetmap.org/copyright",
+        },
+      },
+    },
+    answer: [
+      { must: "OpenStreetMap" },
+      { must: "2 (Geh)?minuten|zwei (Geh)?minuten" },
+    ],
+  },
+  {
+    id: "water-near-ride",
+    locale: "en",
+    pagePath: "/en/parks/europe/germany/bruehl/phantasialand",
+    pageSubject: PHL_SUBJECT,
+    message: "Where can I refill my water bottle near Taron?",
+    want: [{ tool: "find_nearby", input: { near: "*" } }],
+  },
+  {
+    id: "ride-near-me-short-wait",
+    locale: "en",
+    pagePath: "/en/parks/europe/germany/bruehl/phantasialand",
+    pageSubject: PHL_SUBJECT,
+    positionShared: true,
+    message: "Which ride close to me has a short wait right now?",
+    want: [{ tool: "find_nearby", input: { fromMe: true } }],
+  },
+  {
+    id: "navigate-to-ride",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    message: "Zeig mir den Weg zu Taron",
+    want: [{ tool: "show_card", input: { kind: "navigate", to: "*" } }],
+  },
   {
     id: "food-near-ride",
     locale: "de",
