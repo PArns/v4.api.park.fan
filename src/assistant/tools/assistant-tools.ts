@@ -3182,8 +3182,8 @@ export const ASSISTANT_TOOLS = [
         measuredUntil: ranking.meta.dataTo ?? null,
         minMeasuredDays: ranking.meta.minAttractionDays,
         ridesRanked: ranking.meta.totalRanked,
-        // The English segment; the site 308s it to the reader's spelling, as with a glossary link.
-        page: `${getFrontendUrl()}/${ctx.locale}/longest-wait-times/${scope.continentSlug}/${scope.countrySlug}/${rankedYear}`,
+        // Under the country page, with the English segment; the site serves it in every locale.
+        page: `${getFrontendUrl()}/${ctx.locale}/parks/${scope.continentSlug}/${scope.countrySlug}/longest-wait-times/${rankedYear}`,
         rides: ranking.attractions.slice(0, limit ?? 10).map(row),
         ...(ride && {
           askedRide: asked
