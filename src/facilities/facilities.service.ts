@@ -501,6 +501,16 @@ export class FacilitiesService {
     return this.facilities.save(row);
   }
 
+  /** The park of a visible facility, for a caller that holds only the id (Parky's navigate card). */
+  async parkIdOf(facilityId: string): Promise<string | null> {
+    if (!facilitiesEnabled()) return null;
+    const row = await this.facilities.findOne({
+      where: { id: facilityId, hidden: false },
+      select: { id: true, parkId: true },
+    });
+    return row?.parkId ?? null;
+  }
+
   /**
    * What a visitor gets: null while the feature is off (the route is a 404),
    * an empty unavailable answer until the park is approved, else its rows of

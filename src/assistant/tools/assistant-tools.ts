@@ -127,6 +127,7 @@ import {
 import type { PlanDayDto, PlanDayRideDto } from "../../parks/dto/plan-day.dto";
 import { formatInTimeZone } from "date-fns-tz";
 import { unfoldedCloseHour } from "../../common/utils/day-shape.util";
+import type { NearbyRidesDto } from "../../location/dto/nearby-response.dto";
 import { LocationService } from "../../location/location.service";
 import { GeoipService } from "../../geoip/geoip.service";
 import { ASSISTANT_LOCALES, languageName } from "../system-prompt";
@@ -1778,6 +1779,28 @@ async function showsOf(
  * A park's restaurants as the park page shows them (deduplicated by name, with live status),
  * optionally only those whose name or cuisine holds `query`. Absent facts stay null.
  */
+/**
+ * The park of a navigate target when the model left `park` out: a facility's own park, else the
+ * park the visitor stands in. Null when neither says.
+ */
+async function parkOfTarget(
+  ctx: AssistantToolContext,
+  to: string,
+): Promise<string | null> {
+  if (isCanonicalUuid(to.toLowerCase())) {
+    const id = await ctx
+      .get(FacilitiesService)
+      .parkIdOf(to.toLowerCase())
+      .catch(() => null);
+    if (id) return id;
+  }
+  if (!ctx.location) return null;
+  const near = await ctx
+    .get(LocationService)
+    .findNearby(ctx.location.lat, ctx.location.lng, 1000, 1);
+  return near.type === "in_park" ? (near.data as NearbyRidesDto).park.id : null;
+}
+
 /**
  * The navigate card: the target's own position and a walking route in Google Maps. The widget
  * reads the visitor's position itself, after a press, so none of it passes through here.
@@ -5204,7 +5227,7 @@ export const ASSISTANT_TOOLS = [
       to: placeRef
         .optional()
         .describe(
-          "For kind navigate: the ride, show or restaurant by name or id, or a toilet's or drinking water's id from find_nearby",
+          "For kind navigate: the ride, show or restaurant by name or id, or a toilet's or drinking water's id from find_nearby; give park too (a toilet's or water's park follows from its id)",
         ),
       idea: z
         .number()
@@ -5268,7 +5291,7 @@ export const ASSISTANT_TOOLS = [
       park: parkRef
         .optional()
         .describe(
-          "For kind park, ride (with a ride's name), rides, calendar, tiles, shows or restaurants: the park's name, slug or id",
+          "For kind park, ride (with a ride's name), rides, calendar, tiles, shows, restaurants or navigate: the park's name, slug or id",
         ),
       order: z
         .enum(["longest", "shortest"])
@@ -5381,9 +5404,14 @@ export const ASSISTANT_TOOLS = [
         );
       }
       if (kind === "navigate") {
-        if (!park || !to)
-          throw new McpToolError("kind navigate needs park and to");
-        return navigateCard(ctx, park, to);
+        if (!to) throw new McpToolError("kind navigate needs to");
+        const parkOfIt = park ?? (await parkOfTarget(ctx, to));
+        if (!parkOfIt) {
+          throw new McpToolError(
+            "kind navigate needs park: the park of to, as in the find_nearby call that found it",
+          );
+        }
+        return navigateCard(ctx, parkOfIt, to);
       }
       if (kind === "restaurants") {
         if (!park) throw new McpToolError("kind restaurants needs park");

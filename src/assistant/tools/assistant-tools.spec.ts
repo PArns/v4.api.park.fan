@@ -4,6 +4,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { FacilitiesService } from "../../facilities/facilities.service";
+import { LocationService } from "../../location/location.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
@@ -3524,6 +3525,18 @@ describe("places around the user and the way there", () => {
             available,
             facilities: available ? [toilet] : [],
           })),
+          parkIdOf: jest.fn(async (id: string) =>
+            id === toilet.id ? PARK_ID : null,
+          ),
+        },
+      ],
+      [
+        LocationService,
+        {
+          findNearby: jest.fn(async () => ({
+            type: "in_park",
+            data: { park: { id: PARK_ID } },
+          })),
         },
       ],
     ]);
@@ -3622,6 +3635,46 @@ describe("places around the user and the way there", () => {
         credit: { text: "© OpenStreetMap contributors" },
       },
     });
+  });
+
+  it("finds the park of a toilet from its id when park is left out (the production failure)", async () => {
+    const loo = await run(
+      "show_card",
+      { kind: "navigate", to: toilet.id, fromMe: true },
+      providers(),
+      "de",
+      { location: atTalocan },
+    );
+    expect(loo.action).toMatchObject({
+      card: { place: "toilets", park: expect.any(String) },
+    });
+  });
+
+  it("takes the park the visitor stands in for a ride, show or restaurant without park", async () => {
+    for (const [to, place] of [
+      ["taron", "ride"],
+      ["Restaurante Cocorico", "restaurant"],
+    ] as const) {
+      const out = await run(
+        "show_card",
+        { kind: "navigate", to, fromMe: true },
+        providers(),
+        "de",
+        { location: atTalocan },
+      );
+      expect(out.action).toMatchObject({ card: { place } });
+    }
+  });
+
+  it("names what is missing when neither park nor position says where", async () => {
+    const onError = jest.fn();
+    const out = await runAssistantTool(
+      "show_card",
+      { kind: "navigate", to: "taron" },
+      context(providers()),
+      onError,
+    );
+    expect(out.content).toContain("kind navigate needs park");
   });
 });
 
