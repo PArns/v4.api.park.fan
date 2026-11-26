@@ -30,6 +30,7 @@ import { TripRegionsModule } from "./trip-regions/trip-regions.module";
 import { PlannerModule } from "./planner/planner.module";
 import { AssistantModule } from "./assistant/assistant.module";
 import { PushModule } from "./push/push.module";
+import { AppConfigModule } from "./app-config/app-config.module";
 import { RideAlertsModule } from "./ride-alerts/ride-alerts.module";
 import { ShowFollowsModule } from "./show-follows/show-follows.module";
 import { AdminModule } from "./admin/admin.module";
@@ -119,6 +120,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     PlannerModule,
     AssistantModule,
     PushModule,
+    AppConfigModule,
     RideAlertsModule,
     ShowFollowsModule,
 

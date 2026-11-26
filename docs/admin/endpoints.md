@@ -218,3 +218,13 @@ must be set on the API, as for Parky's key.
 
 Neither touches Cloudflare or the frontend's cache ([publish outside-in](../rules/publish-outside-in.md));
 when to flush after a logic change: [data recalculation](../analytics/data-recalculation.md).
+
+## App version (`admin/app-config`)
+
+The minimum app version per platform (`ios`, `android`), set by owners in "App-Version"; reading for
+every account. Contract and validation: [app start check](../frontend/app-config.md).
+
+| Method | Path                   | Role   | Does                                                                          |
+| ------ | ---------------------- | ------ | ----------------------------------------------------------------------------- |
+| GET    | `app-config`           | viewer | both platforms' values and a `samples` echo (`?version=&build=`)              |
+| PUT    | `app-config/:platform` | owner  | `{ minVersion, minBuild, updateUrl, message }`, `null` clears; `400` names it |

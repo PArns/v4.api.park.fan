@@ -42,6 +42,7 @@ page for the field or endpoint you are reading or changing.
 | [assistant](./assistant.md)                                       | `/v1/assistant/*`: Parky's chat, tools, limits, the sealed Claude key, site feedback                                     |
 | [assistant-tools](./assistant-tools.md)                           | every tool Parky can call, what it answers and when it came; places in a park, the user's position, the way there        |
 | [push](./push.md)                                                 | `/v1/push*`: subscriptions, topics, ride alerts, followed shows, quiet hours                                             |
+| [app-config](./app-config.md)                                     | `/v1/app/config`: the iOS app's minimum version, update link and messages                                                |
 | [favorites](./favorites.md)                                       | `/v1/favorites`: favourites with full entities and distances                                                             |
 | [discovery](./discovery.md)                                       | `/v1/discovery/*`: geo tree, continents, countries, `nearby`                                                             |
 | [search](./search.md)                                             | `/v1/search`: the response a client renders                                                                              |
