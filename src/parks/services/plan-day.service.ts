@@ -95,6 +95,10 @@ import {
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
 import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
+import {
+  dayTooColdToGetWet,
+  wetInTheCold,
+} from "../utils/wet-ride-weather.util";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
@@ -674,7 +678,17 @@ export class PlanDayService {
       shadow,
     );
     base.tier = built.tier;
-    base.rides = built.rides;
+    // A wet ride on a day too cold for it is no tip, the same rule the live
+    // payloads apply to the park's reading now (PAR-1420, PAR-1447). The
+    // climate normal counts here: a December average of 0-6 °C says as much
+    // about getting soaked as a forecast does, and nothing on the curves moves.
+    const cold = dayTooColdToGetWet(
+      theDay?.weather as { tempMax?: number | null } | null | undefined,
+    );
+    base.rides = built.rides.map((ride) => ({
+      ...ride,
+      ...wetInTheCold(ride.mayGetWet, cold),
+    }));
     base.accuracy = built.accuracy;
     if (built.climatology) {
       base.climatology = built.climatology;
@@ -894,6 +908,9 @@ export class PlanDayService {
    * hour later on Saturdays. A weekday-blind projection would either drop the
    * extra performance or promise it on a Tuesday.
    *
+   * A third guard needs no curation: a show the park's other shows outlived on
+   * that weekday by a week or more has ended, whatever the seasons say.
+   *
    * Two guards keep a projection from becoming a claim: a show has to have been
    * seen on that weekday more than once ({@link MIN_PATTERN_DAYS}), and recently
    * ({@link MAX_PATTERN_AGE_DAYS}). Both come from a real case in the data — a
@@ -934,6 +951,22 @@ export class PlanDayService {
       this.programmeSeasons(park, today, dateStr),
     ]);
 
+    // The latest same weekday any of the park's shows was seen on. A show
+    // whose own last day is a week or more before it was dropped while the
+    // park went on running shows on that weekday: Europa-Park's Halloween
+    // parade, last seen on 2026-11-06, was still projected onto Fridays three
+    // weeks later because the park has no curated Halloween season for the
+    // guard below to read (PAR-1448).
+    let latestShowDay: string | null = null;
+    for (const pattern of patterns.values()) {
+      if (
+        pattern.times.length > 0 &&
+        (latestShowDay === null || pattern.lastObservedOn > latestShowDay)
+      ) {
+        latestShowDay = pattern.lastObservedOn;
+      }
+    }
+
     const out: PlanDayShowDto[] = [];
     for (const show of shows) {
       const known = scheduled.get(show.id);
@@ -966,6 +999,12 @@ export class PlanDayService {
       if (
         PlanDayService.programmeOn(seasons, pattern.lastObservedOn) !==
         PlanDayService.programmeOn(seasons, dateStr)
+      ) {
+        continue;
+      }
+      if (
+        latestShowDay !== null &&
+        isoDaysBetween(pattern.lastObservedOn, latestShowDay) >= 7
       ) {
         continue;
       }

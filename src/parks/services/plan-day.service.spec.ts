@@ -708,6 +708,62 @@ describe("PlanDayService", () => {
       ).toBe(false);
     });
 
+    // A wet ride on a cold day is no tip, on a planned day as on the live
+    // payloads (PAR-1447): on 2026-11-26 Parky put three water rides into a
+    // Europa-Park day at 0 °C, because the flag only ever read the weather now.
+    describe("too cold to get wet", () => {
+      const withWeather = (tempMax: number | undefined) => {
+        calendarDay = {
+          ...calendarDay!,
+          weather:
+            tempMax === undefined
+              ? undefined
+              : ({
+                  condition: "fog",
+                  icon: 45,
+                  tempMin: tempMax - 5,
+                  tempMax,
+                  rainChance: 0,
+                  basis: "forecast",
+                } as never),
+        };
+      };
+      const coldPlanFor = async (
+        attraction: Partial<Attraction>,
+        tempMax: number | undefined,
+      ) => {
+        const date = farDate();
+        withWeather(tempMax);
+        const original = calendarDay;
+        // planFor rebuilds the day from calendarDay, so the weather rides along.
+        const ride = await planFor(attraction, date);
+        calendarDay = original;
+        return ride;
+      };
+
+      it("marks a wet ride on a day whose warmest hour stays below 15 °C", async () => {
+        expect(
+          (await coldPlanFor({ mayGetWet: true }, 6))?.tooColdToGetWet,
+        ).toBe(true);
+      });
+
+      it("leaves a wet ride alone on a warm day, at the line too", async () => {
+        const ride = await coldPlanFor({ mayGetWet: true }, 15);
+        expect("tooColdToGetWet" in (ride as object)).toBe(false);
+      });
+
+      it("never marks a dry or unknown ride, nor a day without a range", async () => {
+        for (const [attraction, tempMax] of [
+          [{ mayGetWet: false }, 2],
+          [{}, 2],
+          [{ mayGetWet: true }, undefined],
+        ] as const) {
+          const ride = await coldPlanFor(attraction, tempMax);
+          expect("tooColdToGetWet" in (ride as object)).toBe(false);
+        }
+      });
+    });
+
     it("omits both where the row knows neither, rather than answering false", async () => {
       // The case that made this ticket: upstream fills the wet flag for a few
       // dozen of ~7000 attractions. A `false` here would tell a family that
@@ -2097,6 +2153,46 @@ describe("PlanDayService", () => {
 
       expect(plan.shows).toHaveLength(1);
       expect(plan.shows[0].source).toBe("projected");
+    });
+
+    it("drops a show the park's other shows outlived on that weekday", async () => {
+      // Europa-Park's Halloween parade, last seen on a Friday three weeks
+      // back, was projected onto every Friday after while the park's other
+      // shows ran on (PAR-1448). No curated season was there to stop it.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      parkShows = [
+        { id: "s-1", slug: "parade", name: "Halloween Parade" },
+        { id: "s-2", slug: "carnival", name: "Carnival" },
+      ];
+      patterns = new Map([
+        ["s-1", pattern({ lastObservedOn: todayMinus(21) })],
+        ["s-2", pattern({ showId: "s-2", lastObservedOn: todayMinus(7) })],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows.map((s) => s.showSlug)).toEqual(["carnival"]);
+    });
+
+    it("keeps a show seen within the week of the park's latest show day", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      parkShows = [
+        { id: "s-1", slug: "parade", name: "Parade" },
+        { id: "s-2", slug: "carnival", name: "Carnival" },
+      ];
+      patterns = new Map([
+        ["s-1", pattern({ lastObservedOn: todayMinus(8) })],
+        ["s-2", pattern({ showId: "s-2", lastObservedOn: todayMinus(7) })],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows.map((s) => s.showSlug).sort()).toEqual([
+        "carnival",
+        "parade",
+      ]);
     });
 
     describe("park seasons", () => {

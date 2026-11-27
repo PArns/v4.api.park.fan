@@ -1367,8 +1367,11 @@ A report lives as long as its chat: 7 days from the chat's start, or until the v
 the chat (below), whichever comes first. Nothing keeps a reported chat longer, because the app's
 consent text promises the 7 days; the admin's list filter is what makes a report findable in that
 time. Builds of the app from before this endpoint send the report as feedback instead
-(`POST feedback` with a message starting `[app-report reason=… message=<messageId>]`); that still
-works and lands in the feedback inbox, which is kept until deleted by hand.
+(`POST feedback` with a message starting `[app-report reason=… message=<messageId>]`, a note
+after it). That still lands in the feedback inbox, which is kept until deleted by hand, and since
+PAR-1449 the feedback endpoint also stores it at the answer through the same checks as this one
+(`appReportIn`), so `reported=true` finds it. Before that, the 2026-11-25 report on chat `82b56235`
+reached only the inbox.
 
 ### `DELETE /v1/assistant/conversations/:id`
 

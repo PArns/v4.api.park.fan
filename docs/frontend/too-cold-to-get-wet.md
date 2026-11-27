@@ -2,7 +2,8 @@
 
 The contract for the key that says a ride is no tip right now because it gets its riders wet and
 the park is cold (PAR-1420). It sits on the rides of the park payload, on the attraction detail
-response and on the rides of the `in_park` answer of [discovery](./discovery.md):
+response, on the rides of the `in_park` answer of [discovery](./discovery.md) and, for a planned
+day, on the rides of [`/plan/day`](./plan-day/rides.md) (PAR-1447):
 
 ```json
 "mayGetWet": true,
@@ -16,6 +17,13 @@ Only when both hold, decided by `wetInTheCold` (`src/parks/utils/wet-ride-weathe
 - the ride's `mayGetWet` is `true`; `null` (unknown) and `false` never get the key;
 - the park feels below **15 °C** now (`WET_RIDE_MIN_FEELS_LIKE_C`): `weather.now.apparentTemperature`
   of the park payload, `weather.now.temperature` where the felt one is missing.
+
+On `/plan/day` the day has no felt temperature, only its range, so the rule reads the day's
+warmest hour: the key is there when the ride's `mayGetWet` is `true` and the day's `tempMax` stays
+below 15 °C (`dayTooColdToGetWet`). Past the forecast's reach the date's historical average
+(`climateNormal`) counts too: a December average of 0-6 °C says as much about getting soaked as a
+forecast does, and no curve moves by it. A past day (`tier: "observed"`) and a day without a range
+mark nothing.
 
 A park without a reading now marks nothing. The attraction detail and the `in_park` answer read the
 reading from the park's cached payload (`park:integrated:<id>`), so a cache miss marks nothing
@@ -31,8 +39,8 @@ showed 5 minutes against a usual 40.
 What reads it:
 
 - **`shortWaits`** of discovery leaves such a ride out, by the same rule (`pickShortWaits`).
-- **Parky** gets it on `get_ride`, on `get_park_live`'s longest waits and on the rows of
-  `show_card` kind rides. The prompt lets him name the ride as a headliner, never as a walk-on, a
+- **Parky** gets it on `get_ride`, on `get_park_live`'s longest waits, on the rows of
+  `show_card` kind rides and, for a planned day, on `get_park_day`'s rides. The prompt lets him name the ride as a headliner, never as a walk-on, a
   short wait, a rope-drop ride or a tip without saying it is too cold to get soaked
   ([assistant](./assistant.md)).
 - **The frontend** leaves it off the compass's headliners, Parky's walk-on stamps and lines, and

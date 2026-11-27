@@ -72,6 +72,7 @@ import {
   weatherView,
 } from "../../parks/utils/weather-summary.util";
 import { PlanDayService } from "../../parks/services/plan-day.service";
+import { WET_RIDE_MIN_FEELS_LIKE_C } from "../../parks/utils/wet-ride-weather.util";
 import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
   addIsoDays,
@@ -3565,7 +3566,9 @@ export const ASSISTANT_TOOLS = [
       "ridesInMaintenance, each with its window. Each ride carries its minimumHeightCm where " +
       "known; with the party's height in the plan, tooShortForParty marks the rides its " +
       "shortest rider may not take and plannedTooShort names those already planned (riderHeightCm " +
-      "for a party the plan does not hold yet). hoursPublished false: the park has not published " +
+      "for a party the plan does not hold yet). tooColdToGetWet marks a ride that gets its riders " +
+      `wet on a day whose warmest hour stays below ${WET_RIDE_MIN_FEELS_LIKE_C} °C. ` +
+      "hoursPublished false: the park has not published " +
       "that day's hours, so status and hours are park.fan's estimate (statusWhy). Today by default.",
     input: z.object({
       park: parkRef,
@@ -3671,6 +3674,7 @@ export const ASSISTANT_TOOLS = [
               minimumHeightCm: ride.minimumHeight,
             }),
             ...(tooShort.has(ride) && { tooShortForParty: true }),
+            ...(ride.tooColdToGetWet && { tooColdToGetWet: true }),
             ...riddenMark(ctx, ride.attractionId),
             ...rideOpeningOf(ride, plan),
             predictedPeakWaitMinutes: ride.dayPeak,
