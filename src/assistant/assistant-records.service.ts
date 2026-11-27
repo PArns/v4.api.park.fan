@@ -8,6 +8,7 @@ import {
 } from "typeorm";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import {
+  ASSISTANT_REPORT_REASONS,
   ASSISTANT_TOOL_ERROR_KINDS,
   AssistantMessage,
   type AssistantReportReason,
@@ -137,6 +138,35 @@ const LIVE_CALLS = `
  * The stored side of Parky: ratings and feedback from visitors, the lists the
  * admin reads, and the retention of chats.
  */
+/**
+ * A report of one answer the app sent through the feedback form, as
+ * `[app-report reason=<reason> message=<answer id>] <note>`, or null for any
+ * other message. The app's report button wrote only this feedback row, so the
+ * answer never carried the report and the admin's reported list missed it
+ * (PAR-1449); the feedback endpoint stores it at the answer as well.
+ */
+export function appReportIn(message: string): {
+  reason: AssistantReportReason;
+  messageId: string;
+  note: string | null;
+} | null {
+  const match =
+    /^\[app-report reason=([a-z_]+) message=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]\s*([\s\S]*)$/i.exec(
+      message.trim(),
+    );
+  if (!match) return null;
+  const reason = match[1].toLowerCase();
+  if (!(ASSISTANT_REPORT_REASONS as readonly string[]).includes(reason)) {
+    return null;
+  }
+  const note = match[3].trim().slice(0, 500);
+  return {
+    reason: reason as AssistantReportReason,
+    messageId: match[2].toLowerCase(),
+    note: note || null,
+  };
+}
+
 @Injectable()
 export class AssistantRecordsService {
   private readonly logger = new Logger(AssistantRecordsService.name);

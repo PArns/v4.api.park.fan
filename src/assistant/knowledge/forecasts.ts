@@ -18,7 +18,7 @@ export const FORECASTS: KnowledgeEntry = {
 So "high now" beside "normal so far" or a moderate forecast is no contradiction: one is the moment, the others the whole day. All three use the same ladder (very low, low, moderate, high, very high, extreme), and moderate is a typical day for that park, not an empty one.
 
 How the forecast is made: Fancast, park.fan's own model.
-- It reads the wait history (one reading per queue every five minutes from more than 200 parks, without a gap since April 2026), weekends, public holidays and school breaks including the neighbouring regions', the weather forecast, events and opening hours.
+- It reads the wait history (one reading per queue every five minutes from every park on park.fan, without a gap since April 2026), weekends, public holidays and school breaks including the neighbouring regions', the weather forecast, events and opening hours.
 - It retrains every day at 06:00 UTC on the day before, and gives an hourly wait forecast per ride and a crowd level per park day.
 - Near days sharpen as the weather forecast and events come in. A day further out than about two months is estimated from last year (the tools' basis says so), not forecast.
 - A park needs about 30 operating days before it is rated at all; until then it reads "no forecast".

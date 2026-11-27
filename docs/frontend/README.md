@@ -66,7 +66,7 @@ page for the field or endpoint you are reading or changing.
 | [data-timestamp](./data-timestamp.md)                             | `dataTimestamp` on a park: when its live data was read                                                                   |
 | [attraction-kind](./attraction-kind.md)                           | `attractionKind`                                                                                                         |
 | [indoor-outdoor](./indoor-outdoor.md)                             | `indoorOutdoor`                                                                                                          |
-| [too-cold-to-get-wet](./too-cold-to-get-wet.md)                   | `tooColdToGetWet`: a ride that gets its riders wet while the park feels below 15 °C                                      |
+| [too-cold-to-get-wet](./too-cold-to-get-wet.md)                   | `tooColdToGetWet`: a ride that gets its riders wet while the park, or a planned day, is below 15 °C                      |
 | [fast-pass](./fast-pass.md)                                       | `fastPass`                                                                                                               |
 | [park-fun-facts](./park-fun-facts.md)                             | `funFacts`: Parky's curated park facts, per locale                                                                       |
 | [ride-glossary-link](./ride-glossary-link.md)                     | `rideProfile` and the glossary → rides lookup                                                                            |

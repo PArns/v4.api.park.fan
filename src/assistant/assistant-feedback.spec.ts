@@ -1,5 +1,6 @@
 import type { Repository } from "typeorm";
 import {
+  appReportIn,
   AssistantRecordsService,
   CHAT_FEEDBACK_PER_CONVERSATION,
 } from "./assistant-records.service";
@@ -233,5 +234,34 @@ describe("AssistantRecordsService, feedback and ratings of another session", () 
       false,
     );
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("appReportIn", () => {
+  const answer = "a8faa645-14dd-43f0-9b2a-f1a5a4e57f52";
+
+  it("reads the app's report line, the one that reached production", () => {
+    expect(appReportIn(`[app-report reason=other message=${answer}]`)).toEqual({
+      reason: "other",
+      messageId: answer,
+      note: null,
+    });
+  });
+
+  it("keeps the visitor's note after the line", () => {
+    expect(
+      appReportIn(`[app-report reason=wrong message=${answer}] Taron is open`),
+    ).toEqual({ reason: "wrong", messageId: answer, note: "Taron is open" });
+  });
+
+  it("reads nothing else as a report", () => {
+    expect(appReportIn("The calendar is wrong for Saturday")).toBeNull();
+    expect(
+      appReportIn(`[app-report reason=spam message=${answer}]`),
+    ).toBeNull();
+    expect(appReportIn("[app-report reason=wrong message=nope]")).toBeNull();
+    expect(
+      appReportIn(`Look: [app-report reason=wrong message=${answer}]`),
+    ).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ export const DATA_SOURCES: KnowledgeEntry = {
     "why some stay empty. Read it when the user asks where the data comes from, why a number " +
     "differs from the park's app or sign, or why a park, ride or rating shows nothing.",
   text: `Where the numbers come from:
-- Wait times: every five minutes for each of more than 200 parks, from up to three public sources. ThemeParks.wiki is the base; Queue-Times.com and Wartezeiten.app add rides it lacks and correct a "closed" that is out of date. For a few parks one of those two is the only source. Every wait ever measured is kept, the quiet Tuesday mornings too.
+- Wait times: every five minutes for every park on park.fan, from up to three public sources. ThemeParks.wiki is the base; Queue-Times.com and Wartezeiten.app add rides it lacks and correct a "closed" that is out of date. For a few parks one of those two is the only source. Every wait ever measured is kept, the quiet Tuesday mornings too.
 - The wait is the one the park posts. park.fan fetches it every five minutes, so a sign that just changed can be a few minutes ahead.
 - Holidays and school breaks: region by region, in Europe from Nager.Date and OpenHolidays, elsewhere from the calendars of authorities and school districts, the neighbouring regions' included, since day guests cross borders.
 - Weather: Open-Meteo for the forecast and a short-term rain forecast in quarter hours; severe weather warnings from DWD and MeteoAlarm.

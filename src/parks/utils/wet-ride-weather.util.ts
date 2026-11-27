@@ -29,6 +29,29 @@ export function tooColdToGetWet(
   return typeof feelsLike === "number" && feelsLike < WET_RIDE_MIN_FEELS_LIKE_C;
 }
 
+/**
+ * Whether a planned day is too cold for a ride that gets its riders wet: its
+ * warmest hour (`tempMax` of the day's forecast, or of the date's historical
+ * average past the forecast's reach) stays below
+ * {@link WET_RIDE_MIN_FEELS_LIKE_C}. A day has no felt temperature, only its
+ * range, so the warmest hour stands in: a day that never gets above the line
+ * is cold all day. Without a range it is not, so a missing reading never marks
+ * a ride (PAR-1447).
+ */
+export function dayTooColdToGetWet(
+  weather: { tempMax?: number | null } | null | undefined,
+): boolean {
+  const warmest = weather?.tempMax;
+  return typeof warmest === "number" && warmest < WET_RIDE_MIN_FEELS_LIKE_C;
+}
+
+/** Swagger's words for `tooColdToGetWet` on a planned day's rides (`/plan/day`). */
+export const DAY_TOO_COLD_TO_GET_WET_DESCRIPTION =
+  "Present and true only while the ride gets its riders wet (`mayGetWet`) and the planned day's " +
+  `warmest hour stays below ${WET_RIDE_MIN_FEELS_LIKE_C} °C (the day's tempMax; past the forecast's ` +
+  "reach, the date's historical average). The ride stays what it is, a headliner included; the " +
+  "key says why it is no tip on that day.";
+
 /** Swagger's words for `tooColdToGetWet`, the same on every payload that carries it. */
 export const TOO_COLD_TO_GET_WET_DESCRIPTION =
   "Present and true only while the ride gets its riders wet (`mayGetWet`) and the park feels " +
