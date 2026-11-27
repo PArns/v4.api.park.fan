@@ -2432,6 +2432,8 @@ const ORLANDO_FACTS = [
   "Universal's 1- and 2-day tickets leave out Epic Universe, 3 days and more include it; Universal's UK 14-day tickets are every day for 14 days; no annual pass includes Epic Universe",
   "Early Entry: Disney resort guests 30 minutes early; Early Park Admission: Universal hotel guests an hour early; Extended Evening Hours: Disney deluxe hotel guests after closing",
   "Universal Premier hotels include Express Unlimited at Universal Studios and Islands of Adventure, not Epic Universe",
+  "Universal's park-to-park tickets hop between Universal Studios and Islands of Adventure only, never Epic Universe",
+  "A Disney party night (a Halloween or Christmas party) is quieter for day guests, but they leave at its early close, usually 18:00, 19:00 at Hollywood Studios",
 ];
 
 async function tripRegion(ctx: AssistantToolContext, slug = ORLANDO.slug) {

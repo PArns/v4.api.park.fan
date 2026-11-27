@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { APP } from "./app";
 import { BEST_TIMES } from "./best-times";
 import { CROWD_SCALE } from "./crowd-scale";
 import { DATA_SOURCES } from "./data-sources";
@@ -21,6 +22,7 @@ export const KNOWLEDGE_SEED: readonly KnowledgeEntry[] = [
   RIDE_STATUS,
   BEST_TIMES,
   PRIVACY,
+  APP,
 ];
 
 /** A topic's name: lowercase words joined by "_", as read_knowledge, the admin and the MCP take it. */

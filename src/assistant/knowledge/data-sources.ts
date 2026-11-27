@@ -9,7 +9,8 @@ export const DATA_SOURCES: KnowledgeEntry = {
   id: "data_sources",
   readWhen:
     "where park.fan's numbers come from (wait-time sources, holidays, weather, opening hours) and " +
-    "why some stay empty. Read it when the user asks where the data comes from, why a number " +
+    "why some stay empty. Read it when the user asks where the data comes from or how park.fan " +
+    "knows what it knows, why a number " +
     "differs from the park's app or sign, or why a park, ride or rating shows nothing.",
   text: `Where the numbers come from:
 - Wait times: every five minutes for every park on park.fan, from up to three public sources. ThemeParks.wiki is the base; Queue-Times.com and Wartezeiten.app add rides it lacks and correct a "closed" that is out of date. For a few parks one of those two is the only source. Every wait ever measured is kept, the quiet Tuesday mornings too.
