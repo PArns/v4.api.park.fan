@@ -2158,7 +2158,8 @@ describe("PlanDayService", () => {
     it("drops a show the park's other shows outlived on that weekday", async () => {
       // Europa-Park's Halloween parade, last seen on a Friday three weeks
       // back, was projected onto every Friday after while the park's other
-      // shows ran on (PAR-1448). No curated season was there to stop it.
+      // shows ran on (PAR-1448). The curated season (HALLOWinter) covered
+      // both days, so the season guard could not stop it.
       const date = farDate();
       calendarDay = { ...calendarDay!, date };
       parkShows = [

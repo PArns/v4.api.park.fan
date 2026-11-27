@@ -954,9 +954,10 @@ export class PlanDayService {
     // The latest same weekday any of the park's shows was seen on. A show
     // whose own last day is a week or more before it was dropped while the
     // park went on running shows on that weekday: Europa-Park's Halloween
-    // parade, last seen on 2026-11-06, was still projected onto Fridays three
-    // weeks later because the park has no curated Halloween season for the
-    // guard below to read (PAR-1448).
+    // parade ran only in HALLOWinter's first week (last seen 2026-11-06), and
+    // the season guard below let it through for the rest of HALLOWinter,
+    // since the day it was seen and the days asked about share that season
+    // (PAR-1448).
     let latestShowDay: string | null = null;
     for (const pattern of patterns.values()) {
       if (
