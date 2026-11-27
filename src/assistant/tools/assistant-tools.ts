@@ -72,6 +72,7 @@ import {
   weatherView,
 } from "../../parks/utils/weather-summary.util";
 import { PlanDayService } from "../../parks/services/plan-day.service";
+import { WET_RIDE_MIN_FEELS_LIKE_C } from "../../parks/utils/wet-ride-weather.util";
 import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
   addIsoDays,
@@ -2431,6 +2432,8 @@ const ORLANDO_FACTS = [
   "Universal's 1- and 2-day tickets leave out Epic Universe, 3 days and more include it; Universal's UK 14-day tickets are every day for 14 days; no annual pass includes Epic Universe",
   "Early Entry: Disney resort guests 30 minutes early; Early Park Admission: Universal hotel guests an hour early; Extended Evening Hours: Disney deluxe hotel guests after closing",
   "Universal Premier hotels include Express Unlimited at Universal Studios and Islands of Adventure, not Epic Universe",
+  "Universal's park-to-park tickets hop between Universal Studios and Islands of Adventure only, never Epic Universe",
+  "A Disney party night (a Halloween or Christmas party) is quieter for day guests, but they leave at its early close, usually 18:00, 19:00 at Hollywood Studios",
 ];
 
 async function tripRegion(ctx: AssistantToolContext, slug = ORLANDO.slug) {
@@ -3565,7 +3568,9 @@ export const ASSISTANT_TOOLS = [
       "ridesInMaintenance, each with its window. Each ride carries its minimumHeightCm where " +
       "known; with the party's height in the plan, tooShortForParty marks the rides its " +
       "shortest rider may not take and plannedTooShort names those already planned (riderHeightCm " +
-      "for a party the plan does not hold yet). hoursPublished false: the park has not published " +
+      "for a party the plan does not hold yet). tooColdToGetWet marks a ride that gets its riders " +
+      `wet on a day whose warmest hour stays below ${WET_RIDE_MIN_FEELS_LIKE_C} °C. ` +
+      "hoursPublished false: the park has not published " +
       "that day's hours, so status and hours are park.fan's estimate (statusWhy). Today by default.",
     input: z.object({
       park: parkRef,
@@ -3671,6 +3676,7 @@ export const ASSISTANT_TOOLS = [
               minimumHeightCm: ride.minimumHeight,
             }),
             ...(tooShort.has(ride) && { tooShortForParty: true }),
+            ...(ride.tooColdToGetWet && { tooColdToGetWet: true }),
             ...riddenMark(ctx, ride.attractionId),
             ...rideOpeningOf(ride, plan),
             predictedPeakWaitMinutes: ride.dayPeak,

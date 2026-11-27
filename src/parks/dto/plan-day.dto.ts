@@ -2,6 +2,7 @@ import { ApiProperty } from "@nestjs/swagger";
 import { LiveWaitTimesDto } from "./live-wait-times.dto";
 import type { PlanDayUnavailableReason } from "../utils/plan-day-availability.util";
 import type { RideOpeningConfidence } from "../../common/types/ride-opening.type";
+import { DAY_TOO_COLD_TO_GET_WET_DESCRIPTION } from "../utils/wet-ride-weather.util";
 
 /**
  * How a number in this response was arrived at. It travels with every curve
@@ -442,6 +443,13 @@ export class PlanDayRideDto {
       "is a real statement and does travel.",
   })
   mayGetWet?: boolean;
+
+  @ApiProperty({
+    required: false,
+    enum: [true],
+    description: DAY_TOO_COLD_TO_GET_WET_DESCRIPTION,
+  })
+  tooColdToGetWet?: true;
 }
 
 export class PlanDayShowDto {

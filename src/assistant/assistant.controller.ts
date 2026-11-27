@@ -30,7 +30,10 @@ import {
   type AssistantPublicConfig,
 } from "./assistant-settings.service";
 import { AssistantChatService, type ChatEvent } from "./assistant-chat.service";
-import { AssistantRecordsService } from "./assistant-records.service";
+import {
+  appReportIn,
+  AssistantRecordsService,
+} from "./assistant-records.service";
 import { AssistantRateLimitService } from "./assistant-rate-limit.service";
 import { junkReason } from "./assistant-junk";
 import {
@@ -379,6 +382,20 @@ export class AssistantController {
       sessionHash: hashRateLimitKey(session),
       source: "form",
     });
+    // The app's report button sends its report as feedback; store it at the
+    // answer too, under report()'s own checks (PAR-1449).
+    const appReport = input.conversationId ? appReportIn(input.message) : null;
+    if (appReport && input.conversationId) {
+      await this.records
+        .report(
+          input.conversationId,
+          appReport.messageId,
+          appReport.reason,
+          appReport.note,
+          hashRateLimitKey(session),
+        )
+        .catch(() => false);
+    }
     return { id };
   }
 
