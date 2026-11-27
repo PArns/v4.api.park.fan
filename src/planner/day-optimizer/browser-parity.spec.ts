@@ -115,6 +115,7 @@ function viewAnswer(view: FitResultView | null) {
     outcome: {
       fitted: view.fitted,
       missed: view.missed,
+      pinnedMissed: view.pinnedMissed,
       endMinute: view.endMinute,
       totalWaitMinutes: view.totalWaitMinutes,
       idleMinutes: view.idleMinutes,

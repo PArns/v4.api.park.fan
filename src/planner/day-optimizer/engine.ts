@@ -174,6 +174,11 @@ export interface FitResultView {
   fitted: string[];
   /** Ticked wishes that find no minute before closing. */
   missed: string[];
+  /**
+   * Of `missed`, the pinned ones (keys of `choice.priority`): no minute before closing even with
+   * every unpinned ride given up first. Added in PAR-1452; empty on every answer without a pin.
+   */
+  pinnedMissed: string[];
   endMinute: number;
   totalWaitMinutes: number;
   idleMinutes: number;
@@ -296,6 +301,7 @@ function fitResult(
     wanted: input.wishes.filter((wish) => !choice.dropped.has(wish.key)).length,
     fitted: outcome.fitted,
     missed: outcome.missed,
+    pinnedMissed: outcome.pinnedMissed,
     endMinute: outcome.endMinute,
     totalWaitMinutes: outcome.totalWaitMinutes,
     idleMinutes: outcome.idleMinutes,
