@@ -415,6 +415,19 @@ export class Attraction {
   attractionKind: AttractionKind | null;
 
   /**
+   * The kind the rule derives from the ride profile's tags, the minimum height
+   * and the name (`attractions/utils/attraction-kind-rule`, PAR-1453), for the
+   * rows nobody judged. Its own column so an editor's verdict and a guess can
+   * never be confused: `detect-seasonal` rewrites every row of it nightly, and
+   * `resolveAttractionKind` serves `attraction_kind` first.
+   *
+   * Not on `ATTRACTION_CURATED_DB_COLUMNS`: a derived value is not a sign
+   * that anybody looked.
+   */
+  @Column({ name: "derived_attraction_kind", type: "text", nullable: true })
+  derivedAttractionKind: AttractionKind | null;
+
+  /**
    * Whether this attraction keeps a visitor dry — `indoor`, `outdoor`, or
    * `covered_queue` (queue under a roof, ride outside). Hand-decided; the
    * values and why no feed can seed them are on the type.

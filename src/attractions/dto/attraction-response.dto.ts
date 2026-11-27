@@ -18,6 +18,7 @@ import {
 import {
   ATTRACTION_KIND_VALUES,
   AttractionKind,
+  AttractionKindSource,
 } from "../../common/types/attraction-kind.type";
 import {
   INDOOR_OUTDOOR_VALUES,
@@ -62,6 +63,7 @@ import {
   type RetiredKind,
 } from "../services/attraction-retirement.service";
 import { TOO_COLD_TO_GET_WET_DESCRIPTION } from "../../parks/utils/wet-ride-weather.util";
+import { resolveAttractionKind } from "../utils/attraction-kind-rule";
 
 /**
  * One weekday/weekend bucket of the typical-waits summary.
@@ -458,10 +460,13 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
-      "What this attraction is for, hand-decided: a ride, a transport " +
-      "system (railway, cable car, monorail), a show or a walkthrough. Null " +
-      "means nobody has judged it — which is true of nearly every " +
-      "attraction — and never 'it is a ride'. Distinct from " +
+      "What this attraction is for: a ride, a transport system (railway, " +
+      "cable car, monorail), a show, a walkthrough, a Halloween maze or a " +
+      "game (midway game, arcade). An editor's verdict where there is one, " +
+      "else the value park.fan derives from the ride's type tags, minimum " +
+      "height and name — `attractionKindSource` says which. Null means " +
+      "neither could tell, never 'it is a ride'. New values may be added: " +
+      "read one you do not know as unknown. Distinct from " +
       "`attractionType`, which is the upstream's own free-text label.",
     enum: ATTRACTION_KIND_VALUES,
     example: "TRANSPORT",
@@ -469,6 +474,18 @@ export class AttractionResponseDto {
     nullable: true,
   })
   attractionKind?: AttractionKind | null;
+
+  @ApiProperty({
+    description:
+      "Who decided `attractionKind`: `curated` (an editor; final) or " +
+      "`derived` (park.fan's rule; recomputed nightly and replaced when the " +
+      "rule improves). Null when `attractionKind` is null.",
+    enum: ["curated", "derived"],
+    example: "derived",
+    required: false,
+    nullable: true,
+  })
+  attractionKindSource?: AttractionKindSource | null;
 
   @ApiProperty({
     description:
@@ -756,7 +773,7 @@ export class AttractionResponseDto {
       maximumHeight: curated.maximumHeight,
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
-      attractionKind: attraction.attractionKind ?? null,
+      ...resolveAttractionKind(attraction),
       indoorOutdoor: attraction.indoorOutdoor ?? null,
       hasVirtualLine: attraction.hasVirtualLine ?? null,
       // Null for nearly every ride, so it is one absent key rather than a

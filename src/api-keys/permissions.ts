@@ -237,6 +237,7 @@ export const PERMISSION_FIELDS: Record<
       "attractions[].mayGetWet",
       "attractions[].hasSingleRider",
       "attractions[].attractionKind",
+      "attractions[].attractionKindSource",
       "attractions[].indoorOutdoor",
       "attractions[].hasVirtualLine",
       "attractions[].fastPass",

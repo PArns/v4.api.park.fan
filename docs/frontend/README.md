@@ -64,7 +64,7 @@ page for the field or endpoint you are reading or changing.
 | [weather-closure](./weather-closure.md)                           | `weatherClosure`: shut by cold or snow, and when the day's curve lets it open                                            |
 | [retired-parks](./retired-parks.md)                               | `retiredAt` on a park                                                                                                    |
 | [data-timestamp](./data-timestamp.md)                             | `dataTimestamp` on a park: when its live data was read                                                                   |
-| [attraction-kind](./attraction-kind.md)                           | `attractionKind`                                                                                                         |
+| [attraction-kind](./attraction-kind.md)                           | `attractionKind`, `attractionKindSource`                                                                                 |
 | [indoor-outdoor](./indoor-outdoor.md)                             | `indoorOutdoor`                                                                                                          |
 | [too-cold-to-get-wet](./too-cold-to-get-wet.md)                   | `tooColdToGetWet`: a ride that gets its riders wet while the park feels below 15 °C                                      |
 | [fast-pass](./fast-pass.md)                                       | `fastPass`                                                                                                               |

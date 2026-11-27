@@ -10,7 +10,8 @@ export const dataQualityTool = defineMcpTool({
     "one park that all fell silent on the same day (a dropped feed or a seasonal closure — a " +
     "human decides), jobs that keep failing, rides retired for absence that nobody gave a season, " +
     "and retired rides with a younger live ride right beside them (possibly re-issued under a new " +
-    "name), and how many mismatches and unreadable surfaces the last display-consistency run " +
+    "name), parks with live rides that carry no kind (neither an editor's nor a derived one), " +
+    "and how many mismatches and unreadable surfaces the last display-consistency run " +
     "found per park (display_consistency has them). Each list is cut to `limit` with its full " +
     "size in `total`.",
   input: {
@@ -37,6 +38,7 @@ export const dataQualityTool = defineMcpTool({
       failingJobs: capped(report.failingJobs, limit),
       absenceRetiredUnreviewed: capped(report.absenceRetiredUnreviewed, limit),
       reissueCandidates: capped(report.reissueCandidates, limit),
+      attractionsWithoutKind: capped(report.attractionsWithoutKind, limit),
       // The last display-consistency run; display_consistency has the details.
       displayConsistency: report.displayConsistency && {
         checkedAt: report.displayConsistency.checkedAt,

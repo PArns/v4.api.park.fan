@@ -36,6 +36,7 @@ describe("DataQualityMonitorService", () => {
         "findFailingJobs",
         "findAbsenceRetiredUnreviewed",
         "findReissueCandidates",
+        "findAttractionsWithoutKind",
       ] as const) {
         jest.spyOn(service, detector).mockResolvedValue([]);
       }
@@ -73,6 +74,31 @@ describe("DataQualityMonitorService", () => {
       expect(
         (await quiet(build(jest.fn())).report(14)).displayConsistency,
       ).toBeNull();
+    });
+  });
+
+  describe("findAttractionsWithoutKind", () => {
+    it("lists live rows with neither an editor's nor a derived kind, per park", async () => {
+      const query = jest.fn().mockResolvedValue([
+        {
+          park_id: "p",
+          park_name: "Magic Kingdom Park",
+          attractions: 38,
+          without_kind: ["Astro Orbiter", "Dumbo the Flying Elephant"],
+        },
+      ]);
+      expect(await build(query).findAttractionsWithoutKind()).toEqual([
+        {
+          parkId: "p",
+          parkName: "Magic Kingdom Park",
+          attractions: 38,
+          withoutKind: ["Astro Orbiter", "Dumbo the Flying Elephant"],
+        },
+      ]);
+      const sql = query.mock.calls[0][0] as string;
+      expect(sql).toContain("a.attraction_kind IS NULL");
+      expect(sql).toContain("a.derived_attraction_kind IS NULL");
+      expect(sql).toContain("a.retired_at IS NULL");
     });
   });
 

@@ -118,6 +118,8 @@ export const getAttractionTool = defineMcpTool({
       ),
       facts: {
         kind: dto.attractionKind ?? null,
+        // "curated" (an editor) or "derived" (the rule; may be wrong).
+        kindSource: dto.attractionKindSource ?? null,
         indoorOutdoor: dto.indoorOutdoor ?? null,
         minimumHeight: dto.minimumHeight ?? null,
         minimumHeightUnit: dto.minimumHeightUnit ?? null,
