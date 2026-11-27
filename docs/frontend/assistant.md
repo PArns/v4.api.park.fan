@@ -757,6 +757,7 @@ case, as for the prompt.
 | `ride_status`  | operating, down, closed, refurbishment, unknown, out of season, set showtimes; a ride opening after the gates; how sure a reopening estimate is                 |
 | `best_times`   | how the best visit times today are chosen (optimal, good, the live slot), when there are none, and the rope-drop rule                                           |
 | `privacy`      | what a chat stores and for how long, what goes to Anthropic, location, feedback, the site's statistic and cookies, as the privacy page says                     |
+| `app`          | whether park.fan has an app (iPhone: on its way to the App Store; Android: none yet) and the home-screen way until then; edited in the admin on the store day   |
 
 The first topic came from the feedback of 15 November 2026: a visitor saw „Andrang jetzt: hoch" on
 Europa-Park's today panel and the day so far as „Normal" in the day dialog, and called the forecast
