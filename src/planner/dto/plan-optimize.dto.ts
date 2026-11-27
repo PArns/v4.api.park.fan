@@ -547,6 +547,14 @@ export class FitResultDto {
   })
   missed: string[];
 
+  @ApiProperty({
+    type: [String],
+    required: false,
+    description:
+      "Of `missed`, the pinned wishes (keys of `choice.priority`): no slot before closing even with every unpinned ride given up first. Empty without a pin; absent from servers before PAR-1452.",
+  })
+  pinnedMissed?: string[];
+
   @ApiProperty()
   endMinute: number;
 

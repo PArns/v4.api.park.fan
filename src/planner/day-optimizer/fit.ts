@@ -89,6 +89,11 @@ export interface FitOutcome {
   fitted: string[];
   /** Ticked wishes that still find no minute before closing. */
   missed: string[];
+  /**
+   * Of `missed`, the pinned ones: the day has no minute for them even with every unpinned ride
+   * given up first. Said out loud, because a pin is the visitor's word that this one stays.
+   */
+  pinnedMissed: string[];
   /** When the last queue that actually happens is left, park-local minutes. */
   endMinute: number;
   totalWaitMinutes: number;
@@ -304,12 +309,17 @@ export function evaluateFit(input: FitInput, choice: FitChoice): FitOutcome {
   );
   const entries = entriesAfter(input, choice);
   const replanned = wishes.filter((wish) => wish.ride);
+  const pins = new Set(choice.priority);
   const optimizeInput = {
     day: input.day,
     grid: input.grid,
     entries,
     add: replanned.map((wish) => wish.ride as PlanDayRide),
     priority: replanned.map((wish) => wish.attractionSlug),
+    pinned: replanned
+      .filter((wish) => pins.has(wish.key))
+      .map((wish) => wish.attractionSlug),
+    seed: wholeListSeed(input, choice),
     clock: input.clock,
     start: input.start,
   };
@@ -339,12 +349,44 @@ export function evaluateFit(input: FitInput, choice: FitChoice): FitOutcome {
   return {
     fitted,
     missed,
+    pinnedMissed: missed.filter((key) => pins.has(key)),
     endMinute: scored?.endMinute ?? input.grid.openMin,
     totalWaitMinutes: scored?.totalWaitMinutes ?? 0,
     idleMinutes: scored?.idleMinutes ?? 0,
     entries,
     stops: plan ? plan.stops : [],
   };
+}
+
+/**
+ * The plan for the same choice with nothing unticked, the unticked rides taken out of it, as a
+ * seed for the search; `undefined` where nothing is unticked. The search alone is not monotone in
+ * its input (a smaller list can come out with fewer rides fitted, or a worse day, than the larger
+ * list's plan minus the rides taken away), and this makes such an answer impossible relative to
+ * the whole list: the assistant opens on that list and every untick is measured against it.
+ * shortcut: only the whole list seeds, not every superset of this choice; chaining seeds would
+ * cost one search per unticked ride.
+ */
+function wholeListSeed(
+  input: FitInput,
+  choice: FitChoice,
+): string[] | undefined {
+  const unticked = input.wishes.filter(
+    (wish) => wish.ride && choice.dropped.has(wish.key),
+  );
+  if (unticked.length === 0) return undefined;
+  const whole = evaluateFit(input, { ...choice, dropped: new Set() });
+  // One stop per unticked lap leaves, whichever lap of that ride it was.
+  const out = unticked.map((wish) => wish.attractionSlug);
+  return whole.stops
+    .filter((stop) => stop.entryId === null)
+    .map((stop) => stop.attractionSlug)
+    .filter((slug) => {
+      const at = out.indexOf(slug);
+      if (at < 0) return true;
+      out.splice(at, 1);
+      return false;
+    });
 }
 
 /**

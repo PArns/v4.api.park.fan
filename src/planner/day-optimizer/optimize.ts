@@ -102,10 +102,12 @@ const OVERFLOW_STRIDE = 32;
 /** Clears the largest possible {@link OverflowCounts.dropWeight}, 24 × 24 = 576. */
 const DROP_WEIGHT_STRIDE = 1024;
 
-/** Overflow as one comparable number — entries, headliners, count, then which. */
+/** Overflow as one comparable number — entries, pinned, headliners, count, then which. */
 function overflowKey(counts: OverflowCounts): number {
   return (
-    ((counts.overflowEntries * OVERFLOW_STRIDE + counts.overflowHeadliners) *
+    (((counts.overflowEntries * OVERFLOW_STRIDE + counts.overflowPinned) *
+      OVERFLOW_STRIDE +
+      counts.overflowHeadliners) *
       OVERFLOW_STRIDE +
       counts.overflow) *
       DROP_WEIGHT_STRIDE +
@@ -119,6 +121,12 @@ interface OverflowCounts {
   overflow: number;
   /** Of those, the ones the visitor already had. */
   overflowEntries: number;
+  /**
+   * Of those, the rides being added that the visitor pinned ({@link OptimizeInput.pinned}): a pin
+   * outranks any number of other added rides, so no count of them can buy one out. Also counted
+   * in `overflowHeadliners`.
+   */
+  overflowPinned: number;
   /** Of those, the headliners being ADDED. Disjoint from `overflowEntries`. */
   overflowHeadliners: number;
   /** The summed {@link Candidate.dropWeight} of what did not fit, ranked last of the four. */
@@ -128,6 +136,7 @@ interface OverflowCounts {
 const NO_OVERFLOW: OverflowCounts = {
   overflow: 0,
   overflowEntries: 0,
+  overflowPinned: 0,
   overflowHeadliners: 0,
   dropWeight: 0,
 };
@@ -139,19 +148,26 @@ const NO_OVERFLOW: OverflowCounts = {
  */
 function overflowTier(
   fits: boolean,
-  candidate: { entryId: string | null; headliner: boolean; dropWeight: number },
+  candidate: {
+    entryId: string | null;
+    headliner: boolean;
+    pinned: boolean;
+    dropWeight: number;
+  },
 ): OverflowCounts {
   if (fits) return NO_OVERFLOW;
   if (candidate.entryId !== null)
     return {
       overflow: 1,
       overflowEntries: 1,
+      overflowPinned: 0,
       overflowHeadliners: 0,
       dropWeight: 0,
     };
   return {
     overflow: 1,
     overflowEntries: 0,
+    overflowPinned: candidate.pinned ? 1 : 0,
     overflowHeadliners: candidate.headliner ? 1 : 0,
     dropWeight: candidate.dropWeight,
   };
@@ -287,6 +303,18 @@ export interface OptimizeInput {
    * See {@link rankHeadliners}.
    */
   priority?: readonly string[];
+  /**
+   * Slugs of {@link add} the visitor pinned: such a ride is given up only where nothing else being
+   * added can make room for it ({@link OverflowCounts.overflowPinned}). A slug named twice pins two
+   * laps, matched to `add` from the front.
+   */
+  pinned?: readonly string[];
+  /**
+   * An order of slugs the search starts from as well, rides it does not name appended: the answer
+   * is never worse under {@link better} than this order as scheduled. The fit assistant passes the
+   * plan for the whole list, so unticking a ride can never make the rest fit worse.
+   */
+  seed?: readonly string[];
   /**
    * Where this day sits against the park's clock. Omitted means `future`, which plans the day as if
    * there were no clock. One value rather than a date plus a minute, so a caller cannot set one and
@@ -481,6 +509,8 @@ interface Candidate {
   floorMin: number;
   /** A curated headliner — see {@link OVERFLOW_STRIDE} for what hangs on it. */
   headliner: boolean;
+  /** Pinned by the visitor, see {@link OptimizeInput.pinned}. Only on a ride being added. */
+  pinned: boolean;
   /**
    * What it costs to leave this one out: non-zero only on a wanted ride being added (see
    * {@link isWanted}), from `1`, the easiest to lose, upwards. See {@link rankHeadliners}.
@@ -936,6 +966,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
           walkMinutes: state.walkMinutes + (placement.fits ? walk : 0),
           overflow: state.overflow + tier.overflow,
           overflowEntries: state.overflowEntries + tier.overflowEntries,
+          overflowPinned: state.overflowPinned + tier.overflowPinned,
           overflowHeadliners:
             state.overflowHeadliners + tier.overflowHeadliners,
           dropWeight: state.dropWeight + tier.dropWeight,
@@ -979,6 +1010,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
     endMinute: best.endMinute || ctx.grid.openMin,
     overflow: best.overflow,
     overflowEntries: best.overflowEntries,
+    overflowPinned: best.overflowPinned,
     overflowHeadliners: best.overflowHeadliners,
     dropWeight: best.dropWeight,
   };
@@ -1081,6 +1113,7 @@ function search(ctx: Context, beamWidth: number): number[] {
             totalWalk: label.totalWalk + (placement.fits ? walk : 0),
             overflow: label.overflow + tier.overflow,
             overflowEntries: label.overflowEntries + tier.overflowEntries,
+            overflowPinned: label.overflowPinned + tier.overflowPinned,
             overflowHeadliners:
               label.overflowHeadliners + tier.overflowHeadliners,
             dropWeight: label.dropWeight + tier.dropWeight,
@@ -1235,6 +1268,15 @@ function buildContext(input: OptimizeInput): Context | null {
     movable.length - movableKept.length + (add.length - addKept.length);
 
   const weights = rankHeadliners(addKept, input.priority);
+  // Laps matched from the front, as `rankHeadliners` matches `priority`.
+  const pinsLeft = new Map<string, number>();
+  for (const slug of input.pinned ?? [])
+    pinsLeft.set(slug, (pinsLeft.get(slug) ?? 0) + 1);
+  const pinned = addKept.map((ride) => {
+    const left = pinsLeft.get(ride.attractionSlug) ?? 0;
+    if (left > 0) pinsLeft.set(ride.attractionSlug, left - 1);
+    return left > 0;
+  });
 
   const candidates: Candidate[] = [
     ...movableKept.map((entry) => {
@@ -1247,6 +1289,7 @@ function buildContext(input: OptimizeInput): Context | null {
         ride,
         floorMin: rideFloor(grid, ride, clock).softMin,
         headliner: Boolean(ride?.isHeadliner),
+        pinned: false,
         // An entry the visitor already had is its own tier and is never
         // dropped, so there is nothing here for a weight to decide.
         dropWeight: 0,
@@ -1260,6 +1303,7 @@ function buildContext(input: OptimizeInput): Context | null {
       ride,
       floorMin: rideFloor(grid, ride, clock).softMin,
       headliner: isWanted(ride, input.priority),
+      pinned: pinned[index],
       dropWeight: weights[index] ?? 0,
       ...tabulate(day, ride.attractionSlug),
     })),
@@ -1313,6 +1357,13 @@ const MAX_PEEL_ROUNDS = 4;
  */
 function peeled(input: OptimizeInput, ctx: Context): Scored {
   let best = scheduleOrder(ctx, improve(ctx, search(ctx, BEAM_WIDTH)));
+  if (input.seed) {
+    // The beam is not monotone in its input, so a smaller list can come out worse than a larger
+    // one's plan with rides taken out; that plan is a candidate here, then improved like the rest.
+    const order = orderIn(ctx, input.seed, true);
+    const seeded = order && scheduleOrder(ctx, improve(ctx, order));
+    if (seeded && better(seeded, best)) best = seeded;
+  }
   const add = input.add ?? [];
   if (best.overflowHeadliners === 0) return best;
 
@@ -1378,17 +1429,29 @@ function peeled(input: OptimizeInput, ctx: Context): Scored {
  * Repeats matter — a ride may legitimately appear twice in one day — so each
  * slug takes the first candidate index not already spoken for.
  */
-function orderIn(ctx: Context, slugs: readonly string[]): number[] | null {
+function orderIn(
+  ctx: Context,
+  slugs: readonly string[],
+  complete = false,
+): number[] | null {
   const used = new Set<number>();
   const order: number[] = [];
   for (const slug of slugs) {
     const index = ctx.candidates.findIndex(
       (c, i) => c.slug === slug && !used.has(i),
     );
-    if (index < 0) return null;
+    if (index < 0) {
+      if (complete) continue;
+      return null;
+    }
     used.add(index);
     order.push(index);
   }
+  // `complete`: what the slugs do not name goes on the end, where an order gives rides up.
+  if (complete)
+    ctx.candidates.forEach((_, i) => {
+      if (!used.has(i)) order.push(i);
+    });
   return order.length === ctx.candidates.length ? order : null;
 }
 
@@ -1663,6 +1726,7 @@ export function scoreCurrent(input: OptimizeInput): Scored | null {
     endMinute,
     overflow,
     overflowEntries: overflow,
+    overflowPinned: 0,
     overflowHeadliners: 0,
     dropWeight: 0,
   };

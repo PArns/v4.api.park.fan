@@ -291,6 +291,7 @@ flagged, sends `preview: true`; without it a day that no longer fits answers `ne
 | `order[]`                                      | wish keys in the order the day is decided in: pinned first, then as offered, a second lap last                                                  |
 | `wanted`                                       | wishes still ticked                                                                                                                             |
 | `fitted[]`, `missed[]`                         | wish keys with and without a slot before closing                                                                                                |
+| `pinnedMissed[]`                               | of `missed`, the pinned wishes: no slot even with every unpinned ride given up first; empty without a pin, absent from servers before PAR-1452  |
 | `endMinute`, `totalWaitMinutes`, `idleMinutes` | the plan for this choice                                                                                                                        |
 | `entries[]`, `stops[]`                         | the entries the day keeps under this choice, and the plan to lay over them                                                                      |
 | `levers[]`, `applied[]`                        | with `levers` (always on `needs-fit`): what each block would buy, best first, and the levers already pulled as `kind:entryId`; `null` otherwise |
@@ -299,6 +300,21 @@ A lever is `{ kind, entryId?, label?, icon?, minutes?, fits, fitsNow, wanted, so
 one of `shorten-block` (to 30 minutes), `drop-block`, `drop-all-blocks`. A lever that buys nothing
 is not offered. This is the one answer that may remove an entry: a wish switched off in `choice`
 is not in `fit.entries`, and only a list that names it put it there.
+
+Two promises the answer keeps (PAR-1452, `fit.monotone.spec.ts`):
+
+- **A pin is kept.** A wish key in `choice.priority` is pinned, and a pinned ride is given up only
+  where no number of unpinned rides being left out makes room for it: its own overflow tier, above
+  the headliners. Before, the order only decided _which_ ride fell out once the count was settled,
+  so a pinned Taron went whenever losing it let one more small ride in. A pin the day has no minute
+  for at all is in `missed` and named again in `pinnedMissed`.
+- **Unticking never makes the rest fit worse** than the whole list's plan with those rides taken
+  out: no fewer rides fitted, and no worse under the engine's order (tiers, then the cost). The
+  search is a beam and not monotone in its input, so a smaller list could come out worse; with
+  anything unticked the engine also plans the whole list (same blocks, same pins) and starts from
+  that order too. It costs one more search per answer with an untick, levers included (a
+  fourteen-ride day with levers: about 150 ms to about 350 ms). The promise is against the whole
+  list, the one the assistant opens on, not against every larger choice in between.
 
 ## Limits and failure
 
@@ -331,6 +347,9 @@ every order of eight rides" after the unit tests, and skips it, saying so, other
 outside the folder that moves what the optimizer sees (the `/plan/day` payload it plans on, a
 scorer weight imported from elsewhere) does not trigger it; run the script by hand then.
 `BENCH=1 pnpm test:planner-exhaustive` adds the timing table.
+
+`fit.monotone.spec.ts` holds the two fit promises above on a real Phantasialand day; its sweep over
+every one or two rides unticked at five clocks runs with `PLANNER_EXHAUSTIVE=1`.
 
 `start.spec.ts` and `plan-optimize.from.spec.ts` hold `from`: the order follows the walk, done and
 started entries stay, the first start is at or after now plus the walk, the answer without `from`
