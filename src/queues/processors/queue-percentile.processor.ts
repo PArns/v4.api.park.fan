@@ -22,6 +22,11 @@ import {
   HOURLY_AGGREGATE_SELECT,
   HOURLY_AGGREGATE_UPSERT,
 } from "./hourly-aggregate.sql";
+import { deriveAttractionKind } from "../../attractions/utils/attraction-kind-rule";
+import {
+  resolveAttractionName,
+  resolveHeight,
+} from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * The evidence half of this detector, and the reason it is a shared string.
@@ -606,6 +611,11 @@ export class QueuePercentileProcessor {
     // the stale reader.
     await this.classifyHalloweenMazes();
 
+    // Step 6: derive a kind for every row (PAR-1453). Nightly beside the maze
+    // rule, the only other writer of a kind; it reads no season, so its place
+    // in the order does not matter.
+    await this.deriveAttractionKinds();
+
     // ── Shows ──────────────────────────────────────────────────────────────
     // Signal: ThemeParks.wiki stops updating `lastUpdated` when a show is no
     // longer running. We use the same thresholds as attractions.
@@ -840,6 +850,72 @@ export class QueuePercentileProcessor {
     );
     this.logger.log(
       `   🎃 Filed ${written[1] ?? 0} attraction(s) as MAZE (${ids.length} selected).`,
+    );
+  }
+
+  /**
+   * Rewrite `derived_attraction_kind` on every row from the rule in
+   * `attractions/utils/attraction-kind-rule`.
+   *
+   * Every row, curated or not: the column is the rule's alone and the editor's
+   * `attraction_kind` is served first, so recomputing everything is what lets
+   * a better rule replace every old guess. Only changed rows are written. The
+   * rule runs in TypeScript over loaded rows, as the maze rule does, so there
+   * is no SQL twin to drift.
+   */
+  async deriveAttractionKinds(): Promise<void> {
+    const rows: Array<{
+      id: string;
+      name: string | null;
+      curatedName: string | null;
+      minimumHeight: number | null;
+      curatedMinimumHeight: number | null;
+      types: string[] | null;
+      isHeadliner: boolean;
+      derived: string | null;
+    }> = await this.dataSource.query(
+      `SELECT a.id,
+              a.name,
+              a.curated_name            AS "curatedName",
+              a.minimum_height          AS "minimumHeight",
+              a.curated_minimum_height  AS "curatedMinimumHeight",
+              rp.types,
+              -- tier3 is "every ride of a small park", not a headliner.
+              EXISTS (SELECT 1 FROM headliner_attractions h
+                       WHERE h."attractionId" = a.id
+                         AND h.tier <> 'tier3') AS "isHeadliner",
+              a.derived_attraction_kind AS derived
+         FROM attractions a
+         LEFT JOIN attraction_ride_profiles rp ON rp."attractionId" = a.id`,
+    );
+
+    const changed: Record<string, string | null> = {};
+    for (const row of rows) {
+      const kind = deriveAttractionKind({
+        name: resolveAttractionName(row),
+        types: Array.isArray(row.types) ? row.types : [],
+        minimumHeight: resolveHeight(
+          row.curatedMinimumHeight,
+          row.minimumHeight,
+        ),
+        isHeadliner: row.isHeadliner,
+      });
+      if (kind !== row.derived) changed[row.id] = kind;
+    }
+    if (Object.keys(changed).length === 0) {
+      this.logger.log("   🏷️ Derived kinds unchanged.");
+      return;
+    }
+
+    await this.dataSource.query(
+      `UPDATE attractions a
+          SET derived_attraction_kind = v.value #>> '{}'
+         FROM jsonb_each($1::jsonb) v
+        WHERE a.id = v.key::uuid`,
+      [JSON.stringify(changed)],
+    );
+    this.logger.log(
+      `   🏷️ Derived kind changed on ${Object.keys(changed).length} of ${rows.length} attraction(s).`,
     );
   }
 

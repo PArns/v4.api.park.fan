@@ -91,6 +91,7 @@ describe("AttractionResponseDto › status on the two builders", () => {
       ).sort(),
     ).toEqual([
       "attractionKind",
+      "attractionKindSource",
       "fastPass",
       "hasSingleRider",
       "hasVirtualLine",

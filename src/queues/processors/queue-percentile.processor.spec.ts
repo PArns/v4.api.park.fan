@@ -578,3 +578,50 @@ describe("QueuePercentileProcessor — classifyHalloweenMazes", () => {
     expect(query.mock.calls[3][1]).toEqual([[august.id]]);
   });
 });
+
+/**
+ * The kind step's wiring (PAR-1453); the rule is tested in
+ * `attractions/utils/attraction-kind-rule.spec.ts`. It writes only the derived
+ * column, and only the rows whose derived value changed.
+ */
+describe("QueuePercentileProcessor — deriveAttractionKinds", () => {
+  const row = {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Taron",
+    curatedName: null,
+    minimumHeight: null,
+    curatedMinimumHeight: null,
+    types: ["launch-coaster"],
+    isHeadliner: true,
+    derived: null,
+  };
+  const run = async (rows: unknown[]) => {
+    const query = jest.fn().mockResolvedValueOnce(rows).mockResolvedValue([]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+    await processor.deriveAttractionKinds();
+    return query;
+  };
+
+  it("writes the changed rows, including a value that went away", async () => {
+    const query = await run([
+      row,
+      { ...row, id: "same", derived: "RIDE" },
+      { ...row, id: "gone", types: [], isHeadliner: false, derived: "SHOW" },
+    ]);
+    expect(query).toHaveBeenCalledTimes(2);
+    const [sql, params] = query.mock.calls[1];
+    expect(sql).toContain("SET derived_attraction_kind");
+    expect(sql).not.toMatch(/SET attraction_kind/);
+    expect(JSON.parse(params[0])).toEqual({ [row.id]: "RIDE", gone: null });
+  });
+
+  it("writes nothing when every derived value stands", async () => {
+    const query = await run([{ ...row, derived: "RIDE" }]);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});

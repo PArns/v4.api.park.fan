@@ -107,6 +107,21 @@ export interface AbsenceRetiredUnreviewed {
 }
 
 /**
+ * Live attractions per park that carry no kind at all: no editor's
+ * `attraction_kind` and nothing the rule could derive (PAR-1453). A ride
+ * profile with its type tags, a minimum height or a kind typed in the admin
+ * takes a row off the list.
+ */
+export interface AttractionsWithoutKind {
+  parkId: string;
+  parkName: string;
+  /** Live attractions of the park. */
+  attractions: number;
+  /** Resolved names of the ones without a kind, by name. */
+  withoutKind: string[];
+}
+
+/**
  * A blind park's OPERATING schedule days that `parkOpenWindowCtes()` drops: no
  * opening or closing time, or a close at or before the opening after repair
  * (PAR-1094).
@@ -299,12 +314,14 @@ export class DataQualityMonitorService {
       failingJobs,
       absenceRetiredUnreviewed,
       reissueCandidates,
+      attractionsWithoutKind,
       displayConsistency,
     ] = await Promise.all([
       this.findSilencedClusters(windowDays),
       this.findFailingJobs(),
       this.findAbsenceRetiredUnreviewed(),
       this.findReissueCandidates(),
+      this.findAttractionsWithoutKind(),
       Promise.resolve()
         .then(() => this.displayConsistency?.latestSummary() ?? null)
         .catch(() => null),
@@ -315,8 +332,47 @@ export class DataQualityMonitorService {
       failingJobs,
       absenceRetiredUnreviewed,
       reissueCandidates,
+      attractionsWithoutKind,
       displayConsistency,
     };
+  }
+
+  /**
+   * Parks with live attractions that neither an editor nor the kind rule has
+   * filed, most first. Retired rows are left out: nobody reads their kind.
+   * A park whose every row has a kind is not listed.
+   */
+  async findAttractionsWithoutKind(): Promise<AttractionsWithoutKind[]> {
+    const rows: Array<{
+      park_id: string;
+      park_name: string;
+      attractions: number;
+      without_kind: string[];
+    }> = await this.dataSource.query(`
+      SELECT p.id AS park_id,
+             p.name AS park_name,
+             count(*)::int AS attractions,
+             array_agg(COALESCE(NULLIF(btrim(a.curated_name), ''), a.name)
+                       ORDER BY COALESCE(NULLIF(btrim(a.curated_name), ''), a.name))
+               FILTER (WHERE a.attraction_kind IS NULL
+                         AND a.derived_attraction_kind IS NULL) AS without_kind
+        FROM attractions a
+        JOIN parks p ON p.id = a."parkId"
+       WHERE a.retired_at IS NULL
+         AND p.retired_at IS NULL
+       GROUP BY p.id, p.name
+      HAVING count(*) FILTER (WHERE a.attraction_kind IS NULL
+                                AND a.derived_attraction_kind IS NULL) > 0
+       ORDER BY count(*) FILTER (WHERE a.attraction_kind IS NULL
+                                   AND a.derived_attraction_kind IS NULL) DESC,
+                p.name
+    `);
+    return rows.map((r) => ({
+      parkId: r.park_id,
+      parkName: r.park_name,
+      attractions: r.attractions,
+      withoutKind: r.without_kind,
+    }));
   }
 
   /**

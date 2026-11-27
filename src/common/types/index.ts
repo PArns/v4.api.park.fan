@@ -12,7 +12,10 @@ export {
 export type { TrendDirection } from "./trend.type";
 export type { ComparisonStatus } from "./comparison-status.type";
 export type { ParkStatus, AttractionStatus } from "./status.type";
-export type { AttractionKind } from "./attraction-kind.type";
+export type {
+  AttractionKind,
+  AttractionKindSource,
+} from "./attraction-kind.type";
 export { ATTRACTION_KIND_VALUES } from "./attraction-kind.type";
 export type { IndoorOutdoor } from "./indoor-outdoor.type";
 export { INDOOR_OUTDOOR_VALUES } from "./indoor-outdoor.type";

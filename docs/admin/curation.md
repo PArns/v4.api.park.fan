@@ -39,8 +39,10 @@ older single window `curated_out_of_service_from` / `_to` / `_to_uncertain`
 ([ride ↔ glossary](../frontend/ride-glossary-link.md)).
 
 `attraction_kind` sits beside `attraction_type` without correcting it: the feed's free text (one value
-across ~7,400 rows) against a closed set we decide (`RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`, `MAZE`).
-The one job allowed to write it, into a blank only, is the [maze rule](../architecture/attraction-status/maze-rule.md).
+across ~7,400 rows) against a closed set we decide (`RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`, `MAZE`,
+`GAME`). The one job allowed to write it, into a blank only, is the [maze rule](../architecture/attraction-status/maze-rule.md).
+Beside it, `derived_attraction_kind` is the rule's guess for every row, rewritten nightly and never
+counted as curated; the API serves the editor's value first ([attraction kind](../frontend/attraction-kind.md#derived-where-nobody-decided)).
 
 **`has_virtual_line`** means "this ride works by return time or boarding group at all", which the `queues`
 array cannot say (a virtual line handing out nothing right now publishes no queue, so Efteling's Danse

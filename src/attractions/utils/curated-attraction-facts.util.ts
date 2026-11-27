@@ -99,7 +99,7 @@ export interface ResolvedCuratedFacts {
  * while the park's own Nutzungsbedingungen say children under 1.00 m may play
  * *when accompanied*, which is no minimum at all.
  */
-function resolveHeight(
+export function resolveHeight(
   curated: number | null | undefined,
   synced: number | null | undefined,
 ): number | null {
