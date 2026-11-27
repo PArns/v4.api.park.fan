@@ -13,6 +13,13 @@ export class AttractionWithDistanceDto extends AttractionResponseDto {
     nullable: true,
   })
   distance?: number | null;
+
+  @ApiProperty({
+    description:
+      "Whether this is a headliner (top) attraction for its park, as on the park payload",
+    required: false,
+  })
+  isHeadliner?: boolean;
 }
 
 /**

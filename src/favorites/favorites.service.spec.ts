@@ -16,6 +16,8 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { MLService } from "../ml/ml.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { AttractionOutageService } from "../attractions/services/attraction-outage.service";
+import { WeatherClosureService } from "../parks/services/weather-closure.service";
 
 /**
  * Coverage for FavoritesService — the user-supplied-IDs endpoint that
@@ -71,9 +73,18 @@ describe("FavoritesService", () => {
     getRatableParkIds: jest
       .fn()
       .mockImplementation((ids: string[]) => Promise.resolve(new Set(ids))),
+    getHeadlinerAttractionIds: jest.fn().mockResolvedValue(new Set()),
   };
   const mlService = {
     getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),
+    getBatchStoredPredictions: jest.fn().mockResolvedValue(new Map()),
+  };
+  const attractionOutageService = {
+    getCurrentOutages: jest.fn().mockResolvedValue(new Map()),
+    getNotRunToday: jest.fn().mockResolvedValue(new Map()),
+  };
+  const weatherClosureService = {
+    getVerdicts: jest.fn().mockResolvedValue(new Map()),
   };
   const popularityService = {
     recordParkHit: jest.fn().mockResolvedValue(undefined),
@@ -121,6 +132,11 @@ describe("FavoritesService", () => {
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: PopularityService, useValue: popularityService },
         { provide: MLService, useValue: mlService },
+        {
+          provide: AttractionOutageService,
+          useValue: attractionOutageService,
+        },
+        { provide: WeatherClosureService, useValue: weatherClosureService },
         { provide: REDIS_CLIENT, useValue: redis },
       ],
     }).compile();
@@ -399,6 +415,201 @@ describe("FavoritesService", () => {
 
       // Stripping it left the card with only the raw (park-blind) status.
       expect(result.attractions[0].effectiveStatus).toBe("CLOSED");
+    });
+  });
+
+  // The park page's card reads the crown, the best time and why a ride is shut;
+  // the favourites carry the same fields from the same services.
+  describe("Park-card fields", () => {
+    const rideId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const ride = {
+      id: rideId,
+      name: "Fēnix",
+      slug: "fenix",
+      parkId: validParkUuid,
+      latitude: null,
+      longitude: null,
+      park: {
+        id: validParkUuid,
+        name: "Toverland",
+        slug: "toverland",
+        timezone: "Europe/Amsterdam",
+        wikiEntityId: "wiki-1",
+      },
+    };
+    const row = (status: string, waitTime: number | null) => [
+      {
+        queueType: "STANDBY",
+        status,
+        waitTime,
+        timestamp: new Date(),
+        lastUpdated: new Date(),
+      },
+    ];
+
+    it("marks a headliner on the slow path and on a cache hit", async () => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValue(
+        new Set([rideId]),
+      );
+      attractionRepo.find.mockResolvedValueOnce([ride]);
+      const slow = await service.getFavorites([], [rideId], [], []);
+      expect(slow.attractions[0].isHeadliner).toBe(true);
+
+      redisStore.clear();
+      attractionRepo.find.mockResolvedValueOnce([ride]);
+      redisStore.set(
+        `attraction:integrated:${rideId}:30`,
+        JSON.stringify({ id: rideId, name: "Fēnix", slug: "fenix" }),
+      );
+      const hit = await service.getFavorites([], [rideId], [], []);
+      expect(hit.attractions[0].isHeadliner).toBe(true);
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValue(new Set());
+    });
+
+    it("says false for a ride that is not one", async () => {
+      attractionRepo.find.mockResolvedValueOnce([ride]);
+      const result = await service.getFavorites([], [rideId], [], []);
+      expect(result.attractions[0].isHeadliner).toBe(false);
+    });
+
+    it("ranks the best time on stored predictions with the live wait in the current slot, as the park page does", async () => {
+      // Only Date is faked: the service awaits real promises.
+      jest.useFakeTimers({
+        now: new Date("2026-07-27T10:07:00Z"),
+        doNotFake: [
+          "nextTick",
+          "setImmediate",
+          "clearImmediate",
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "queueMicrotask",
+          "hrtime",
+          "performance",
+        ],
+      });
+      try {
+        attractionRepo.find.mockResolvedValueOnce([ride]);
+        queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+          new Map([[rideId, row("OPERATING", 40)]]),
+        );
+        parksService.getBatchParkStatus.mockResolvedValueOnce(
+          new Map([[validParkUuid, "OPERATING"]]),
+        );
+        const pred = (time: string, wait: number) => ({
+          attractionId: rideId,
+          predictedTime: time,
+          predictedWaitTime: wait,
+          confidence: 0.9,
+        });
+        mlService.getBatchStoredPredictions.mockResolvedValueOnce(
+          new Map([
+            [
+              rideId,
+              [
+                // The current slot: 3 predicted, 40 measured. The 40 counts.
+                pred("2026-07-27T10:00:00.000Z", 3),
+                pred("2026-07-27T11:00:00.000Z", 5),
+                pred("2026-07-27T13:00:00.000Z", 6),
+              ],
+            ],
+          ]),
+        );
+
+        const result = await service.getFavorites([], [rideId], [], []);
+
+        expect(mlService.getBatchStoredPredictions).toHaveBeenCalledWith(
+          [rideId],
+          "hourly",
+          new Date("2026-07-27T10:00:00.000Z"),
+        );
+        expect(result.attractions[0].bestVisitTimes).toEqual([
+          {
+            time: "2026-07-27T11:00:00.000Z",
+            predictedWaitTime: 5,
+            rating: "optimal",
+          },
+          {
+            time: "2026-07-27T13:00:00.000Z",
+            predictedWaitTime: 6,
+            rating: "good",
+          },
+        ]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("carries the outage, and the weather verdict for a ride it shut", async () => {
+      attractionRepo.find.mockResolvedValueOnce([ride]);
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([[rideId, row("DOWN", null)]]),
+      );
+      parksService.getBatchParkStatus.mockResolvedValueOnce(
+        new Map([[validParkUuid, "OPERATING"]]),
+      );
+      attractionOutageService.getCurrentOutages.mockResolvedValueOnce(
+        new Map([
+          [
+            rideId,
+            {
+              startedAt: new Date(Date.now() - 20 * 60 * 1000),
+              startObserved: true,
+              rowsInRun: 4,
+              signal: "reported",
+              estimate: null,
+            },
+          ],
+        ]),
+      );
+      weatherClosureService.getVerdicts.mockResolvedValueOnce(
+        new Map([
+          [
+            rideId,
+            {
+              cause: "cold",
+              probability: 0.9,
+              temperatureC: 3.04,
+              thresholdC: 5,
+              outlook: "opens_when_warmer",
+              expectedOpenAt: null,
+            },
+          ],
+        ]),
+      );
+
+      const result = await service.getFavorites([], [rideId], [], []);
+
+      const call = attractionOutageService.getCurrentOutages.mock.calls[0];
+      expect(call[0]).toEqual({
+        id: validParkUuid,
+        timezone: "Europe/Amsterdam",
+        wikiEntityId: "wiki-1",
+      });
+      expect(call[1]).toEqual([
+        expect.objectContaining({ id: rideId, effectiveStatus: "DOWN" }),
+      ]);
+      expect(result.attractions[0].outage).toBeDefined();
+      // An outage is the stronger sentence: "not yet today" is not asked.
+      expect(attractionOutageService.getNotRunToday.mock.calls[0][1]).toEqual(
+        [],
+      );
+      expect(result.attractions[0].weatherClosure?.temperatureC).toBe(3);
+      expect(weatherClosureService.getVerdicts).toHaveBeenCalledWith(
+        { id: validParkUuid, timezone: "Europe/Amsterdam" },
+        [rideId],
+      );
+    });
+
+    it("still lists the ride when the outage lookup fails", async () => {
+      attractionRepo.find.mockResolvedValueOnce([ride]);
+      attractionOutageService.getCurrentOutages.mockRejectedValueOnce(
+        new Error("db"),
+      );
+      const result = await service.getFavorites([], [rideId], [], []);
+      expect(result.attractions).toHaveLength(1);
+      expect(result.attractions[0].outage).toBeUndefined();
     });
   });
 

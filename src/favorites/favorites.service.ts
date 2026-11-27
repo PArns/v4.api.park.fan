@@ -30,7 +30,17 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { PopularityService } from "../popularity/popularity.service";
 import { MLService } from "../ml/ml.service";
 import { PredictionDto } from "../ml/dto";
-import { computeBestVisitTimes } from "../common/utils/best-visit-times.util";
+import {
+  computeBestVisitTimes,
+  currentSlotStartMs,
+} from "../common/utils/best-visit-times.util";
+import { AttractionOutageService } from "../attractions/services/attraction-outage.service";
+import { WeatherClosureService } from "../parks/services/weather-closure.service";
+import {
+  toNotRunTodayDto,
+  toOutageDto,
+  toWeatherClosureDto,
+} from "../attractions/dto/attraction-outage.dto";
 import { buildRopeDropInfo } from "../common/utils/rope-drop-info.util";
 import { RopeDropStored } from "../common/types/rope-drop.type";
 import { formatInParkTimezone } from "../common/utils/date.util";
@@ -86,6 +96,8 @@ export class FavoritesService {
     private readonly analyticsService: AnalyticsService,
     private readonly popularityService: PopularityService,
     private readonly mlService: MLService,
+    private readonly attractionOutageService: AttractionOutageService,
+    private readonly weatherClosureService: WeatherClosureService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -677,6 +689,7 @@ export class FavoritesService {
         ropeDropParkEntries,
         ratableParks,
         parkStatusMap,
+        storedPredictionsMap,
       ] = await Promise.all([
         this.queueDataService.findCurrentStatusByAttractionIds(missedIds),
         this.analyticsService.getAttractionSparklinesBatch(sparkInput),
@@ -705,6 +718,13 @@ export class FavoritesService {
         // Park status — the queue rows are a last-known value (sources stop
         // publishing at closing time), so `effectiveStatus` needs the park.
         this.parksService.getBatchParkStatus(missedParkIds),
+        // The park payload's best-time source: stored predictions first, the
+        // live park call below only for a ride without any.
+        this.mlService.getBatchStoredPredictions(
+          missedIds,
+          "hourly",
+          new Date(currentSlotStartMs()),
+        ),
       ]);
       const predsByPark = new Map<string, PredictionDto[]>(parkPredEntries);
       const ropeDropByPark = new Map<string, Map<string, RopeDropStored>>(
@@ -858,13 +878,29 @@ export class FavoritesService {
         if (waitTimesReadable && attraction.parkId && attraction.park) {
           const tz = attraction.park.timezone || "UTC";
           const todayStr = getCurrentDateInTimezone(tz);
-          const todayAttrPreds = (
-            predsByPark.get(attraction.parkId) || []
-          ).filter(
-            (p) =>
-              p.attractionId === attraction.id &&
-              formatInParkTimezone(new Date(p.predictedTime), tz) === todayStr,
-          );
+          const stored = storedPredictionsMap.get(attraction.id) ?? [];
+          const preds =
+            stored.length > 0
+              ? stored
+              : (predsByPark.get(attraction.parkId) || []).filter(
+                  (p) => p.attractionId === attraction.id,
+                );
+          // As on the park page: the current slot carries the live wait, so a
+          // spike the model did not see cannot be named the best time.
+          const liveWait = dto.queues?.[0]?.waitTime;
+          const slotStartMs = currentSlotStartMs();
+          const todayAttrPreds = preds
+            .map((p) =>
+              liveWait != null &&
+              new Date(p.predictedTime).getTime() === slotStartMs
+                ? { ...p, predictedWaitTime: liveWait }
+                : p,
+            )
+            .filter(
+              (p) =>
+                formatInParkTimezone(new Date(p.predictedTime), tz) ===
+                todayStr,
+            );
           const closing =
             (schedulesForBest.today.get(attraction.parkId) || []).find(
               (e) => e.closingTime != null,
@@ -906,7 +942,24 @@ export class FavoritesService {
         }
         integratedMap.set(attraction.id, dto);
       }
+      await this.addShutReasons(missedAttractions, integratedMap);
     }
+
+    // The park page's crown: one Redis read per park (6 h cache), for cached and
+    // rebuilt rides alike, since the ride detail payload has no headliner flag.
+    const parkIds = [
+      ...new Set(
+        attractions.map((a) => a.parkId).filter((p): p is string => !!p),
+      ),
+    ];
+    const headlinerSets = await Promise.all(
+      parkIds.map((pid) =>
+        this.analyticsService
+          .getHeadlinerAttractionIds(pid)
+          .catch(() => new Set<string>()),
+      ),
+    );
+    const headlinerIds = new Set(headlinerSets.flatMap((s) => [...s]));
 
     const integratedResponses = attractions.map(
       (a) => integratedMap.get(a.id) ?? null,
@@ -940,6 +993,7 @@ export class FavoritesService {
                 )
               : null,
           trend: null,
+          isHeadliner: headlinerIds.has(attraction.id),
         };
         // Add URL if park is available
         if (attraction.park) {
@@ -991,10 +1045,95 @@ export class FavoritesService {
           (attraction.park
             ? buildAttractionUrl(attraction.park, attraction) || null
             : null),
+        isHeadliner: headlinerIds.has(attraction.id),
       };
 
       return dto;
     });
+  }
+
+  /**
+   * Why a rebuilt ride is shut: `outage`, `notRunToday` and `weatherClosure`,
+   * asked of the services the park payload asks, in its order and with its
+   * gates, one round per park. A cached ride already carries them from the
+   * ride detail payload.
+   */
+  private async addShutReasons(
+    attractions: Attraction[],
+    dtos: Map<string, AttractionResponseDto>,
+  ): Promise<void> {
+    const byPark = new Map<string, Attraction[]>();
+    for (const a of attractions) {
+      if (!a.park || !a.parkId || !dtos.has(a.id)) continue;
+      byPark.set(a.parkId, [...(byPark.get(a.parkId) ?? []), a]);
+    }
+    await Promise.all(
+      [...byPark.values()].map(async (rides) => {
+        const park = rides[0].park;
+        const candidates = rides.map((a) => ({
+          a,
+          dto: dtos.get(a.id)!,
+        }));
+        const curated = (a: Attraction) => ({
+          curatedOutOfServiceFrom: a.curatedOutOfServiceFrom,
+          curatedOutOfServiceTo: a.curatedOutOfServiceTo,
+          curatedOutOfServicePeriods: a.curatedOutOfServicePeriods,
+        });
+        if (park.wikiEntityId != null) {
+          // A line under a badge must not cost the visitor the whole list.
+          const outages = await this.attractionOutageService
+            .getCurrentOutages(
+              {
+                id: park.id,
+                timezone: park.timezone,
+                wikiEntityId: park.wikiEntityId,
+              },
+              candidates.map(({ a, dto }) => ({
+                id: a.id,
+                effectiveStatus: dto.effectiveStatus,
+                ...curated(a),
+              })),
+            )
+            .catch(() => new Map<string, never>());
+          for (const { a, dto } of candidates) {
+            const outage = toOutageDto(outages.get(a.id));
+            if (outage) dto.outage = outage;
+          }
+        }
+        const notRun = await this.attractionOutageService.getNotRunToday(
+          { id: park.id, timezone: park.timezone },
+          candidates
+            .filter(({ dto }) => !dto.outage)
+            .map(({ a, dto }) => ({
+              id: a.id,
+              effectiveStatus: dto.effectiveStatus,
+              isCurrentlyInSeason: dto.isCurrentlyInSeason,
+              ...curated(a),
+            })),
+        );
+        for (const { a, dto } of candidates) {
+          const line = toNotRunTodayDto(notRun.get(a.id));
+          if (line) dto.notRunToday = line;
+        }
+        const shut = candidates
+          .filter(
+            ({ dto }) =>
+              (dto.outage || dto.notRunToday) &&
+              (dto.effectiveStatus === "CLOSED" ||
+                dto.effectiveStatus === "DOWN"),
+          )
+          .map(({ a }) => a.id);
+        if (shut.length === 0) return;
+        const verdicts = await this.weatherClosureService.getVerdicts(
+          { id: park.id, timezone: park.timezone },
+          shut,
+        );
+        for (const { a, dto } of candidates) {
+          const line = toWeatherClosureDto(verdicts.get(a.id));
+          if (line) dto.weatherClosure = line;
+        }
+      }),
+    );
   }
 
   /**
