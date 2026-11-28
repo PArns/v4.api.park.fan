@@ -134,7 +134,7 @@ describe("curation tools", () => {
       };
     };
 
-    it("sets a kind, GAME included, and clears one with null", async () => {
+    it("hands a kind and a cleared kind to the bulk write unchanged", async () => {
       const { answer, patchParkAttractions } = call({
         entries: [
           { id: RIDE_A, fields: { attractionKind: "GAME" } },

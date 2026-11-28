@@ -62,11 +62,13 @@ export class ScheduleItemDto {
   })
   purchases:
     | {
-        startDate: string;
-        endDate: string;
-        price: { amount: number; currency: string };
+        id?: string;
+        name: string;
+        type: string;
+        price: { amount: number; currency: string; formatted?: string } | null;
+        available?: boolean;
       }[]
-    | null; // Lightning Lane pricing, etc.
+    | null; // Lightning Lane pricing, etc.: docs/frontend/schedule.md
 
   @ApiProperty({
     description: "Indicates if this date is a regional or national holiday",

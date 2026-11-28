@@ -192,7 +192,7 @@ describe("news export tools", () => {
           action: "news-export.run",
           entityType: "system",
           entityLabel: "publish-media.yml",
-          after: { workflowUrl },
+          after: { outcome: "started", workflowUrl },
         }),
       ]);
     });
@@ -229,10 +229,38 @@ describe("news export tools", () => {
       ).rejects.toEqual(
         new McpToolError(
           "park.fan answered HTTP 200 without saying publish-media.yml started; " +
-            "look at its runs on GitHub before starting another",
+            "publish-media.yml may have started: look at its runs on GitHub before starting another",
         ),
       );
-      expect(audit).toHaveLength(1);
+      expect(audit).toHaveLength(2);
+      expect(audit[1]).toMatchObject({
+        after: { outcome: "unknown" },
+      });
+    });
+
+    it("records a run it cannot confirm when the site does not answer in time", async () => {
+      fetchMock.mockRejectedValueOnce(
+        Object.assign(new Error("timed out"), { name: "TimeoutError" }),
+      );
+      const { ctx, audit } = adminContext("editor", []);
+
+      await expect(
+        runNewsExportTool.handler({ dryRun: false }, ctx),
+      ).rejects.toEqual(
+        new McpToolError(
+          "park.fan did not answer /api/news-export/run within 25 s; " +
+            "publish-media.yml may have started: look at its runs on GitHub before starting another",
+        ),
+      );
+      expect(audit).toEqual([
+        expect.objectContaining({
+          action: "news-export.run",
+          after: {
+            outcome: "unknown",
+            why: "park.fan did not answer /api/news-export/run within 25 s",
+          },
+        }),
+      ]);
     });
 
     it("is refused below editor and without the secret", async () => {

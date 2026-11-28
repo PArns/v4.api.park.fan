@@ -120,6 +120,33 @@ describe("park_purchases", () => {
     ]);
   });
 
+  it("keeps to the park's days, which getSchedule overshoots by a day", async () => {
+    const { ctx } = ctxWith([
+      row("2026-11-27", "OPERATING", [multiPass]),
+      row("2026-11-28", "OPERATING", [
+        multiPass,
+        {
+          ...multiPass,
+          name: "Premier Pass",
+          price: { amount: 400, currency: "USD" },
+        },
+      ]),
+      row("2026-11-29", "OPERATING", [multiPass]),
+    ]);
+    const answer = (await parkPurchasesTool.handler(
+      { park: PARK, from: "2026-11-28", days: 1 },
+      ctx,
+    )) as Record<string, any>;
+    expect(answer.days.map((day: { date: string }) => day.date)).toEqual([
+      "2026-11-28",
+    ]);
+    // Without a formatted price the website shows none, so neither does this.
+    expect(answer.days[0].products[1]).toMatchObject({
+      name: "Premier Pass",
+      price: null,
+    });
+  });
+
   it("reads the rides only when a product is for one", async () => {
     const { ctx, find } = ctxWith([
       row("2026-11-28", "OPERATING", [multiPass]),

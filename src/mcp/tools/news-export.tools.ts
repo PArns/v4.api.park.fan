@@ -4,6 +4,7 @@ import { dryRunInput } from "../mcp-write";
 import { AdminAuditService } from "../../admin/auth/admin-audit.service";
 import {
   callSiteRoute,
+  SITE_RUN_TIMEOUT_MS,
   SITE_ROUTE_NOT_CONFIGURED,
   siteRouteTarget,
 } from "./site-route";
@@ -178,13 +179,35 @@ export const runNewsExportTool = defineMcpTool({
         takesMinutes: 20,
       };
     }
-    const answer = await callSiteRoute("POST", RUN_PATH);
+    const record = (after: Record<string, unknown>) =>
+      ctx.get(AdminAuditService).record({
+        actor: ctx.admin,
+        action: "news-export.run",
+        entityType: "system",
+        entityId: null,
+        entityLabel: WORKFLOW,
+        after,
+      });
+    // Past this point the site may have dispatched the workflow, so every
+    // outcome short of a refusal is recorded, or a run would start unlogged.
+    const unclear = async (why: string) => {
+      await record({ outcome: "unknown", why });
+      return new McpToolError(
+        `${why}; ${WORKFLOW} may have started: look at its runs on GitHub before starting another`,
+      );
+    };
+    let answer: Awaited<ReturnType<typeof callSiteRoute>>;
+    try {
+      answer = await callSiteRoute("POST", RUN_PATH, SITE_RUN_TIMEOUT_MS);
+    } catch (error) {
+      if (error instanceof McpToolError) throw await unclear(error.message);
+      throw error;
+    }
     const run = runAnswerOf(answer.body);
     const accepted = answer.status >= 200 && answer.status < 300;
     if (accepted && !run.started) {
-      throw new McpToolError(
-        `park.fan answered HTTP ${answer.status} without saying ${WORKFLOW} started; ` +
-          "look at its runs on GitHub before starting another",
+      throw await unclear(
+        `park.fan answered HTTP ${answer.status} without saying ${WORKFLOW} started`,
       );
     }
     if (!accepted) {
@@ -193,14 +216,7 @@ export const runNewsExportTool = defineMcpTool({
           (run.reason ? `: ${run.reason}` : ""),
       );
     }
-    await ctx.get(AdminAuditService).record({
-      actor: ctx.admin,
-      action: "news-export.run",
-      entityType: "system",
-      entityId: null,
-      entityLabel: WORKFLOW,
-      after: { workflowUrl: run.workflowUrl },
-    });
+    await record({ outcome: "started", workflowUrl: run.workflowUrl });
     return {
       dryRun: false,
       started: true,

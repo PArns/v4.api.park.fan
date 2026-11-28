@@ -132,8 +132,8 @@ against these rules.
 | `duplicates`                 | duplicate attraction and park pairs with the merge winner                                                                                                                                                                                                                                                                                                                       | `AttractionMergeService`, `ParkValidatorService`            |
 | `retirement_candidates`      | rides whose source went quiet                                                                                                                                                                                                                                                                                                                                                   | `AttractionReviewService`                                   |
 | `audit_log`                  | admin actions, filterable                                                                                                                                                                                                                                                                                                                                                       | `AdminAuditService.list`                                    |
-| `assistant_conversations`    | Parky's chats, newest first: language, messages, tokens, cost, rating, prompt version, start page and first question, source (web or app), `reportedAt` when a visitor reported an answer; filter by rating, source, reported, prompt version or a word                                                                                                                                                                                   | `AssistantRecordsService.listConversations`                 |
-| `assistant_conversation`     | one chat in full: questions, answers, the tools Parky called with their input, tokens, cost, prompt version, ratings, a visitor's report of an answer, its feedback                                                                                                                                                                                                                                              | `AssistantRecordsService.conversation`                      |
+| `assistant_conversations`    | Parky's chats, newest first: language, messages, tokens, cost, rating, prompt version, start page and first question, source (web or app), `reportedAt` when a visitor reported an answer; filter by rating, source, reported, prompt version or a word                                                                                                                         | `AssistantRecordsService.listConversations`                 |
+| `assistant_conversation`     | one chat in full: questions, answers, the tools Parky called with their input, tokens, cost, prompt version, ratings, a visitor's report of an answer, its feedback                                                                                                                                                                                                             | `AssistantRecordsService.conversation`                      |
 | `assistant_transcripts`      | many chats in full at once, newest first: every question and answer with the tools called and their input, the prompt version and rating per answer, the feedback; by the prompt version any answer ran on, rating, word or language, up to 20 a page                                                                                                                           | `AssistantRecordsService.transcripts`                       |
 | `site_feedback`              | feedback from the form or filed by Parky from a chat (`source`, `kind`), newest first, by status; whether the visitor wants a reply, never the address                                                                                                                                                                                                                          | `AssistantRecordsService.listFeedback`                      |
 | `assistant_knowledge`        | Parky's knowledge base: every topic with its `readWhen`, on or off, length and last edit; one topic in full with its edits (the audit rows, whole before and after)                                                                                                                                                                                                             | `AssistantKnowledgeService.list`, `get`, `history`          |
@@ -366,7 +366,11 @@ carried any.
 
 ```json
 {
-  "park": { "id": "…", "name": "Magic Kingdom Park", "timezone": "America/New_York" },
+  "park": {
+    "id": "…",
+    "name": "Magic Kingdom Park",
+    "timezone": "America/New_York"
+  },
   "from": "2026-11-28",
   "to": "2026-12-28",
   "days": [
@@ -411,8 +415,9 @@ carried any.
 website, the only side that knows both the app's export on media.park.fan and the posts it should
 hold. `src/mcp/tools/site-route.ts` calls park.fan at the origin of `REVALIDATE_URL` with
 `Authorization: Bearer ${REVALIDATE_SECRET}`, the secret the revalidation webhook already sends
-there, and never at `FRONTEND_URL`, which may name another host. It waits 15 s, follows no
-redirect and refuses a body over a million characters. Without the secret, or with a
+there, and never at `FRONTEND_URL`, which may name another host. It waits 15 s for the status
+and 25 s for a run, since the site makes two GitHub calls of up to 10 s each to start one; it
+follows no redirect and refuses a body over a million characters. Without the secret, or with a
 `REVALIDATE_URL` that does not parse, `news_export_status` answers `{ configured: false, message }`
 and `run_news_export` refuses.
 
@@ -426,13 +431,14 @@ and `run_news_export` refuses.
   `workflowUrl`.
 - **`run_news_export`** sends `POST /api/news-export/run` without a body, which starts the
   workflow `publish-media.yml` in the website's repository (about 20 minutes). Editor, `writes:
-  add`, a dry run unless `dryRun: false`: the dry run answers what would start and where, and
+add`, a dry run unless `dryRun: false`: the dry run answers what would start and where, and
   calls nothing. The website answers `{ started: true, workflowUrl }`, or `{ started: false,
-  reason }` with a status other than 2xx, and the model reads that reason. A 2xx that does not
-  say `started: true` is an error that sends the model to the workflow's runs before another
-  call, since the run may have started. A started run is an audit row (`news-export.run`, entity
-  `system`, the workflow's page in `after`, null when the link failed the check); a refused one
-  leaves none.
+reason }` with a status other than 2xx, and the model reads that reason. A 2xx that does not
+  say `started: true`, no answer in time and a lost connection are errors that send the model to
+  the workflow's runs before another call, since the run may have started. Every call past the
+  dry run that the site did not refuse is an audit row (`news-export.run`, entity `system`):
+  `after` is `{ outcome: "started", workflowUrl }` (the link null when it failed the check) or
+  `{ outcome: "unknown", why }`. A refused run leaves none.
 
 ## Writing
 
@@ -532,48 +538,48 @@ that a mass write is read by name before it runs
 The merges default to the preview, `merge_parks` included, whose route merges a manual pair unless
 told otherwise.
 
-| Tool                            | Role   | Writes          | Runs (below `/v1/admin/`)                                                                                                         |
-| ------------------------------- | ------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `curation_fields`               | viewer | no              | the field descriptors (`content/fields`), with an id the row's synced, curated and served values; `attractionKind` serves the derived kind where no editor chose one |
-| `curate_park`                   | editor | change          | `PATCH content/parks/:id`                                                                                                         |
-| `curate_attraction`             | editor | change          | `PATCH content/attractions/:id`; `attractionKind` takes every kind, `GAME` included, and `null` hands the ride back to the derived kind |
+| Tool                            | Role   | Writes          | Runs (below `/v1/admin/`)                                                                                                                                                          |
+| ------------------------------- | ------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `curation_fields`               | viewer | no              | the field descriptors (`content/fields`), with an id the row's synced, curated and served values; `attractionKind` serves the derived kind where no editor chose one               |
+| `curate_park`                   | editor | change          | `PATCH content/parks/:id`                                                                                                                                                          |
+| `curate_attraction`             | editor | change          | `PATCH content/attractions/:id`; `attractionKind` takes every kind, `GAME` included, and `null` hands the ride back to the derived kind                                            |
 | `curate_park_attractions`       | editor | change          | `PATCH content/parks/:id/attractions`, also the data-quality "season or gone?" and "without a kind" answers; `adoptDerivedKind` makes the listed rides' derived kinds the editor's |
-| `verify_park`                   | editor | add             | `POST content/parks/:id/verify`                                                                                                   |
-| `undo_curation`                 | editor | change          | `POST content/history/:id/undo`                                                                                                   |
-| `write_ride_profile`            | editor | change          | `PUT content/attractions/:id/ride-profile`                                                                                        |
-| `delete_ride_profile`           | editor | delete, dry run | `DELETE content/attractions/:id/ride-profile`                                                                                     |
-| `correct_park_location`         | owner  | change          | `POST parks/:id/correct-location`                                                                                                 |
-| `refresh_park`                  | editor | add             | no route: the `sync-park-schedule` job as `CalendarService` queues it, and `AdminCurationService.publish`; audited `park.refresh` |
-| `add_redirect`                  | editor | add             | `POST redirects`                                                                                                                  |
-| `remove_redirect`               | editor | delete, confirm | `DELETE redirects`                                                                                                                |
-| `merge_attractions`             | owner  | delete, dry run | `POST merge-duplicate-attractions`, one pair, `adoptLoserExternalId` for a re-issue                                               |
-| `merge_parks`                   | owner  | delete, dry run | `POST merge-duplicate-parks`, one pair                                                                                            |
-| `retired_attractions`           | viewer | no              | `AttractionRetirementService.listRetired`, as `retired-attractions` does                                                          |
-| `retire_attractions`            | owner  | delete, dry run | `POST retire-attractions`, at most 50 rides                                                                                       |
-| `unretire_attraction`           | owner  | change          | `POST unretire-attraction/:id`                                                                                                    |
-| `set_retired_hidden`            | owner  | change          | `POST retired-attractions/:id/hidden`                                                                                             |
-| `retire_park`                   | owner  | delete, dry run | `POST retire-parks`                                                                                                               |
-| `review_mark`                   | editor | add             | `POST review-marks`: a retirement, duplicate or maze candidate that is no case                                                    |
-| `run_job`                       | editor | add             | the editor's triggers of [sync and jobs](endpoints.md#sync-and-background-jobs), `search-console/import`, `…/reindex/scan`        |
-| `run_maintenance`               | owner  | delete, dry run | `flush-cache`, `cache/reset`, `dedupe-percentile-aggregates`, `backfill-park-day-operation`, `validate-and-repair-parks`          |
-| `run_news_export`               | editor | add, dry run    | no route here: park.fan's `POST /api/news-export/run`, which starts `publish-media.yml` (about 20 minutes); audited `news-export.run` |
-| `set_feedback_status`           | editor | change          | `PATCH assistant/feedback/:id`                                                                                                    |
-| `delete_assistant_conversation` | editor | delete, dry run | `DELETE assistant/conversations/:id`                                                                                              |
-| `write_assistant_knowledge`     | editor | change, dry run | `PUT assistant/knowledge/:topic`: creates a topic or replaces its fields; the next chat reads it within a minute                  |
-| `delete_assistant_knowledge`    | editor | delete, confirm | `DELETE assistant/knowledge/:topic`; the audit row keeps the whole topic                                                          |
-| `block_event`                   | editor | change          | `PUT` or `DELETE analytics/blocked-events/:name`                                                                                  |
-| `api_keys`                      | owner  | no              | `GET api-keys`, the daily counts summed unless asked for, with permissions and `awaitsPickup`                                     |
-| `create_api_key`                | owner  | add             | `POST api-keys`                                                                                                                   |
-| `update_api_key`                | owner  | change          | `PATCH api-keys/:id`, `permissions` replacing the whole list                                                                      |
-| `rotate_api_key`                | owner  | change          | `POST api-keys/:id/rotate`                                                                                                        |
-| `revoke_api_key`                | owner  | delete, dry run | `DELETE api-keys/:id`, or `DELETE api-keys/:id/previous` to end a grace period                                                    |
-| `delete_api_key`                | owner  | delete, dry run | `POST api-keys/:id/delete`, a revoked key only                                                                                    |
-| `api_key_requests`              | owner  | no              | `GET api-key-requests`, what the applicant typed under `visitorData`                                                              |
-| `approve_api_key_request`       | owner  | add, dry run    | `POST api-key-requests/:id/approve`; the developer picks the key up, so no secret comes back                                      |
-| `reject_api_key_request`        | owner  | change          | `POST api-key-requests/:id/reject`                                                                                                |
-| `reopen_api_key_request`        | owner  | change          | `POST api-key-requests/:id/reopen`                                                                                                |
-| `delete_api_key_request`        | owner  | delete, dry run | `DELETE api-key-requests/:id`; a key issued for it stays                                                                          |
-| `admin_users`                   | owner  | no              | `AdminAuthService.list`, as `auth/users` does: accounts and roles, never an address                                               |
+| `verify_park`                   | editor | add             | `POST content/parks/:id/verify`                                                                                                                                                    |
+| `undo_curation`                 | editor | change          | `POST content/history/:id/undo`                                                                                                                                                    |
+| `write_ride_profile`            | editor | change          | `PUT content/attractions/:id/ride-profile`                                                                                                                                         |
+| `delete_ride_profile`           | editor | delete, dry run | `DELETE content/attractions/:id/ride-profile`                                                                                                                                      |
+| `correct_park_location`         | owner  | change          | `POST parks/:id/correct-location`                                                                                                                                                  |
+| `refresh_park`                  | editor | add             | no route: the `sync-park-schedule` job as `CalendarService` queues it, and `AdminCurationService.publish`; audited `park.refresh`                                                  |
+| `add_redirect`                  | editor | add             | `POST redirects`                                                                                                                                                                   |
+| `remove_redirect`               | editor | delete, confirm | `DELETE redirects`                                                                                                                                                                 |
+| `merge_attractions`             | owner  | delete, dry run | `POST merge-duplicate-attractions`, one pair, `adoptLoserExternalId` for a re-issue                                                                                                |
+| `merge_parks`                   | owner  | delete, dry run | `POST merge-duplicate-parks`, one pair                                                                                                                                             |
+| `retired_attractions`           | viewer | no              | `AttractionRetirementService.listRetired`, as `retired-attractions` does                                                                                                           |
+| `retire_attractions`            | owner  | delete, dry run | `POST retire-attractions`, at most 50 rides                                                                                                                                        |
+| `unretire_attraction`           | owner  | change          | `POST unretire-attraction/:id`                                                                                                                                                     |
+| `set_retired_hidden`            | owner  | change          | `POST retired-attractions/:id/hidden`                                                                                                                                              |
+| `retire_park`                   | owner  | delete, dry run | `POST retire-parks`                                                                                                                                                                |
+| `review_mark`                   | editor | add             | `POST review-marks`: a retirement, duplicate or maze candidate that is no case                                                                                                     |
+| `run_job`                       | editor | add             | the editor's triggers of [sync and jobs](endpoints.md#sync-and-background-jobs), `search-console/import`, `…/reindex/scan`                                                         |
+| `run_maintenance`               | owner  | delete, dry run | `flush-cache`, `cache/reset`, `dedupe-percentile-aggregates`, `backfill-park-day-operation`, `validate-and-repair-parks`                                                           |
+| `run_news_export`               | editor | add, dry run    | no route here: park.fan's `POST /api/news-export/run`, which starts `publish-media.yml` (about 20 minutes); audited `news-export.run`                                              |
+| `set_feedback_status`           | editor | change          | `PATCH assistant/feedback/:id`                                                                                                                                                     |
+| `delete_assistant_conversation` | editor | delete, dry run | `DELETE assistant/conversations/:id`                                                                                                                                               |
+| `write_assistant_knowledge`     | editor | change, dry run | `PUT assistant/knowledge/:topic`: creates a topic or replaces its fields; the next chat reads it within a minute                                                                   |
+| `delete_assistant_knowledge`    | editor | delete, confirm | `DELETE assistant/knowledge/:topic`; the audit row keeps the whole topic                                                                                                           |
+| `block_event`                   | editor | change          | `PUT` or `DELETE analytics/blocked-events/:name`                                                                                                                                   |
+| `api_keys`                      | owner  | no              | `GET api-keys`, the daily counts summed unless asked for, with permissions and `awaitsPickup`                                                                                      |
+| `create_api_key`                | owner  | add             | `POST api-keys`                                                                                                                                                                    |
+| `update_api_key`                | owner  | change          | `PATCH api-keys/:id`, `permissions` replacing the whole list                                                                                                                       |
+| `rotate_api_key`                | owner  | change          | `POST api-keys/:id/rotate`                                                                                                                                                         |
+| `revoke_api_key`                | owner  | delete, dry run | `DELETE api-keys/:id`, or `DELETE api-keys/:id/previous` to end a grace period                                                                                                     |
+| `delete_api_key`                | owner  | delete, dry run | `POST api-keys/:id/delete`, a revoked key only                                                                                                                                     |
+| `api_key_requests`              | owner  | no              | `GET api-key-requests`, what the applicant typed under `visitorData`                                                                                                               |
+| `approve_api_key_request`       | owner  | add, dry run    | `POST api-key-requests/:id/approve`; the developer picks the key up, so no secret comes back                                                                                       |
+| `reject_api_key_request`        | owner  | change          | `POST api-key-requests/:id/reject`                                                                                                                                                 |
+| `reopen_api_key_request`        | owner  | change          | `POST api-key-requests/:id/reopen`                                                                                                                                                 |
+| `delete_api_key_request`        | owner  | delete, dry run | `DELETE api-key-requests/:id`; a key issued for it stays                                                                                                                           |
+| `admin_users`                   | owner  | no              | `AdminAuthService.list`, as `auth/users` does: accounts and roles, never an address                                                                                                |
 
 `run_maintenance`'s dry run of `validate-and-repair-parks` runs the check and repairs nothing
 (`autoFix: false`); its other dry runs only say what would run. `create_api_key` and
@@ -753,14 +759,14 @@ What was checked when this was built, and where it is enforced:
 
 ## Environment
 
-| Variable               | Meaning                                                                                            |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `API_PUBLIC_URL`       | this API's public origin: issuer and resource base; default `https://api.park.fan`                 |
-| `FRONTEND_URL`         | where `/admin/oauth/consent` is; default the origin of `REVALIDATE_URL`                            |
-| `OAUTH_REDIRECT_HOSTS` | https redirect hosts, comma-separated, `*` for any; default `claude.ai,claude.com`                 |
-| `OAUTH_REDIRECT_PATHS` | the paths an https redirect may have on those hosts, `*` for any; default `/api/mcp/auth_callback` |
+| Variable               | Meaning                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `API_PUBLIC_URL`       | this API's public origin: issuer and resource base; default `https://api.park.fan`                      |
+| `FRONTEND_URL`         | where `/admin/oauth/consent` is; default the origin of `REVALIDATE_URL`                                 |
+| `OAUTH_REDIRECT_HOSTS` | https redirect hosts, comma-separated, `*` for any; default `claude.ai,claude.com`                      |
+| `OAUTH_REDIRECT_PATHS` | the paths an https redirect may have on those hosts, `*` for any; default `/api/mcp/auth_callback`      |
 | `REVALIDATE_URL`       | its origin is where the news-export tools call park.fan ([park.fan's own routes](#parkfans-own-routes)) |
-| `REVALIDATE_SECRET`    | their bearer; unset, `news_export_status` says it is not set up and `run_news_export` refuses       |
+| `REVALIDATE_SECRET`    | their bearer; unset, `news_export_status` says it is not set up and `run_news_export` refuses           |
 
 ## Known limits
 

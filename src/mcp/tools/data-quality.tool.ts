@@ -46,7 +46,7 @@ export const dataQualityTool = defineMcpTool({
             parkId,
             parkName,
             attractions,
-            withoutKindRefs,
+            withoutKindRefs: capped(withoutKindRefs, limit),
           }),
         ),
         limit,

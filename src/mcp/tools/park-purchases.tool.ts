@@ -55,12 +55,9 @@ type Ride = Pick<Attraction, "id" | "name" | "curatedName">;
  */
 function priceOf(price: SourcePurchase["price"]) {
   if (!price || price.amount <= 0) return null;
-  if (price.formatted?.trim().toLowerCase() === "unknown") return null;
-  return {
-    amount: price.amount,
-    currency: price.currency,
-    formatted: price.formatted ?? null,
-  };
+  const formatted = price.formatted?.trim();
+  if (!formatted || formatted.toLowerCase() === "unknown") return null;
+  return { amount: price.amount, currency: price.currency, formatted };
 }
 
 /**
@@ -167,6 +164,9 @@ export const parkPurchasesTool = defineMcpTool({
     const byDate = new Map<string, SourcePurchase[]>();
     for (const row of rows) {
       const { date, purchases } = ScheduleItemDto.fromEntity(row);
+      // getSchedule binds instants to a DATE column, which Postgres reads in
+      // UTC, so it hands back a day beyond either edge of the park's window.
+      if (date < first || date > last) continue;
       if (byDate.has(date) || !Array.isArray(purchases)) continue;
       const items = purchases.flatMap((item: unknown) => {
         const parsed = sourcePurchase.safeParse(item);

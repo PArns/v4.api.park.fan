@@ -16,6 +16,12 @@ import {
 /** The news-export check reads twelve lists from the bucket before it answers. */
 export const SITE_ROUTE_TIMEOUT_MS = 15_000;
 
+/**
+ * Starting the export takes two GitHub calls of up to 10 s each on the site, so
+ * a shorter wait would give up on a run that still starts.
+ */
+export const SITE_RUN_TIMEOUT_MS = 25_000;
+
 /** A report is a few kilobytes; a body past this is not one. */
 const SITE_ROUTE_MAX_CHARS = 1_000_000;
 
@@ -52,6 +58,7 @@ export interface SiteRouteAnswer {
 export async function callSiteRoute(
   method: "GET" | "POST",
   path: string,
+  timeoutMs: number = SITE_ROUTE_TIMEOUT_MS,
 ): Promise<SiteRouteAnswer> {
   const target = siteRouteTarget();
   if (!target) throw new McpToolError(SITE_ROUTE_NOT_CONFIGURED);
@@ -60,7 +67,7 @@ export async function callSiteRoute(
     response = await fetch(`${target.origin}${path}`, {
       method,
       redirect: "manual",
-      signal: AbortSignal.timeout(SITE_ROUTE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Authorization: `Bearer ${target.secret}`,
         Accept: "application/json",
@@ -73,7 +80,7 @@ export async function callSiteRoute(
       (error.name === "TimeoutError" || error.name === "AbortError");
     throw new McpToolError(
       timedOut
-        ? `park.fan did not answer ${path} within ${SITE_ROUTE_TIMEOUT_MS / 1000} s`
+        ? `park.fan did not answer ${path} within ${timeoutMs / 1000} s`
         : `park.fan could not be reached for ${path}`,
     );
   }
