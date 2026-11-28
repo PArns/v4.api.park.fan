@@ -99,6 +99,8 @@ export interface FacilityParkRow {
     hidden: number;
     /** Visible points whose position lies outside the outline. */
     outside: number;
+    /** Visible points new or changed since the last approval, not served yet. */
+    awaitingReview: number;
   };
   /** Whether "approve all" would approve this park (`isBulkApprovable`). */
   bulkApprovable: boolean;
@@ -110,6 +112,7 @@ const emptyCounts = (): FacilityParkRow["counts"] => ({
   sights: 0,
   hidden: 0,
   outside: 0,
+  awaitingReview: 0,
 });
 
 /** The fewest visible points a park needs for the bulk approval. */
@@ -226,7 +229,8 @@ export class FacilitiesService {
     const plan = planFacilityMerge(existing, incoming);
     const fetchedAt = new Date();
     // Only what a visitor would newly see asks for another look. A removal or
-    // a bare version bump shows nothing nobody approved.
+    // a bare version bump shows nothing nobody approved. The rows that ask for
+    // it wait; an approved park keeps serving the rest (awaitingReview).
     const needsReview =
       plan.insert.length > 0 || plan.update.some((u) => u.visible);
     const status =
@@ -236,13 +240,22 @@ export class FacilitiesService {
       if (plan.removeIds.length > 0) {
         await manager.delete(ParkFacilityOsm, plan.removeIds);
       }
-      for (const { id, facility } of plan.update) {
-        await manager.update(ParkFacilityOsm, id, { ...facility, fetchedAt });
+      for (const { id, facility, visible } of plan.update) {
+        await manager.update(ParkFacilityOsm, id, {
+          ...facility,
+          fetchedAt,
+          ...(visible && { awaitingReview: true }),
+        });
       }
       if (plan.insert.length > 0) {
         await manager.insert(
           ParkFacilityOsm,
-          plan.insert.map((facility) => ({ ...facility, parkId, fetchedAt })),
+          plan.insert.map((facility) => ({
+            ...facility,
+            parkId,
+            fetchedAt,
+            awaitingReview: true,
+          })),
         );
       }
       const base = new Date(answer.osm3s?.timestamp_osm_base ?? NaN);
@@ -258,8 +271,9 @@ export class FacilitiesService {
         lastRun: "ok",
         lastRunAt: fetchedAt,
         lastRunMessage: null,
-        approvedAt: status === "approved" ? previous!.approvedAt : null,
-        approvedBy: status === "approved" ? previous!.approvedBy : null,
+        // The last approval stays: it keeps the approved rows served.
+        approvedAt: previous?.approvedAt ?? null,
+        approvedBy: previous?.approvedBy ?? null,
       });
     });
 
@@ -387,6 +401,7 @@ export class FacilitiesService {
           type: true,
           hidden: true,
           insideOutline: true,
+          awaitingReview: true,
         },
       }),
     ]);
@@ -400,6 +415,7 @@ export class FacilitiesService {
         else if (f.type === "drinking_water") c.drinkingWater += 1;
         else c.sights += 1;
         if (!f.insideOutline) c.outside += 1;
+        if (f.awaitingReview) c.awaitingReview += 1;
       }
       counts.set(f.parkId, c);
     }
@@ -439,10 +455,19 @@ export class FacilitiesService {
   ): Promise<{ dryRun: boolean; count: number; parks: string[] }> {
     const take = (await this.listParks()).filter((row) => row.bulkApprovable);
     if (!dryRun && take.length > 0) {
-      await this.imports.update(
-        { parkId: In(take.map((row) => row.parkId)), status: "imported" },
-        { status: "approved", approvedAt: new Date(), approvedBy: actor },
-      );
+      const parkIds = take.map((row) => row.parkId);
+      await this.dataSource.transaction(async (manager) => {
+        await manager.update(
+          ParkFacilityOsm,
+          { parkId: In(parkIds) },
+          { awaitingReview: false },
+        );
+        await manager.update(
+          ParkFacilityImport,
+          { parkId: In(parkIds), status: "imported" },
+          { status: "approved", approvedAt: new Date(), approvedBy: actor },
+        );
+      });
     }
     return { dryRun, count: take.length, parks: take.map((row) => row.name) };
   }
@@ -486,7 +511,17 @@ export class FacilitiesService {
     row.status = approved ? "approved" : "imported";
     row.approvedAt = approved ? new Date() : null;
     row.approvedBy = approved ? actor : null;
-    return this.imports.save(row);
+    // Approving takes every row as it stands now, the waiting ones too.
+    return this.dataSource.transaction(async (manager) => {
+      if (approved) {
+        await manager.update(
+          ParkFacilityOsm,
+          { parkId },
+          { awaitingReview: false },
+        );
+      }
+      return manager.save(ParkFacilityImport, row);
+    });
   }
 
   async setHidden(
@@ -515,18 +550,23 @@ export class FacilitiesService {
   /**
    * What a visitor gets: null while the feature is off (the route is a 404),
    * an empty unavailable answer until the park is approved, else its rows of
-   * `FACILITY_TYPES` that are not hidden.
+   * `FACILITY_TYPES` that are neither hidden nor awaiting review. A park
+   * whose re-import brought new points keeps serving the approved ones.
    */
   async publicFor(parkId: string): Promise<PublicFacilities | null> {
     if (!facilitiesEnabled()) return null;
     const row = await this.imports.findOne({ where: { parkId } });
-    const rows =
-      row?.status === "approved"
-        ? await this.facilities.find({
-            where: { parkId, hidden: false, type: In([...FACILITY_TYPES]) },
-            order: { type: "ASC", osmId: "ASC" },
-          })
-        : [];
+    const rows = row?.approvedAt
+      ? await this.facilities.find({
+          where: {
+            parkId,
+            hidden: false,
+            awaitingReview: false,
+            type: In([...FACILITY_TYPES]),
+          },
+          order: { type: "ASC", osmId: "ASC" },
+        })
+      : [];
     return {
       parkId,
       // Also false when the last visible point was hidden after approval.

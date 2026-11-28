@@ -4,7 +4,9 @@ import type { OsmElementType, OutlineRings } from "../facility.types";
 
 /**
  * `pending`: no import has succeeded yet (no outline found, or it failed).
- * `imported`: rows are there and nobody approved them. `approved`: served.
+ * `imported`: rows are there that nobody approved yet; with `approvedAt` set,
+ * the park was approved before and its approved rows are still served.
+ * `approved`: everything is approved and served.
  */
 export type FacilityReviewStatus = "pending" | "imported" | "approved";
 
@@ -15,8 +17,10 @@ export type FacilityRunOutcome = "ok" | "no_outline" | "failed";
  * The state of a park's facility import: which OSM outline it was cut with,
  * how the last attempt ended, and whether somebody has looked at the result.
  *
- * Only `approved` rows are served. An import that brings something a visitor
- * would newly see puts an approved park back to `imported`; a failed attempt
+ * A park with `approvedAt` serves its rows that are neither hidden nor
+ * `awaitingReview`. An import that brings something a visitor would newly see
+ * marks those rows and puts the park back to `imported`, and the rest stays
+ * served until the next approval takes the new ones too; a failed attempt
  * changes neither the rows nor the review state.
  */
 @Entity("park_facility_imports")
@@ -62,6 +66,10 @@ export class ParkFacilityImport {
   @Column({ name: "last_run_message", type: "text", nullable: true })
   lastRunMessage: string | null;
 
+  /**
+   * The last approval, kept while later points await review: set means the
+   * park is served. Withdrawing clears it.
+   */
   @Column({ name: "approved_at", type: "timestamptz", nullable: true })
   approvedAt: Date | null;
 

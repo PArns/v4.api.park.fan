@@ -128,11 +128,11 @@ License. That is ODbL 4.3 and the OSMF's
    redeploy. Approved parks are served from then on; every other park answers
    `available: false`.
 6. **Later:** "Neu einlesen" on a park after correcting something in OpenStreetMap (Overpass lags
-   the edit by a few minutes). A re-import that brings a new point puts the park back to review.
-7. **Sights (PAR-1459):** the first import after the deploy that brought them reads them too. An
-   approved park that maps a sight goes back to `imported` then, and serves nothing until it is
-   approved again; one without sights stays approved. Re-import the parks that should show
-   sights (Efteling first), look at the new points, approve.
+   the edit by a few minutes). A re-import that brings a new point puts the park back to review;
+   what was approved stays served, and only the new point waits.
+7. **Sights (PAR-1459):** "Alle neu einlesen" reads them for every park. A park that maps a sight
+   goes back to "Zu prüfen" with its sights waiting, its toilets and drinking water still served;
+   one without sights stays approved. Look at the new points, approve.
 
 ## Import and review (admin)
 
@@ -145,13 +145,14 @@ Nothing is imported on a schedule or at boot. Imports are jobs on the `facilitie
 | `POST approve-all` `{ dryRun? }`   | editor | the bulk approval; `dryRun` defaults to `true` and only counts          |
 | `GET {parkId}`                     | viewer | the import's state with the outline's rings, and every row, hidden too  |
 | `POST {parkId}/import[?boundary=]` | editor | queues this park's import, optionally with a named outline              |
-| `POST {parkId}/approve`            | editor | serves the park's rows; 409 without a visible row                       |
+| `POST {parkId}/approve`            | editor | serves the park's rows, the waiting ones too; 409 without a visible row |
 | `POST {parkId}/withdraw`           | editor | stops serving them                                                      |
 | `POST {parkId}/points/{id}/hide`   | editor | leaves one point out of the public answer                               |
 | `POST {parkId}/points/{id}/show`   | editor | serves it again                                                         |
 
 - **State per park** (`park_facility_imports`): `status` is `pending` (no import has gone
-  through), `imported` (rows are there, nobody approved them) or `approved`; `lastRun` is `ok`,
+  through), `imported` (rows are there that nobody approved) or `approved`; `approvedAt` is the
+  last approval, and while it is set the park is served, also in `imported`. `lastRun` is `ok`,
   `no_outline` or `failed`, with `lastRunAt` and, when it was not `ok`, `lastRunMessage`. A park
   never tried has no row and is listed with `status: "none"`. A failed run changes neither the
   rows nor `status`: an approved park stays approved and served.
@@ -167,12 +168,17 @@ Nothing is imported on a schedule or at boot. Imports are jobs on the `facilitie
   answer for a park that has rows changes nothing and fails the run.
 - **Review state.** A first import is `imported` and not served. A park without a visible row
   cannot be approved (409): an approved empty list would say "no toilets here". A later import
-  that brings a new point, or changes something a client shows, puts an approved park back to
-  `imported`; a removal or a bare version bump does not.
+  that brings a new point, or changes something a client shows, marks that row `awaitingReview`
+  and puts the park back to `imported`; a removal or a bare version bump does not. Until the next
+  approval the park keeps serving every row that is not waiting, so a new sight never takes a
+  park's toilets offline (before PAR-1459 the whole park went dark). Approving takes every row as
+  it stands, the waiting ones too; withdrawing clears `approvedAt` and serves nothing.
 - **`insideOutline`** on a row (admin only): false for a building whose centre falls outside the
   outline it touches. Such a park is reviewed by hand.
 - **Counts** per park: `toilets`, `drinkingWater`, `sights` (visible points of each type),
-  `hidden`, and `outside` (visible points whose position lies outside the outline).
+  `hidden`, `outside` (visible points whose position lies outside the outline) and
+  `awaitingReview` (visible points new or changed since the last approval, not served yet). Each
+  row of `GET {parkId}` carries `awaitingReview` too.
 - **The bulk approval** (`isBulkApprovable`): `status` is `imported`, the last run was `ok`, at
   least three visible points of any type, none of them outside the outline.
 - **Wrong point?** Correct it in OpenStreetMap and import again. `hide` is for a point that is
@@ -254,7 +260,7 @@ What follows is park.fan's reading of the licence and the OSMF guidelines, not l
   Corrections go to OpenStreetMap, where the next import picks them up. And nothing is ever
   copied into OSM from a park's own map, from Apple Maps or from Google Maps: OSM's terms and
   theirs both forbid it. Being there, or imagery OSM licenses, is the source.
-- **`hidden`, `insideOutline` and the review state** are park.fan's own columns. They leave rows
+- **`hidden`, `insideOutline`, `awaitingReview` and the review state** are park.fan's own columns. They leave rows
   out and change none; what is served is always a subset of OSM.
 
 ## Code

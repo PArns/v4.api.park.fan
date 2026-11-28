@@ -93,13 +93,18 @@ function setup(
       };
     }),
   };
+  // A plain value, or a FindOperator In([...]).
+  const fits = (value: unknown, wanted: unknown) =>
+    wanted === undefined ||
+    (typeof wanted === "object" && wanted !== null && "value" in wanted
+      ? (wanted as { value: unknown[] }).value.includes(value)
+      : value === wanted);
   const matches = (row: ParkFacilityOsm, where: Record<string, unknown>) =>
-    (where.parkId === undefined || row.parkId === where.parkId) &&
-    (where.id === undefined || row.id === where.id) &&
-    (where.hidden === undefined || row.hidden === where.hidden) &&
-    (where.type === undefined ||
-      // FindOperator In([...])
-      (where.type as { value: string[] }).value.includes(row.type));
+    fits(row.parkId, where.parkId) &&
+    fits(row.id, where.id) &&
+    fits(row.hidden, where.hidden) &&
+    fits(row.awaitingReview, where.awaitingReview) &&
+    fits(row.type, where.type);
   const manager = {
     delete: async (_: unknown, ids: string[]) => {
       for (const id of ids) {
@@ -109,16 +114,33 @@ function setup(
         );
       }
     },
-    update: async (_: unknown, id: string, patch: Partial<ParkFacilityOsm>) => {
-      Object.assign(
-        rows.find((r) => r.id === id)!,
-        patch,
-      );
+    update: async (
+      entity: { name: string },
+      where: string | Record<string, unknown>,
+      patch: Record<string, unknown>,
+    ) => {
+      if (entity.name === "ParkFacilityImport") {
+        for (const state of states.values()) {
+          const w = where as Record<string, unknown>;
+          if (fits(state.parkId, w.parkId) && fits(state.status, w.status)) {
+            Object.assign(state, patch);
+          }
+        }
+        return;
+      }
+      for (const row of rows) {
+        if (
+          typeof where === "string" ? row.id === where : matches(row, where)
+        ) {
+          Object.assign(row, patch);
+        }
+      }
     },
     insert: async (_: unknown, values: Partial<ParkFacilityOsm>[]) => {
       for (const value of values) {
         rows.push({
           hidden: false,
+          awaitingReview: false,
           ...value,
           id: `f${nextId++}`,
         } as ParkFacilityOsm);
@@ -126,6 +148,7 @@ function setup(
     },
     save: async (_: unknown, value: ParkFacilityImport) => {
       states.set(value.parkId, { ...value });
+      return value;
     },
   };
   const service = new FacilitiesService(
@@ -181,7 +204,8 @@ function setup(
     } as unknown as Repository<ParkFacilityImport>,
     overpass as unknown as OverpassClient,
     {
-      transaction: (run: (m: typeof manager) => Promise<void>) => run(manager),
+      transaction: (run: (m: typeof manager) => Promise<unknown>) =>
+        run(manager),
     } as unknown as DataSource,
   );
   return {
@@ -314,14 +338,45 @@ describe("FacilitiesService", () => {
       expect(await service.publicFor(PARK)).toMatchObject({ available: false });
     });
 
-    it("stops serving when a re-import brings a point nobody saw", async () => {
-      const { service, answer, state } = await approvedPark();
-      answer([toilet(1), toilet(2), toilet(3)]);
+    it("keeps serving what was approved while a new point waits for review", async () => {
+      const { service, answer, state, rows } = await approvedPark();
+      answer([
+        toilet(1),
+        toilet(2),
+        toilet(3, { amenity: "waste_basket", name: "Opa Gijs" }),
+      ]);
       expect(await service.importPark(PARK)).toMatchObject({
         status: "imported",
         inserted: 1,
       });
-      expect(state()).toMatchObject({ approvedAt: null, approvedBy: null });
+      expect(state()).toMatchObject({ approvedBy: "admin@example.org" });
+      expect(rows.map((r) => r.awaitingReview)).toEqual([false, false, true]);
+      const served = await service.publicFor(PARK);
+      expect(served!.available).toBe(true);
+      expect(served!.facilities.map((f) => f.osm.id)).toEqual(["1", "2"]);
+
+      await service.setApproved(PARK, true, "admin@example.org");
+      expect(rows.map((r) => r.awaitingReview)).toEqual([false, false, false]);
+      expect((await service.publicFor(PARK))!.facilities).toHaveLength(3);
+    });
+
+    it("holds back a point whose shown fields changed until it is approved again", async () => {
+      const { service, answer } = await approvedPark();
+      answer([toilet(1, { wheelchair: "yes" }), toilet(2)]);
+      expect(await service.importPark(PARK)).toMatchObject({
+        status: "imported",
+        updated: 1,
+      });
+      expect(
+        (await service.publicFor(PARK))!.facilities.map((f) => f.osm.id),
+      ).toEqual(["2"]);
+    });
+
+    it("serves nothing of a withdrawn park, even after a re-import", async () => {
+      const { service, answer } = await approvedPark();
+      await service.setApproved(PARK, false, "admin@example.org");
+      answer([toilet(1), toilet(2), toilet(3)]);
+      await service.importPark(PARK);
       expect(await service.publicFor(PARK)).toMatchObject({
         available: false,
         facilities: [],
@@ -550,6 +605,7 @@ describe("FacilitiesService", () => {
       sights: 0,
       hidden: 0,
       outside: 0,
+      awaitingReview: 3,
     };
 
     it.each([
@@ -649,11 +705,13 @@ describe("FacilitiesService", () => {
         sights: 1,
         hidden: 0,
         outside: 0,
+        // A first import: everything waits for the first approval.
+        awaitingReview: 3,
       });
     });
 
     it("previews without approving, then approves exactly those parks", async () => {
-      const { service, state } = await twoParks();
+      const { service, state, rows } = await twoParks();
       expect(await service.approveAll("admin@example.org", true)).toEqual({
         dryRun: true,
         count: 1,
@@ -671,6 +729,9 @@ describe("FacilitiesService", () => {
         status: "approved",
         approvedBy: "admin@example.org",
       });
+      expect(
+        rows.filter((r) => r.parkId === PARK).map((r) => r.awaitingReview),
+      ).toEqual([false, false, false, false]);
       expect(state(OTHER)!.status).toBe("imported");
       expect((await service.approveAll("admin@example.org", false)).count).toBe(
         0,
