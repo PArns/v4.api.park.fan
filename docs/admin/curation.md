@@ -207,7 +207,17 @@ on the page, and leaves no audit row.
   resolved season beside the raw columns: `isSeasonal`, `seasonMonths`, `seasonalityCurated`, and
   `boundSeason` and `pausedBySeason` where a park season binds or pauses the ride, in the public
   `SeasonBinding` shape (`id`, `kind`, `name`, `status`, `startDate`, `endDate`, `dates`) and picked
-  on the park's today by `boundSeasonOf`, as the public payload picks them.
+  on the park's today by `boundSeasonOf`, as the public payload picks them. Its kind is three
+  fields: `attractionKind`, the editor's raw column (null when nobody decided, so the select can
+  tell an unchecked row from an unchanged one), `derivedAttractionKind`, the nightly rule's
+  `derived_attraction_kind` or null, and `attractionKindSource`, `curated`, `derived` or null by
+  `resolveAttractionKind`, which the public payloads serve through
+  ([attraction kind](../frontend/attraction-kind.md)). The kind a reader is shown is
+  `attractionKind ?? derivedAttractionKind`.
+- **The kind in the field view:** the `attractionKind` descriptor has no synced key, and its
+  `resolvedValue` is the served kind, the derived one where no editor chose one, the way a synced
+  field shows the upstream value. A derived kind is not an override; clearing the field (null)
+  hands the ride back to the rule.
 - **A whole park's list at once:** `PATCH /v1/admin/content/parks/:id/attractions` (the fast-pass table —
   forty single PATCHes would each fire a revalidation). Each ride keeps its own diff and audit row; the
   publish happens once. Every entry is validated before any is written, so a ride from another park or an

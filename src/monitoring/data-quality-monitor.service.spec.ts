@@ -84,7 +84,10 @@ describe("DataQualityMonitorService", () => {
           park_id: "p",
           park_name: "Magic Kingdom Park",
           attractions: 38,
-          without_kind: ["Astro Orbiter", "Dumbo the Flying Elephant"],
+          without_kind: [
+            { id: "a1", name: "Astro Orbiter", slug: "astro-orbiter" },
+            { id: "d1", name: "Dumbo the Flying Elephant", slug: "dumbo" },
+          ],
         },
       ]);
       expect(await build(query).findAttractionsWithoutKind()).toEqual([
@@ -93,6 +96,10 @@ describe("DataQualityMonitorService", () => {
           parkName: "Magic Kingdom Park",
           attractions: 38,
           withoutKind: ["Astro Orbiter", "Dumbo the Flying Elephant"],
+          withoutKindRefs: [
+            { id: "a1", name: "Astro Orbiter", slug: "astro-orbiter" },
+            { id: "d1", name: "Dumbo the Flying Elephant", slug: "dumbo" },
+          ],
         },
       ]);
       const sql = query.mock.calls[0][0] as string;

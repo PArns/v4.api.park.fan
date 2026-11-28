@@ -1,6 +1,7 @@
 import type { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import { resolveAttractionKind } from "../../attractions/utils/attraction-kind-rule";
 import {
   FUN_FACT_COLUMNS,
   type FunFactLocale,
@@ -171,9 +172,11 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "Wofür die Attraktion da ist, nicht wie der Upstream sie nennt — das " +
       'steht eine Zeile höher unter „Art". „Transport" ist der Grund für ' +
       "dieses Feld: Parkbahn, Seilbahn, Monorail. Deren Wartezeit hängt am " +
-      "Takt und nicht am Andrang. Leer heißt „noch nicht entschieden“ und " +
-      'nicht „Fahrgeschäft" — ableiten lässt sich das nicht, Big Thunder ' +
-      "Mountain Railroad ist eine Achterbahn.",
+      "Takt und nicht am Andrang. Leer lassen heißt: es gilt, was die " +
+      "nächtliche Regel aus Ride-Profil, Mindestgröße und Name ableitet; " +
+      "findet sie nichts, bleibt die Gattung offen und wird nicht zu " +
+      "„Fahrgeschäft“. Den Namen liest die Regel bei Headlinern nicht: Big " +
+      "Thunder Mountain Railroad ist eine Achterbahn.",
   },
   {
     key: "curatedMinimumHeight",
@@ -840,10 +843,16 @@ function buildViews(
 export function attractionFieldViews(
   attraction: Attraction,
 ): CuratedFieldView[] {
+  // The kind has its own resolver, the one both payloads serve through, so a
+  // row nobody filed shows the rule's kind as served, as a synced field shows
+  // the upstream value.
   return buildViews(
     ATTRACTION_CURATED_FIELDS,
     attraction as unknown as Record<string, unknown>,
-    resolveCuratedFacts(attraction) as unknown as Record<string, unknown>,
+    {
+      ...resolveCuratedFacts(attraction),
+      ...resolveAttractionKind(attraction),
+    } as unknown as Record<string, unknown>,
   );
 }
 

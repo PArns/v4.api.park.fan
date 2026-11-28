@@ -119,6 +119,11 @@ export interface AttractionsWithoutKind {
   attractions: number;
   /** Resolved names of the ones without a kind, by name. */
   withoutKind: string[];
+  /**
+   * The same rows in the same order with id and slug, so a client acts on a
+   * row without matching it by name: two rides of a park can share one.
+   */
+  withoutKindRefs: Array<{ id: string; name: string; slug: string }>;
 }
 
 /**
@@ -347,13 +352,16 @@ export class DataQualityMonitorService {
       park_id: string;
       park_name: string;
       attractions: number;
-      without_kind: string[];
+      without_kind: Array<{ id: string; name: string; slug: string }>;
     }> = await this.dataSource.query(`
       SELECT p.id AS park_id,
              p.name AS park_name,
              count(*)::int AS attractions,
-             array_agg(COALESCE(NULLIF(btrim(a.curated_name), ''), a.name)
-                       ORDER BY COALESCE(NULLIF(btrim(a.curated_name), ''), a.name))
+             json_agg(json_build_object(
+                        'id', a.id,
+                        'name', COALESCE(NULLIF(btrim(a.curated_name), ''), a.name),
+                        'slug', a.slug)
+                      ORDER BY COALESCE(NULLIF(btrim(a.curated_name), ''), a.name), a.id)
                FILTER (WHERE a.attraction_kind IS NULL
                          AND a.derived_attraction_kind IS NULL) AS without_kind
         FROM attractions a
@@ -371,7 +379,8 @@ export class DataQualityMonitorService {
       parkId: r.park_id,
       parkName: r.park_name,
       attractions: r.attractions,
-      withoutKind: r.without_kind,
+      withoutKind: r.without_kind.map((ride) => ride.name),
+      withoutKindRefs: r.without_kind,
     }));
   }
 

@@ -35,6 +35,8 @@ import {
   type CuratedFieldSpec,
   type CuratedFieldView,
 } from "../../admin/content/curated-field.spec-list";
+import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
+import { resolveAttractionName } from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * The admin's park and ride editors: the curated columns beside the synced
@@ -70,6 +72,15 @@ const FIELDS = z
       "curatedSeasonMonths …); null clears a correction and accepts the synced value again, a " +
       "key left out stays as it is",
   );
+
+/**
+ * What a model needs to know to set a kind: the values, that null hands the
+ * ride back to the rule, and that an editor's kind outlives every rule change.
+ */
+const KIND_FIELD =
+  `attractionKind takes ${ATTRACTION_KIND_VALUES.join(", ")}; null clears the editor's kind ` +
+  "and the ride serves the kind the nightly rule derives (from the ride profile's type tags, " +
+  "a minimum height, the name), or none. An editor's kind is final and outlives any rule change";
 
 /** A field descriptor without what the model does not need to choose a value. */
 function specView(spec: CuratedFieldSpec) {
@@ -121,7 +132,8 @@ export const curationFieldsTool = defineMcpTool({
   description:
     "The fields the admin's park or ride editor writes, with type, options and bounds, and with " +
     "an id the values one row has: synced (what the source says), curated (what a person wrote) " +
-    "and served (what the API shows). Read it before curate_park, curate_attraction or " +
+    "and served (what the API shows; for attractionKind the rule's derived kind where no editor " +
+    "chose one). Read it before curate_park, curate_attraction or " +
     "curate_park_attractions, which take these keys. A ride's seasonal flag and months " +
     "(curatedIsSeasonal, curatedSeasonMonths) answer the data-quality 'season or gone?' list.",
   input: {
@@ -217,7 +229,8 @@ export const curateAttractionTool = defineMcpTool({
     "and the rest curation_fields lists. Only the curated cell is written; the park is published " +
     "again. A value equal to the stored one writes nothing. Answers the fields that changed and " +
     "the audit id, which undo_curation takes back. Before renaming, look for a second row of the " +
-    "same ride in the park (find_attractions, duplicates): two rows are merged, not renamed.",
+    "same ride in the park (find_attractions, duplicates): two rows are merged, not renamed. " +
+    `${KIND_FIELD}.`,
   minRole: "editor",
   writes: "change",
   input: {
@@ -252,11 +265,14 @@ export const curateParkAttractionsTool = defineMcpTool({
   title: "Curate several rides",
   description:
     "Writes curated fields on several rides of one park at once, as the admin's fast-pass table " +
-    "and the data-quality 'season or gone?' answer do: { curatedIsSeasonal: true, " +
-    "curatedSeasonMonths: [9, 10] } for a seasonal ride, { curatedIsSeasonal: false } for one " +
-    "that is gone. Every entry is checked before any is written; each ride gets its own audit " +
-    "row (undo_curation per ride) and the park is published once. Answers per ride the fields " +
-    "that changed and the audit id.",
+    "and the data-quality answers do: { curatedIsSeasonal: true, curatedSeasonMonths: [9, 10] } " +
+    "for a seasonal ride, { curatedIsSeasonal: false } for one that is gone, { attractionKind: " +
+    '"SHOW" } for a ride without a kind (data_quality\'s withoutKindRefs). adoptDerivedKind ' +
+    "takes rides whose served kind is the rule's (get_attraction facts.kindSource derived) and " +
+    "makes it the editor's, so a later rule no longer changes it. Every entry is checked before " +
+    "any is written; each ride gets its own audit row (undo_curation per ride) and the park is " +
+    "published once. Answers per ride the fields that changed and the audit id. " +
+    `${KIND_FIELD}.`,
   minRole: "editor",
   writes: "change",
   input: {
@@ -268,19 +284,42 @@ export const curateParkAttractionsTool = defineMcpTool({
           fields: FIELDS,
         }),
       )
-      .min(1)
       .max(100)
+      .default([])
       .describe("One entry per ride that changes"),
+    adoptDerivedKind: z
+      .array(uuidInput().describe("Ride id, in this park"))
+      .max(100)
+      .default([])
+      .describe(
+        "Rides whose derived kind becomes the editor's attractionKind; one without a derived " +
+          "kind or with an editor's kind already is refused, and so is a ride also in entries",
+      ),
     reason: REASON,
     sourceUrl: SOURCE_URL,
   },
-  async handler({ parkId, entries, reason, sourceUrl }, ctx) {
+  async handler({ parkId, entries, adoptDerivedKind, reason, sourceUrl }, ctx) {
     const id = parkId.toLowerCase();
+    const named = entries.map((entry) => ({
+      id: entry.id.toLowerCase(),
+      fields: entry.fields,
+    }));
+    const adopt = [
+      ...new Set(adoptDerivedKind.map((ride) => ride.toLowerCase())),
+    ];
+    if (named.length + adopt.length === 0) {
+      throw new McpToolError("Send entries, adoptDerivedKind or both");
+    }
+    if (named.length + adopt.length > 100) {
+      throw new McpToolError("At most 100 rides a call");
+    }
+    const adopted = await derivedKindEntries(
+      ctx.get(AdminCurationService),
+      adopt,
+      new Set(named.map((entry) => entry.id)),
+    );
     const body = await routeBody(BulkCurationDto, {
-      entries: entries.map((entry) => ({
-        id: entry.id.toLowerCase(),
-        fields: entry.fields,
-      })),
+      entries: [...named, ...adopted],
       reason,
       sourceUrl,
     });
@@ -298,6 +337,43 @@ export const curateParkAttractionsTool = defineMcpTool({
     );
   },
 });
+
+/**
+ * The bulk entries that make each ride's derived kind the editor's. Read from
+ * the row as the route reads it, so the value written is the one served now;
+ * the route then checks the park and the value like any other entry.
+ */
+async function derivedKindEntries(
+  curation: AdminCurationService,
+  ids: readonly string[],
+  named: ReadonlySet<string>,
+): Promise<Array<{ id: string; fields: { attractionKind: string } }>> {
+  const entries: Array<{ id: string; fields: { attractionKind: string } }> = [];
+  for (const id of ids) {
+    if (named.has(id)) {
+      throw new McpToolError(
+        `Ride ${id} is in entries and adoptDerivedKind; send it once`,
+      );
+    }
+    const ride = await asToolRefusal(() => curation.findAttraction(id));
+    const name = resolveAttractionName(ride);
+    if (ride.attractionKind) {
+      throw new McpToolError(
+        `"${name}" already has an editor's kind (${ride.attractionKind}); leave it out`,
+      );
+    }
+    if (!ride.derivedAttractionKind) {
+      throw new McpToolError(
+        `"${name}" has no derived kind to adopt; name its kind in entries`,
+      );
+    }
+    entries.push({
+      id,
+      fields: { attractionKind: ride.derivedAttractionKind },
+    });
+  }
+  return entries;
+}
 
 export const verifyParkTool = defineMcpTool({
   name: "verify_park",

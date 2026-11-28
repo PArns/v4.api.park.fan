@@ -52,6 +52,27 @@ Measured on the payloads of 2026-11-27: Phantasialand 40 rides → 32 `RIDE` (21
 11 by height), 1 `WALKTHROUGH`, 7 unknown; Magic Kingdom 38 → 18 `RIDE`, 3 `SHOW`,
 3 `TRANSPORT`, 1 `WALKTHROUGH`, 13 unknown.
 
+## In the admin
+
+The admin reads both columns apart, so an editor sees what the rule did without the rule's
+value landing in the editor's column:
+
+- **The park's ride list** (`GET /v1/admin/content/parks/:id/attractions`) carries per ride
+  `attractionKind` (the editor's column, raw), `derivedAttractionKind` (the rule's, or null)
+  and `attractionKindSource` (`curated`, `derived` or null, as above). What a reader is
+  shown is `attractionKind ?? derivedAttractionKind`.
+- **The ride editor's field view** serves the derived kind as the `attractionKind` field's
+  `resolvedValue` where no editor chose one; `curatedValue` stays the editor's column. Null
+  written there clears the editor's kind and the ride falls back to the derived one.
+- **The data-quality report** lists per park the rows with neither (`attractionsWithoutKind`):
+  `withoutKind`, their names, and `withoutKindRefs`, the same rows in the same order as
+  `{ id, name, slug }`, so a client acts on a row without matching it by name. The names stay
+  for clients that read only them.
+
+([curation](../admin/curation.md), and the MCP tools `curate_attraction`,
+`curate_park_attractions` with `adoptDerivedKind`, and `data_quality`:
+[admin MCP](../admin/mcp.md).)
+
 ## Null is not `RIDE`
 
 `null` means neither an editor nor the rule could tell. Render nothing for it; treating
