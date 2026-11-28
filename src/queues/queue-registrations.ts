@@ -114,7 +114,13 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   },
   { name: "geoip-update" }, // GeoLite2-City every 48h
   { name: "nf-training" }, // TFT train (persists tft_forecasts)
-  { name: "pcn-shadow" }, // PCN train + forecast + score ("shadow" is historical)
+  {
+    // PCN train + forecast + score ("shadow" is historical). train-pcn runs
+    // over an hour from 08:30 UTC; two deploys inside it failed the run on
+    // 2026-11-27 under Bull's default of one stall (PAR-1458).
+    name: "pcn-shadow",
+    settings: { maxStalledCount: 3 },
+  },
   {
     // Rope-drop: one LATERAL query per park over hourly-history slots +
     // pure aggregation. Lighter than p50-baseline (no fresh PERCENTILE
@@ -201,3 +207,15 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
     },
   },
 ];
+
+/**
+ * A queue's registration, for a module outside QueuesModule that injects it.
+ * Each `registerQueue` builds its own Bull queue and Nest hands the processor
+ * the one registered last, so a second registration by name alone ran the
+ * processor on Bull's defaults and the settings above never applied (PAR-1458).
+ */
+export function bullQueue(name: string): BullModuleOptions {
+  const registration = BULL_QUEUE_REGISTRATIONS.find((q) => q.name === name);
+  if (!registration) throw new Error(`Unknown Bull queue "${name}"`);
+  return registration;
+}

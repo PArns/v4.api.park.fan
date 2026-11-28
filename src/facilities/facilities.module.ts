@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../queues/queue-registrations";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AdminAuthModule } from "../admin/auth/admin-auth.module";
 import { Park } from "../parks/entities/park.entity";
@@ -19,7 +20,7 @@ import { OverpassClient } from "./overpass.client";
   imports: [
     TypeOrmModule.forFeature([Park, ParkFacilityOsm, ParkFacilityImport]),
     AdminAuthModule,
-    BullModule.registerQueue({ name: "facilities" }),
+    BullModule.registerQueue(bullQueue("facilities")),
   ],
   controllers: [FacilitiesController, AdminFacilitiesController],
   providers: [FacilitiesService, OverpassClient],

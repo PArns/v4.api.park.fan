@@ -1,5 +1,6 @@
 import { Module, forwardRef } from "@nestjs/common";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../queues/queue-registrations";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ParksController } from "./parks.controller";
 import { ParksService } from "./parks.service";
@@ -59,7 +60,7 @@ import { ParkSeasonsModule } from "./park-seasons.module";
 
 @Module({
   imports: [
-    BullModule.registerQueue({ name: "park-metadata" }),
+    BullModule.registerQueue(bullQueue("park-metadata")),
     TypeOrmModule.forFeature([
       Park,
       ParkSlugAlias,

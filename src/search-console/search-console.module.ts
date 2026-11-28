@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../queues/queue-registrations";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { RedisModule } from "../common/redis/redis.module";
 import { SearchConsoleBatch } from "./entities/search-console-batch.entity";
@@ -31,7 +32,7 @@ import { SearchConsoleService } from "./search-console.service";
       SearchConsoleReindexPage,
       SearchConsoleReindexRequest,
     ]),
-    BullModule.registerQueue({ name: "search-console" }),
+    BullModule.registerQueue(bullQueue("search-console")),
     RedisModule,
   ],
   controllers: [AdminSearchConsoleController],

@@ -40,12 +40,11 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { forwardRef } from "@nestjs/common";
 import { HolidaysModule } from "../holidays/holidays.module";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../queues/queue-registrations";
 
 @Module({
   imports: [
-    BullModule.registerQueue({
-      name: "ml-training",
-    }),
+    BullModule.registerQueue(bullQueue("ml-training")),
     WeatherModule,
     AnalyticsModule,
     forwardRef(() => ParksModule),

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../../queues/queue-registrations";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import { Park } from "../../parks/entities/park.entity";
@@ -49,7 +50,7 @@ import { AdminTicketsController } from "./admin-tickets.controller";
     // The queue CuratedDataProcessor already listens on for `revalidate-parks`.
     // Its name is a leftover from the removed seed and is kept because Bull
     // keys repeatable jobs by queue name.
-    BullModule.registerQueue({ name: "manual-metadata" }),
+    BullModule.registerQueue(bullQueue("manual-metadata")),
     ParkSeasonsModule,
     // Parky's key, model and daily budget, for the fun-fact translation.
     AssistantModule,

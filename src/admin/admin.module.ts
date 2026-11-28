@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../queues/queue-registrations";
 import { RedisModule } from "../common/redis/redis.module";
 import { ParksModule } from "../parks/parks.module";
 import { AdminWeatherClosureController } from "./admin-weather-closure.controller";
@@ -26,23 +27,23 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     RedisModule,
     ParksModule,
     AttractionsModule,
-    BullModule.registerQueue({ name: "holidays" }),
-    BullModule.registerQueue({ name: "park-metadata" }),
-    BullModule.registerQueue({ name: "park-enrichment" }),
-    BullModule.registerQueue({ name: "ml-training" }),
-    BullModule.registerQueue({ name: "nf-training" }),
-    BullModule.registerQueue({ name: "wait-times" }),
-    BullModule.registerQueue({ name: "downtime" }),
-    BullModule.registerQueue({ name: "weather-closure" }),
-    BullModule.registerQueue({ name: "children-metadata" }),
-    BullModule.registerQueue({ name: "six-flags-heights" }),
-    BullModule.registerQueue({ name: "ride-stats" }),
-    BullModule.registerQueue({ name: "manual-metadata" }),
-    BullModule.registerQueue({ name: "prediction-accuracy" }),
-    BullModule.registerQueue({ name: "analytics" }),
-    BullModule.registerQueue({ name: "pcn-shadow" }),
-    BullModule.registerQueue({ name: "park-day-operation" }),
-    BullModule.registerQueue({ name: "search-console" }),
+    BullModule.registerQueue(bullQueue("holidays")),
+    BullModule.registerQueue(bullQueue("park-metadata")),
+    BullModule.registerQueue(bullQueue("park-enrichment")),
+    BullModule.registerQueue(bullQueue("ml-training")),
+    BullModule.registerQueue(bullQueue("nf-training")),
+    BullModule.registerQueue(bullQueue("wait-times")),
+    BullModule.registerQueue(bullQueue("downtime")),
+    BullModule.registerQueue(bullQueue("weather-closure")),
+    BullModule.registerQueue(bullQueue("children-metadata")),
+    BullModule.registerQueue(bullQueue("six-flags-heights")),
+    BullModule.registerQueue(bullQueue("ride-stats")),
+    BullModule.registerQueue(bullQueue("manual-metadata")),
+    BullModule.registerQueue(bullQueue("prediction-accuracy")),
+    BullModule.registerQueue(bullQueue("analytics")),
+    BullModule.registerQueue(bullQueue("pcn-shadow")),
+    BullModule.registerQueue(bullQueue("park-day-operation")),
+    BullModule.registerQueue(bullQueue("search-console")),
   ],
   controllers: [
     AdminController,
