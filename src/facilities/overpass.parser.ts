@@ -115,13 +115,31 @@ export function pickBoundary(
 /**
  * The OSM tags that make an element one of `FACILITY_TYPES`, one filter per
  * line of the union. A sight needs a name: an unnamed bin is a bin, and an
- * unnamed statue is a pin that tells a visitor nothing.
+ * unnamed statue or fountain is a pin that tells a visitor nothing.
  */
 const TAG_FILTERS = [
   '["amenity"~"^(toilets|drinking_water)$"]',
-  '["amenity"="waste_basket"]["name"]',
-  '["tourism"="artwork"]["name"]',
+  '["amenity"~"^(waste_basket|fountain)$"]["name"]',
+  '["tourism"~"^(artwork|viewpoint)$"]["name"]',
+  '["historic"]["name"]',
 ];
+
+/**
+ * Whether the tags make a sight, name aside: a figure bin (Efteling's Holle
+ * Bolle Gijs), a fountain, an artwork, a viewpoint, or anything `historic`
+ * (Europa-Park's Schloss Balthasar, a vintage car on show). Never a ride:
+ * an element with an `attraction` tag is one of our rides mapped in OSM.
+ */
+function isSight(tags: Record<string, string>): boolean {
+  if (tags.attraction !== undefined) return false;
+  return (
+    tags.amenity === "waste_basket" ||
+    tags.amenity === "fountain" ||
+    tags.tourism === "artwork" ||
+    tags.tourism === "viewpoint" ||
+    (tags.historic !== undefined && tags.historic !== "no")
+  );
+}
 
 /**
  * One outline with its geometry, then everything of our types inside it with
@@ -151,10 +169,7 @@ function facilityType(tags: Record<string, string>): FacilityType | null {
     return tags.amenity;
   }
   const named = (tags.name ?? "").trim().length > 0;
-  return named &&
-    (tags.amenity === "waste_basket" || tags.tourism === "artwork")
-    ? "sight"
-    : null;
+  return named && isSight(tags) ? "sight" : null;
 }
 
 /** `access` values that mean a visitor cannot use it. */
@@ -202,9 +217,11 @@ function metres(a: ParsedFacility, b: ParsedFacility): number {
  * 2. nothing a visitor cannot use: `access` private, no, staff, employees,
  *    delivery. `customers` stays: inside the gate the customer is the visitor;
  * 3. no drinking water marked `drinking_water=no` or `drinking_water:legal=no`;
- * 4. a sight is a named `amenity=waste_basket` (a figure bin such as
- *    Efteling's Holle Bolle Gijs) or a named `tourism=artwork`; an element
- *    that is also a toilet or drinking water is that;
+ * 4. a sight is a named figure bin (`amenity=waste_basket`, such as
+ *    Efteling's Holle Bolle Gijs), fountain, `tourism=artwork`,
+ *    `tourism=viewpoint` or `historic=*`, and never an element with an
+ *    `attraction` tag (a ride); an element that is also a toilet or drinking
+ *    water is that;
  * 5. of two of one type within 15 m, one: a toilet block mapped as a building
  *    and again as a node inside it. The one with more of the tags we show
  *    stays, a node before an outline, the lower id last so the choice is stable.

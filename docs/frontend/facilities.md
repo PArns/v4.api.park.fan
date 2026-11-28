@@ -77,8 +77,9 @@ GET /v1/parks/{continent}/{country}/{city}/{park}/facilities
   have toilets and no drinking water: that type is then simply absent, and a client offers "nearest
   drinking water" only when the list holds one. A client ignores a type it does not know.
 - **`sight`** (since 2026-11-28, PAR-1459) is something to look at rather than to use: a named
-  figure bin (Efteling's eleven Holle Bolle Gijs, "Opa Gijs", "Kapitein Gijs" …) or a named statue,
-  sculpture or other artwork. Its `name` is always set; `wheelchair`, `changingTable` and `fee`
+  figure bin (Efteling's eleven Holle Bolle Gijs, "Opa Gijs", "Kapitein Gijs" …), statue or other
+  artwork, fountain, viewpoint or historic object (Europa-Park's Schloss Balthasar, the vintage
+  cars at Universal Studios Japan). Its `name` is always set; `wheelchair`, `changingTable` and `fee`
   are not. It is a layer to explore, with its own symbol and the name as its label, not a "nearest
   one": most parks map none, and then the type is simply absent.
 - **Per facility:** `id` (ours, stable across imports while the OSM element lives), `latitude`,
@@ -225,19 +226,23 @@ The rules are `parseFacilities` in `src/facilities/overpass.parser.ts`, and the 
 2. Not what a visitor cannot use: `access` = `private`, `no`, `staff`, `employees`, `delivery`.
    `customers` stays.
 3. No drinking water tagged `drinking_water=no` or `drinking_water:legal=no`.
-4. A sight is a **named** `amenity=waste_basket` (an ordinary bin has no name, a figure bin such
-   as Holle Bolle Gijs has one) or a **named** `tourism=artwork`. Without a name it is left out:
-   a pin that says nothing is of no use. An element that is also a toilet or drinking water is
-   that type, with its name (Efteling's Drinkebroer is drinking water).
+4. A sight is a **named** element of one of these: `amenity=waste_basket` (an ordinary bin has
+   no name, a figure bin such as Holle Bolle Gijs has one), `amenity=fountain`,
+   `tourism=artwork`, `tourism=viewpoint`, or any `historic=*` but `no`. Without a name it is left
+   out: a pin that says nothing is of no use. An element with an `attraction=*` tag is never a
+   sight: that is a ride, and our rides are on the map already. An element that is also a toilet
+   or drinking water is that type, with its name (Efteling's Drinkebroer is drinking water).
 5. Of two of one type within 15 m, one: the one with more of the tags we show, a node before
    an outline. Its tags are not merged with the dropped twin's. Two sights are one only when
    they also carry the same name: Efteling's Reiziger and Reizigster stand a few metres apart.
 
 Not read as sights, on purpose: `tourism=attraction` without an `attraction=*` tag. At Efteling
 (51 such elements around the park on 2026-11-28) that is mostly the fairy tales of the
-Sprookjesbos, but in many parks it is also how rides are mapped, which would put our rides on the
-map a second time. Named fountains
-(`amenity=fountain`) and memorials (`historic=*`) are not read either.
+Sprookjesbos, but in many parks it is also how rides are mapped (Dorney Park's Meteor and
+Revolution, LEGOLAND Deutschland's 65 numbered stations), which would put our rides on the map a
+second time. A survey of the parks' outlines on 2026-11-28 chose the tags above: named artworks
+are the richest source (Europa-Park, Toverland, both Plopsalands), named bins exist at Efteling
+only.
 
 ## The ODbL and how we meet it
 

@@ -111,12 +111,46 @@ describe("parseFacilities", () => {
       });
     });
 
-    it("leaves an unnamed bin or artwork out", () => {
+    // Europa-Park, Efteling, Universal Studios Japan and Bellewaerde, as OSM has them.
+    it.each([
+      ["a fountain", { amenity: "fountain", name: "Europabrunnen" }],
+      ["a castle", { historic: "castle", name: "Schloss Balthasar" }],
+      ["a vintage car", { historic: "vehicle", name: "1956 Ford Thunderbird" }],
+      ["a tomb", { historic: "tomb", building: "yes", name: "Mausoleum" }],
+      ["a viewpoint", { tourism: "viewpoint", name: "Leeuwen" }],
+    ])("reads %s as a sight", (_what, tags) => {
+      expect(parseFacilities([node(1, tags)])).toEqual([
+        expect.objectContaining({ type: "sight", name: tags.name }),
+      ]);
+    });
+
+    it("leaves an unnamed bin, artwork, fountain or viewpoint out", () => {
       expect(
         parseFacilities([
           node(1, { amenity: "waste_basket", material: "metal" }),
           node(2, { amenity: "waste_basket", name: "  " }),
           node(3, { tourism: "artwork", artwork_type: "statue" }),
+          node(4, { amenity: "fountain" }),
+          node(5, { tourism: "viewpoint" }),
+          node(6, { historic: "memorial" }),
+        ]),
+      ).toEqual([]);
+    });
+
+    it("never takes a ride for a sight", () => {
+      expect(
+        parseFacilities([
+          node(1, {
+            historic: "yes",
+            attraction: "carousel",
+            name: "Stoomcarrousel",
+          }),
+          node(2, {
+            amenity: "fountain",
+            attraction: "water_ride",
+            name: "Splash",
+          }),
+          node(3, { historic: "no", name: "Nieuwbouw" }),
         ]),
       ).toEqual([]);
     });
@@ -183,7 +217,6 @@ describe("parseFacilities", () => {
         node(3, {}),
         // A fairy tale or a ride tagged as an attraction is not a sight (yet).
         node(4, { tourism: "attraction", name: "Roodkapje" }),
-        node(5, { amenity: "fountain", name: "Wensbron" }),
       ]),
     ).toEqual([]);
   });
@@ -349,8 +382,13 @@ describe("the queries", () => {
     expect(ql).toContain(
       'nwr["amenity"~"^(toilets|drinking_water)$"](area.a);',
     );
-    expect(ql).toContain('nwr["amenity"="waste_basket"]["name"](area.a);');
-    expect(ql).toContain('nwr["tourism"="artwork"]["name"](area.a);');
+    expect(ql).toContain(
+      'nwr["amenity"~"^(waste_basket|fountain)$"]["name"](area.a);',
+    );
+    expect(ql).toContain(
+      'nwr["tourism"~"^(artwork|viewpoint)$"]["name"](area.a);',
+    );
+    expect(ql).toContain('nwr["historic"]["name"](area.a);');
     expect(ql).toContain("out meta center;");
     expect(buildFacilitiesQuery({ type: "relation", id: "7" })).toContain(
       "rel(7)->.b;",
