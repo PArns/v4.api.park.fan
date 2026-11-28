@@ -113,7 +113,8 @@ export type AssistantCard =
       /** Where to walk inside a park: the widget points an arrow at it from the visitor's own position. */
       kind: "navigate";
       name: string;
-      place: "ride" | "show" | "restaurant" | "toilets" | "drinking_water";
+      place:
+        "ride" | "show" | "restaurant" | "toilets" | "drinking_water" | "sight";
       park: string;
       /** The target's position, never the visitor's. */
       latitude: number;

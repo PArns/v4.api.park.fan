@@ -1,7 +1,7 @@
 # Park facilities from OpenStreetMap (`/facilities`)
 
-Toilets and drinking water inside a park, read from OpenStreetMap, for a map layer and for "the
-nearest toilet". Open this before showing the points anywhere: the data is under the ODbL, and
+Toilets, drinking water and sights inside a park, read from OpenStreetMap, for a map layer and for
+"the nearest toilet". Open this before showing the points anywhere: the data is under the ODbL, and
 showing it comes with a credit that is not optional. The feature is switched off until the owner
 turns it on (`FACILITIES_ENABLED`, default `false`); [the steps](#after-a-deploy-the-owners-steps)
 are below.
@@ -40,6 +40,19 @@ GET /v1/parks/{continent}/{country}/{city}/{park}/facilities
       "longitude": 6.88102,
       "osm": { "type": "node", "id": "…", "version": 1, "timestamp": "…" },
     },
+    {
+      "id": "…",
+      "type": "sight",
+      "latitude": 51.64968,
+      "longitude": 5.04783,
+      "name": "Opa Gijs",
+      "osm": {
+        "type": "node",
+        "id": "7170488297",
+        "version": 5,
+        "timestamp": "…",
+      },
+    },
   ],
   "attribution": {
     "text": "© OpenStreetMap contributors",
@@ -60,9 +73,14 @@ GET /v1/parks/{continent}/{country}/{city}/{park}/facilities
   reviewed the park's import, or it has no outline in OSM. A client shows no layer and no "nearest
   toilet" then ([absent facts](../rules/absent-facts.md)). `available: true` always comes with at
   least one facility.
-- **`type`** is `toilets` or `drinking_water` (`FACILITY_TYPES`, the one list). A park may have
-  toilets and no drinking water: that type is then simply absent, and a client offers "nearest
+- **`type`** is `toilets`, `drinking_water` or `sight` (`FACILITY_TYPES`, the one list). A park may
+  have toilets and no drinking water: that type is then simply absent, and a client offers "nearest
   drinking water" only when the list holds one. A client ignores a type it does not know.
+- **`sight`** (since 2026-11-28, PAR-1459) is something to look at rather than to use: a named
+  figure bin (Efteling's eleven Holle Bolle Gijs, "Opa Gijs", "Kapitein Gijs" …) or a named statue,
+  sculpture or other artwork. Its `name` is always set; `wheelchair`, `changingTable` and `fee`
+  are not. It is a layer to explore, with its own symbol and the name as its label, not a "nearest
+  one": most parks map none, and then the type is simply absent.
 - **Per facility:** `id` (ours, stable across imports while the OSM element lives), `latitude`,
   `longitude` (WGS84; a building is placed at its centre), and, absent when OpenStreetMap does not
   say (null is stripped): `name`, `wheelchair` (`yes` | `limited` | `no`), `changingTable`, `fee`.
@@ -84,7 +102,8 @@ License. That is ODbL 4.3 and the OSMF's
   (an "i" button, the data sources page).
 - **The base map does not matter.** The credit is for the points. On an Apple map it stands
   beside Apple's own legal link and must not cover it; write it so nobody reads it as the
-  credit for the map itself, e.g. "Toilets and drinking water: © OpenStreetMap contributors".
+  credit for the map itself, e.g. "Toilets and drinking water: © OpenStreetMap contributors", or
+  "Toilets, drinking water and sights: …" with the layers it shows.
 - **In a list or a line of text** ("nearest toilet 80 m"): the credit sits on the same screen
   or in the sources sheet the screen links to, and OpenStreetMap is in the app's and the site's
   list of data sources with the link.
@@ -110,6 +129,10 @@ License. That is ODbL 4.3 and the OSMF's
    `available: false`.
 6. **Later:** "Neu einlesen" on a park after correcting something in OpenStreetMap (Overpass lags
    the edit by a few minutes). A re-import that brings a new point puts the park back to review.
+7. **Sights (PAR-1459):** the first import after the deploy that brought them reads them too. An
+   approved park that maps a sight goes back to `imported` then, and serves nothing until it is
+   approved again; one without sights stays approved. Re-import the parks that should show
+   sights (Efteling first), look at the new points, approve.
 
 ## Import and review (admin)
 
@@ -148,8 +171,10 @@ Nothing is imported on a schedule or at boot. Imports are jobs on the `facilitie
   `imported`; a removal or a bare version bump does not.
 - **`insideOutline`** on a row (admin only): false for a building whose centre falls outside the
   outline it touches. Such a park is reviewed by hand.
+- **Counts** per park: `toilets`, `drinkingWater`, `sights` (visible points of each type),
+  `hidden`, and `outside` (visible points whose position lies outside the outline).
 - **The bulk approval** (`isBulkApprovable`): `status` is `imported`, the last run was `ok`, at
-  least three visible points, none of them outside the outline.
+  least three visible points of any type, none of them outside the outline.
 - **Wrong point?** Correct it in OpenStreetMap and import again. `hide` is for a point that is
   right there and wrong for a visitor, e.g. a toilet inside the outline and outside the gates.
 
@@ -194,8 +219,19 @@ The rules are `parseFacilities` in `src/facilities/overpass.parser.ts`, and the 
 2. Not what a visitor cannot use: `access` = `private`, `no`, `staff`, `employees`, `delivery`.
    `customers` stays.
 3. No drinking water tagged `drinking_water=no` or `drinking_water:legal=no`.
-4. Of two of one type within 15 m, one: the one with more of the tags we show, a node before
-   an outline. Its tags are not merged with the dropped twin's.
+4. A sight is a **named** `amenity=waste_basket` (an ordinary bin has no name, a figure bin such
+   as Holle Bolle Gijs has one) or a **named** `tourism=artwork`. Without a name it is left out:
+   a pin that says nothing is of no use. An element that is also a toilet or drinking water is
+   that type, with its name (Efteling's Drinkebroer is drinking water).
+5. Of two of one type within 15 m, one: the one with more of the tags we show, a node before
+   an outline. Its tags are not merged with the dropped twin's. Two sights are one only when
+   they also carry the same name: Efteling's Reiziger and Reizigster stand a few metres apart.
+
+Not read as sights, on purpose: `tourism=attraction` without an `attraction=*` tag. At Efteling
+(51 such elements around the park on 2026-11-28) that is mostly the fairy tales of the
+Sprookjesbos, but in many parks it is also how rides are mapped, which would put our rides on the
+map a second time. Named fountains
+(`amenity=fountain`) and memorials (`historic=*`) are not read either.
 
 ## The ODbL and how we meet it
 

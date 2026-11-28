@@ -260,13 +260,14 @@ describe("FacilitiesService", () => {
       expect(JSON.stringify(answer)).not.toContain("insideOutline");
     });
 
-    it("serves toilets and drinking water and no other type, whatever the table holds", async () => {
-      expect(FACILITY_TYPES).toEqual(["toilets", "drinking_water"]);
+    it("serves toilets, drinking water and sights and no other type, whatever the table holds", async () => {
+      expect(FACILITY_TYPES).toEqual(["toilets", "drinking_water", "sight"]);
       const { service, rows, answer } = setup();
       answer([
         toilet(1, { wheelchair: "yes", changing_table: "yes" }),
         toilet(2, { amenity: "drinking_water" }),
         toilet(3, { amenity: "atm" }),
+        toilet(4, { amenity: "waste_basket", name: "Opa Gijs" }),
       ]);
       await service.importPark(PARK);
       // A row of a type the list no longer names, as an older import left it.
@@ -275,8 +276,12 @@ describe("FacilitiesService", () => {
       const served = (await service.publicFor(PARK))!.facilities;
       expect(served.map((f) => f.type).sort()).toEqual([
         "drinking_water",
+        "sight",
         "toilets",
       ]);
+      expect(served.find((f) => f.type === "sight")).toMatchObject({
+        name: "Opa Gijs",
+      });
       expect(served.find((f) => f.type === "toilets")).toMatchObject({
         wheelchair: "yes",
         changingTable: true,
@@ -539,13 +544,24 @@ describe("FacilitiesService", () => {
   });
 
   describe("the list and the bulk approval", () => {
-    const counts = { toilets: 3, drinkingWater: 0, hidden: 0, outside: 0 };
+    const counts = {
+      toilets: 3,
+      drinkingWater: 0,
+      sights: 0,
+      hidden: 0,
+      outside: 0,
+    };
 
     it.each([
       ["three points, all inside", {}, true],
       [
         "toilets and water count together",
         { counts: { ...counts, toilets: 2, drinkingWater: 1 } },
+        true,
+      ],
+      [
+        "sights count with them",
+        { counts: { ...counts, toilets: 1, sights: 2 } },
         true,
       ],
       ["two points", { counts: { ...counts, toilets: 2 } }, false],
@@ -607,10 +623,33 @@ describe("FacilitiesService", () => {
         country: "Germany",
         lastRun: "ok",
         boundary: { type: "way", id: "31052062", name: "Phantasialand" },
-        counts: { toilets: 3, drinkingWater: 0, hidden: 1, outside: 0 },
+        counts: {
+          toilets: 3,
+          drinkingWater: 0,
+          sights: 0,
+          hidden: 1,
+          outside: 0,
+        },
       });
       expect(list[1].counts).toMatchObject({ toilets: 3, outside: 1 });
       expect(list[2]).toMatchObject({ lastRun: null, boundary: null });
+    });
+
+    it("counts a sight as a sight, not as drinking water", async () => {
+      const { service, answer } = setup();
+      answer([
+        toilet(1),
+        toilet(2, { amenity: "drinking_water" }),
+        toilet(3, { tourism: "artwork", amenity: "", name: "Pardoesbeeld" }),
+      ]);
+      await service.importPark(PARK);
+      expect((await service.listParks())[0].counts).toEqual({
+        toilets: 1,
+        drinkingWater: 1,
+        sights: 1,
+        hidden: 0,
+        outside: 0,
+      });
     });
 
     it("previews without approving, then approves exactly those parks", async () => {

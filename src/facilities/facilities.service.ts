@@ -95,6 +95,7 @@ export interface FacilityParkRow {
   counts: {
     toilets: number;
     drinkingWater: number;
+    sights: number;
     hidden: number;
     /** Visible points whose position lies outside the outline. */
     outside: number;
@@ -102,6 +103,14 @@ export interface FacilityParkRow {
   /** Whether "approve all" would approve this park (`isBulkApprovable`). */
   bulkApprovable: boolean;
 }
+
+const emptyCounts = (): FacilityParkRow["counts"] => ({
+  toilets: 0,
+  drinkingWater: 0,
+  sights: 0,
+  hidden: 0,
+  outside: 0,
+});
 
 /** The fewest visible points a park needs for the bulk approval. */
 export const BULK_APPROVE_MIN_POINTS = 3;
@@ -114,7 +123,8 @@ export const BULK_APPROVE_MIN_POINTS = 3;
 export function isBulkApprovable(
   row: Pick<FacilityParkRow, "status" | "lastRun" | "counts">,
 ): boolean {
-  const visible = row.counts.toilets + row.counts.drinkingWater;
+  const visible =
+    row.counts.toilets + row.counts.drinkingWater + row.counts.sights;
   return (
     row.status === "imported" &&
     row.lastRun === "ok" &&
@@ -383,16 +393,12 @@ export class FacilitiesService {
     const stateOf = new Map(imports.map((row) => [row.parkId, row]));
     const counts = new Map<string, FacilityParkRow["counts"]>();
     for (const f of facilities) {
-      const c = counts.get(f.parkId) ?? {
-        toilets: 0,
-        drinkingWater: 0,
-        hidden: 0,
-        outside: 0,
-      };
+      const c = counts.get(f.parkId) ?? emptyCounts();
       if (f.hidden) c.hidden += 1;
       else {
         if (f.type === "toilets") c.toilets += 1;
-        else c.drinkingWater += 1;
+        else if (f.type === "drinking_water") c.drinkingWater += 1;
+        else c.sights += 1;
         if (!f.insideOutline) c.outside += 1;
       }
       counts.set(f.parkId, c);
@@ -417,12 +423,7 @@ export class FacilitiesService {
             : null,
         importedAt: state?.importedAt?.toISOString() ?? null,
         approvedAt: state?.approvedAt?.toISOString() ?? null,
-        counts: counts.get(park.id) ?? {
-          toilets: 0,
-          drinkingWater: 0,
-          hidden: 0,
-          outside: 0,
-        },
+        counts: counts.get(park.id) ?? emptyCounts(),
       };
       return { ...row, bulkApprovable: isBulkApprovable(row) };
     });

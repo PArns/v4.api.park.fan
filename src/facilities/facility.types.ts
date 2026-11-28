@@ -7,8 +7,12 @@
  * The types the import keeps and the public route serves: the one list. OSM
  * maps first aid, lockers, baby-care rooms and ATMs too thinly inside parks
  * (0 to 4 per park) for "the nearest one" to be true, so they are not read.
+ *
+ * `sight` is something to look at rather than to use: a named figure bin
+ * (Efteling's Holle Bolle Gijs) or a named artwork. It is a map layer, not a
+ * "nearest one": a park that maps none simply has no sight in its list.
  */
-export const FACILITY_TYPES = ["toilets", "drinking_water"] as const;
+export const FACILITY_TYPES = ["toilets", "drinking_water", "sight"] as const;
 export type FacilityType = (typeof FACILITY_TYPES)[number];
 
 export type OsmElementType = "node" | "way" | "relation";

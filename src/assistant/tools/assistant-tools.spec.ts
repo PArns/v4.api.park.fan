@@ -440,6 +440,7 @@ describe("get_best_days", () => {
 });
 import {
   foldText,
+  osmCreditLine,
   rideBadges,
   runAssistantTool,
   showsCard,
@@ -3484,6 +3485,17 @@ describe("places around the user and the way there", () => {
     changingTable: true,
     fee: null,
   };
+  // One of Efteling's figure bins, placed here beside Taron for the walk.
+  const sight = {
+    id: "1a7c3d5e-2b4f-4a6c-8e9d-0f1a2b3c4d5e",
+    type: "sight",
+    latitude: 50.7996,
+    longitude: 6.8826,
+    name: "Opa Gijs",
+    wheelchair: null,
+    changingTable: null,
+    fee: null,
+  };
   const providers = (available = true) =>
     new Map<unknown, unknown>([
       [
@@ -3524,7 +3536,7 @@ describe("places around the user and the way there", () => {
         {
           publicFor: jest.fn(async () => ({
             available,
-            facilities: available ? [toilet] : [],
+            facilities: available ? [toilet, sight] : [],
           })),
           parkIdOf: jest.fn(async (id: string) =>
             id === toilet.id ? PARK_ID : null,
@@ -3572,6 +3584,19 @@ describe("places around the user and the way there", () => {
     });
     expect(json.credit.say).toContain("OpenStreetMap");
     expect(JSON.stringify(json)).not.toContain("50.7994,");
+  });
+
+  it("lists sights with their name and credits OpenStreetMap for them", async () => {
+    const { json } = await run(
+      "find_nearby",
+      { park: PARK_ID, near: "Taron", kinds: ["sight"] },
+      providers(),
+    );
+    expect(json.sight).toEqual([
+      expect.objectContaining({ id: sight.id, name: "Opa Gijs" }),
+    ]);
+    expect(json.toilets).toBeUndefined();
+    expect(json.credit.say).toBe("Sights: © OpenStreetMap contributors");
   });
 
   it("says toilets are not mapped yet where the park has none approved", async () => {
@@ -3636,6 +3661,27 @@ describe("places around the user and the way there", () => {
         credit: { text: "© OpenStreetMap contributors" },
       },
     });
+    const gijs = await run(
+      "show_card",
+      { kind: "navigate", park: PARK_ID, to: sight.id },
+      providers(),
+    );
+    expect(gijs.action).toMatchObject({
+      card: {
+        name: "Opa Gijs",
+        place: "sight",
+        credit: { text: "© OpenStreetMap contributors" },
+      },
+    });
+  });
+
+  it("names the layers it credits OpenStreetMap for", () => {
+    expect(osmCreditLine(["toilets", "drinking_water"])).toBe(
+      "Toilets and drinking water: © OpenStreetMap contributors",
+    );
+    expect(osmCreditLine(["toilets", "drinking_water", "sight"])).toBe(
+      "Toilets, drinking water and sights: © OpenStreetMap contributors",
+    );
   });
 
   it("finds the park of a toilet from its id when park is left out (the production failure)", async () => {

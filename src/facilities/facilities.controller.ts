@@ -7,7 +7,7 @@ import { Park } from "../parks/entities/park.entity";
 import { FacilitiesService, type PublicFacilities } from "./facilities.service";
 
 /**
- * A park's toilets and drinking water from OpenStreetMap.
+ * A park's toilets, drinking water and sights from OpenStreetMap.
  *
  * Its own endpoint, like the seasons: the points change a few times a year
  * and the park payload is polled every five minutes. And an open route on
@@ -28,8 +28,9 @@ export class FacilitiesController {
   @ApiOperation({
     summary: "A park's facilities from OpenStreetMap",
     description:
-      "Toilets and drinking water inside the park's outline, © OpenStreetMap " +
-      "contributors, ODbL 1.0. `available: false` with an empty list means nobody has " +
+      "Toilets, drinking water and sights (named figure bins and artworks) inside the " +
+      "park's outline, © OpenStreetMap contributors, ODbL 1.0. A client ignores a `type` " +
+      "it does not know. `available: false` with an empty list means nobody has " +
       "reviewed this park yet, not that it has no toilets: show no layer. " +
       "Whoever shows the points credits OpenStreetMap as `attribution` says. " +
       "404 while the feature is switched off (`FACILITIES_ENABLED`).",

@@ -112,8 +112,16 @@ export function pickBoundary(
   );
 }
 
-/** The OSM tags that make an element one of `FACILITY_TYPES`. */
-const TAG_FILTER = '["amenity"~"^(toilets|drinking_water)$"]';
+/**
+ * The OSM tags that make an element one of `FACILITY_TYPES`, one filter per
+ * line of the union. A sight needs a name: an unnamed bin is a bin, and an
+ * unnamed statue is a pin that tells a visitor nothing.
+ */
+const TAG_FILTERS = [
+  '["amenity"~"^(toilets|drinking_water)$"]',
+  '["amenity"="waste_basket"]["name"]',
+  '["tourism"="artwork"]["name"]',
+];
 
 /**
  * One outline with its geometry, then everything of our types inside it with
@@ -128,13 +136,24 @@ export function buildFacilitiesQuery(boundary: {
 ${set}(${boundary.id})->.b;
 .b out geom;
 .b map_to_area->.a;
-nwr${TAG_FILTER}(area.a);
+(
+${TAG_FILTERS.map((filter) => `  nwr${filter}(area.a);`).join("\n")}
+);
 out meta center;`;
 }
 
+/**
+ * What an element is, the useful type first: a drinking fountain shaped as a
+ * statue is drinking water, with its name.
+ */
 function facilityType(tags: Record<string, string>): FacilityType | null {
-  return tags.amenity === "toilets" || tags.amenity === "drinking_water"
-    ? tags.amenity
+  if (tags.amenity === "toilets" || tags.amenity === "drinking_water") {
+    return tags.amenity;
+  }
+  const named = (tags.name ?? "").trim().length > 0;
+  return named &&
+    (tags.amenity === "waste_basket" || tags.tourism === "artwork")
+    ? "sight"
     : null;
 }
 
@@ -183,9 +202,14 @@ function metres(a: ParsedFacility, b: ParsedFacility): number {
  * 2. nothing a visitor cannot use: `access` private, no, staff, employees,
  *    delivery. `customers` stays: inside the gate the customer is the visitor;
  * 3. no drinking water marked `drinking_water=no` or `drinking_water:legal=no`;
- * 4. of two of one type within 15 m, one: a toilet block mapped as a building
+ * 4. a sight is a named `amenity=waste_basket` (a figure bin such as
+ *    Efteling's Holle Bolle Gijs) or a named `tourism=artwork`; an element
+ *    that is also a toilet or drinking water is that;
+ * 5. of two of one type within 15 m, one: a toilet block mapped as a building
  *    and again as a node inside it. The one with more of the tags we show
  *    stays, a node before an outline, the lower id last so the choice is stable.
+ *    Two sights are one only when they also carry the same name: a pair of
+ *    statues stands closer than that.
  *
  * A way or relation is placed at Overpass' `center`.
  */
@@ -241,6 +265,9 @@ export function parseFacilities(
     const twin = unique.some(
       (other) =>
         other.type === candidate.type &&
+        (candidate.type !== "sight" ||
+          normalizeForMatching(other.name) ===
+            normalizeForMatching(candidate.name)) &&
         metres(other, candidate) < DUPLICATE_DISTANCE_M,
     );
     if (!twin) unique.push(candidate);
