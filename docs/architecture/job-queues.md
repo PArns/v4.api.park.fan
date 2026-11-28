@@ -105,6 +105,14 @@ across the stall, and a run resumes after it. Its queue, `children-metadata`, al
 run under the default of one (PAR-1183). A longer `lockDuration` would not help here: the process is
 gone, and the lock only decides how soon the stall is noticed.
 
+A module that injects a queue registers it with `bullQueue("<name>")`, never with `{ name }` alone.
+Each `registerQueue` builds its own Bull queue, and Nest hands the processor the one registered
+last, so a registration by name alone ran the processor on Bull's defaults: `children-metadata`,
+`facilities`, `downtime`, `weather-closure` and `park-day-operation` never had their settings, and
+`sync-attraction-details` (2026-11-22) and the facilities import (2026-11-25) failed after two
+stalls with three allowed. `pcn-shadow` allows three as well, since `train-pcn` runs over an hour
+and two deploys failed it on 2026-11-27 (PAR-1458). `queue-registrations.spec.ts` holds the rule.
+
 ## Jobs only the admin starts
 
 `facilities` / `import` reads park facilities from OpenStreetMap, for one park or all of them. It

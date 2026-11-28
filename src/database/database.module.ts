@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { BullModule } from "@nestjs/bull";
+import { bullQueue } from "../queues/queue-registrations";
 import { TimescaleInitService } from "./timescale-init.service";
 import { DbSeedService } from "./db-seed.service";
 import { Park } from "../parks/entities/park.entity";
@@ -30,12 +31,12 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
       ScheduleEntry,
     ]),
     BullModule.registerQueue(
-      { name: "park-metadata" },
-      { name: "children-metadata" },
-      { name: "weather" },
-      { name: "holidays" },
-      { name: "wait-times" },
-      { name: "ml-training" },
+      bullQueue("park-metadata"),
+      bullQueue("children-metadata"),
+      bullQueue("weather"),
+      bullQueue("holidays"),
+      bullQueue("wait-times"),
+      bullQueue("ml-training"),
     ),
   ],
   providers: [TimescaleInitService, DbSeedService],
