@@ -169,14 +169,14 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     group: "Identität",
     options: ATTRACTION_KIND_VALUES,
     hint:
-      "Wofür die Attraktion da ist, nicht wie der Upstream sie nennt — das " +
-      'steht eine Zeile höher unter „Art". „Transport" ist der Grund für ' +
+      "Wofür die Attraktion da ist, nicht wie der Upstream sie nennt. Das " +
+      "steht eine Zeile höher unter „Art“. „Transport“ ist der Grund für " +
       "dieses Feld: Parkbahn, Seilbahn, Monorail. Deren Wartezeit hängt am " +
-      "Takt und nicht am Andrang. Leer lassen heißt: es gilt, was die " +
-      "nächtliche Regel aus Ride-Profil, Mindestgröße und Name ableitet; " +
-      "findet sie nichts, bleibt die Gattung offen und wird nicht zu " +
-      "„Fahrgeschäft“. Den Namen liest die Regel bei Headlinern nicht: Big " +
-      "Thunder Mountain Railroad ist eine Achterbahn.",
+      "Takt und nicht am Andrang. Bleibt das Feld leer, gilt die Gattung, " +
+      "die die API jede Nacht aus Ride-Profil, Mindestgröße und Name " +
+      "ableitet; findet sie keine, bleibt die Gattung offen und wird nicht " +
+      "zu „Fahrgeschäft“. Bei Headlinern zählt der Name nicht: Big Thunder " +
+      "Mountain Railroad ist trotz „Railroad“ eine Achterbahn.",
   },
   {
     key: "curatedMinimumHeight",
