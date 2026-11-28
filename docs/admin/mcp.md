@@ -1,7 +1,7 @@
 # Admin MCP server
 
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
-client) read the admin's data directly: parks and rides with their live state, popularity, the
+client) read the admin's data directly: parks and rides with their live state, the paid queue products per day, popularity, the app's news export, the
 site statistic and its SEO reports, the trip planner's usage and its server metrics, Parky's tool calls and his site events, Google Search Console, system and ML health, job queues, data-quality findings,
 duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. A token with the `admin:write` scope also writes, as an editor does in the admin: park seasons, the trip regions' ticket products and the editor's actions of the other admin pages; one with `admin:owner`, which only an owner gets, also does what only an owner may ([writing](#writing)). A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
@@ -116,6 +116,7 @@ against these rules.
 | `find_parks`                 | parks by name, city or country, with status, crowd level, today's hours                                                                                                                                                                                                                                                                                                         | `SearchService`                                             |
 | `get_park`                   | live state: schedule, crowd, weather, rides by status, longest waits, rides down (reported or inferred), in maintenance (with the curated window), maintenance ahead, not run today; the seasons of the year ahead (`seasonView`)                                                                                                                                               | `ParkIntegrationService`, `ParkSeasonService`               |
 | `park_forecast`              | days ahead as the calendar shows them: hours, crowd level, expected peak wait, weather, holidays, rides in maintenance (`PlanDayService`), the seasons running each day (`seasonsOn`: kind, name, status where not confirmed, separate ticket; on a closed day only listed dates and a closure); today's hourly curve and headliners; models                                    | `CalendarService`, `MlOverviewService`, `ParkSeasonService` |
+| `park_purchases`             | the paid queue products of one park per park-local day (Lightning Lane Multi Pass, Premier Pass, a single ride's Lightning Lane …), from the schedule rows' `purchases`: name, type, price with currency, available or sold out, and for a per-ride product the live ride it is for, matched by name; days without products left out ([below](#paid-queue-products))            | `ParksService.getSchedule`, as `/schedule` reads it         |
 | `find_attractions`           | rides by name, optionally in one park, with status and wait                                                                                                                                                                                                                                                                                                                     | `SearchService`                                             |
 | `get_attraction`             | one ride: queues, crowd level, outage, curated facts with every season that binds it, ride profile, typical waits, downtime, retirement, optional history                                                                                                                                                                                                                       | `AttractionIntegrationService`                              |
 | `page_views`                 | reads per kind, language and page                                                                                                                                                                                                                                                                                                                                               | `PageViewsService.adminOverview`                            |
@@ -125,8 +126,9 @@ against these rules.
 | `model_comparison`           | the comparison matrix, question × model against what serves: state, note, switch checks, live paired difference with CI, offline verdict; per-lead rows for one `question` only                                                                                                                                                                                                 | `ModelComparisonService`                                    |
 | `model_comparison_day`       | one ride-day's archived curves against the 15-min truth with each model's MAE; without park, ride and date the dates, parks and rides that have curves                                                                                                                                                                                                                          | `ModelComparisonService`                                    |
 | `ml_accuracy`                | where the hourly forecasts miss: MAE, bias and baseline per park or per ride, against the window before, ranked                                                                                                                                                                                                                                                                 | `ForecastErrorBreakdownService`                             |
-| `data_quality`               | silenced clusters, failing jobs, unreviewed absence retirements, re-issue candidates, the last display-consistency run's mismatches and unreadable surfaces per park                                                                                                                                                                                                            | `DataQualityMonitorService.report`                          |
+| `data_quality`               | silenced clusters, failing jobs, unreviewed absence retirements, re-issue candidates, parks with rides that carry no kind (each ride's id, name and slug, `withoutKindRefs`), the last display-consistency run's mismatches and unreadable surfaces per park                                                                                                                    | `DataQualityMonitorService.report`                          |
 | `display_consistency`        | one park-day as every surface shows it now (calendar, best-days, /plan/day, trip region, live levels, Parky's card and tools, park.fan's calendar and best-days relays) with the mismatches of pairs that must agree and the surfaces it could not read; without a park the last run ([display consistency](../analytics/display-consistency.md))                               | `DisplayConsistencyService`                                 |
+| `news_export_status`         | whether the app's news and guides export on media.park.fan has caught up with the site, per feed: tone, last run, newest post on each side, the missing posts with their locales, minutes behind, unreadable lists ([below](#parkfans-own-routes))                                                                                                                              | park.fan's `GET /api/news-export/status`                    |
 | `duplicates`                 | duplicate attraction and park pairs with the merge winner                                                                                                                                                                                                                                                                                                                       | `AttractionMergeService`, `ParkValidatorService`            |
 | `retirement_candidates`      | rides whose source went quiet                                                                                                                                                                                                                                                                                                                                                   | `AttractionReviewService`                                   |
 | `audit_log`                  | admin actions, filterable                                                                                                                                                                                                                                                                                                                                                       | `AdminAuditService.list`                                    |
@@ -353,6 +355,85 @@ both versions, each answer marked with its own; `currentPromptVersion` names the
   (answered or skipped) and the end's `plan` (the tracking audit's T22 and T23) are listed as soon as
   the frontend sends them. The small-value and `visitorData` rules are the other event tools'.
 
+### Paid queue products
+
+`park_purchases` (`src/mcp/tools/park-purchases.tool.ts`) reads the rows `/schedule` serves, with
+the same `ParksService.getSchedule` query, and turns their `purchases` into days: input `park` (id,
+slug or name, as `park_forecast` takes it), `from` (park-local `YYYY-MM-DD`, the park's today when
+absent) and `days` (1–60, 31 by default, `/schedule`'s own window). ThemeParks.wiki sends them
+about 30 days ahead; on 2026-11-28 only the parks of Walt Disney World and the Disneyland Resort
+carried any.
+
+```json
+{
+  "park": { "id": "…", "name": "Magic Kingdom Park", "timezone": "America/New_York" },
+  "from": "2026-11-28",
+  "to": "2026-12-28",
+  "days": [
+    {
+      "date": "2026-11-28",
+      "products": [
+        {
+          "name": "Lightning Lane Multi Pass",
+          "type": "PACKAGE",
+          "price": { "amount": 4200, "currency": "USD", "formatted": "$42.00" },
+          "available": true
+        },
+        {
+          "name": "Lightning Lane for TRON Lightcycle / Run",
+          "type": "ATTRACTION",
+          "price": { "amount": 2400, "currency": "USD", "formatted": "$24.00" },
+          "available": false,
+          "attraction": { "id": "…", "name": "TRON Lightcycle / Run" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+- **A day** is the first of its rows that carries products, as park.fan's day sheet reads them; a
+  day without any is left out.
+- **`price`** is the source's: `amount` in the currency's minor unit (cents), `currency`,
+  `formatted`. It is null where the source sends a placeholder (amount 0, `Unknown`), the rule the
+  website applies too. `available` false means sold out for that day, null that the source did not
+  say.
+- **`attraction`**, on a per-ride product (`type` `ATTRACTION`) only: the live ride of the park
+  whose curated or synced name is the longest one inside the product's name. The source names the
+  ride and gives no id of ours, so a product whose ride is not found says null. A ride name under
+  four letters never matches.
+- Packages come first, then the per-ride products A→Z. An item without a name, or with a price
+  that lacks a numeric amount or a currency, is left out.
+
+### park.fan's own routes
+
+`news_export_status` and `run_news_export` (`src/mcp/tools/news-export.tools.ts`) ask the
+website, the only side that knows both the app's export on media.park.fan and the posts it should
+hold. `src/mcp/tools/site-route.ts` calls park.fan at the origin of `REVALIDATE_URL` with
+`Authorization: Bearer ${REVALIDATE_SECRET}`, the secret the revalidation webhook already sends
+there, and never at `FRONTEND_URL`, which may name another host. It waits 15 s, follows no
+redirect and refuses a body over a million characters. Without the secret, or with a
+`REVALIDATE_URL` that does not parse, `news_export_status` answers `{ configured: false, message }`
+and `run_news_export` refuses.
+
+- **`news_export_status`** reads `GET /api/news-export/status`, the website's `NewsExportReport`
+  (park.fan's `lib/admin/news-export-lag.ts`), and checks it before any of it reaches the model:
+  types, bounded strings and lists, timestamps that parse, a `tone` of `ok`, `warn`, `bad` or
+  `unknown` (the website's `HealthTone`). A status other than 200, or a report that fails the
+  check, is an error for the model. The answer per feed: `feed`, `tone`, `generatedAt`,
+  `behindMinutes` rounded, `newestExported`, `newestOnSite`, `missing` cut to `limit` (1–50, 10 by
+  default) with `total`, and `unreadable`; beside the feeds `checkedAt`, `deployedAt` and
+  `workflowUrl`.
+- **`run_news_export`** sends `POST /api/news-export/run` without a body, which starts the
+  workflow `publish-media.yml` in the website's repository (about 20 minutes). Editor, `writes:
+  add`, a dry run unless `dryRun: false`: the dry run answers what would start and where, and
+  calls nothing. The website answers `{ started: true, workflowUrl }`, or `{ started: false,
+  reason }` with a status other than 2xx, and the model reads that reason. A 2xx that does not
+  say `started: true` is an error that sends the model to the workflow's runs before another
+  call, since the run may have started. A started run is an audit row (`news-export.run`, entity
+  `system`, the workflow's page in `after`, null when the link failed the check); a refused one
+  leaves none.
+
 ## Writing
 
 A token with `admin:write` sees the tools that write beside the read tools. Each one calls the
@@ -453,10 +534,10 @@ told otherwise.
 
 | Tool                            | Role   | Writes          | Runs (below `/v1/admin/`)                                                                                                         |
 | ------------------------------- | ------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `curation_fields`               | viewer | no              | the field descriptors (`content/fields`), with an id the row's synced, curated and served values                                  |
+| `curation_fields`               | viewer | no              | the field descriptors (`content/fields`), with an id the row's synced, curated and served values; `attractionKind` serves the derived kind where no editor chose one |
 | `curate_park`                   | editor | change          | `PATCH content/parks/:id`                                                                                                         |
-| `curate_attraction`             | editor | change          | `PATCH content/attractions/:id`                                                                                                   |
-| `curate_park_attractions`       | editor | change          | `PATCH content/parks/:id/attractions`, also the data-quality "season or gone?" answer                                             |
+| `curate_attraction`             | editor | change          | `PATCH content/attractions/:id`; `attractionKind` takes every kind, `GAME` included, and `null` hands the ride back to the derived kind |
+| `curate_park_attractions`       | editor | change          | `PATCH content/parks/:id/attractions`, also the data-quality "season or gone?" and "without a kind" answers; `adoptDerivedKind` makes the listed rides' derived kinds the editor's |
 | `verify_park`                   | editor | add             | `POST content/parks/:id/verify`                                                                                                   |
 | `undo_curation`                 | editor | change          | `POST content/history/:id/undo`                                                                                                   |
 | `write_ride_profile`            | editor | change          | `PUT content/attractions/:id/ride-profile`                                                                                        |
@@ -475,6 +556,7 @@ told otherwise.
 | `review_mark`                   | editor | add             | `POST review-marks`: a retirement, duplicate or maze candidate that is no case                                                    |
 | `run_job`                       | editor | add             | the editor's triggers of [sync and jobs](endpoints.md#sync-and-background-jobs), `search-console/import`, `…/reindex/scan`        |
 | `run_maintenance`               | owner  | delete, dry run | `flush-cache`, `cache/reset`, `dedupe-percentile-aggregates`, `backfill-park-day-operation`, `validate-and-repair-parks`          |
+| `run_news_export`               | editor | add, dry run    | no route here: park.fan's `POST /api/news-export/run`, which starts `publish-media.yml` (about 20 minutes); audited `news-export.run` |
 | `set_feedback_status`           | editor | change          | `PATCH assistant/feedback/:id`                                                                                                    |
 | `delete_assistant_conversation` | editor | delete, dry run | `DELETE assistant/conversations/:id`                                                                                              |
 | `write_assistant_knowledge`     | editor | change, dry run | `PUT assistant/knowledge/:topic`: creates a topic or replaces its fields; the next chat reads it within a minute                  |
@@ -677,6 +759,8 @@ What was checked when this was built, and where it is enforced:
 | `FRONTEND_URL`         | where `/admin/oauth/consent` is; default the origin of `REVALIDATE_URL`                            |
 | `OAUTH_REDIRECT_HOSTS` | https redirect hosts, comma-separated, `*` for any; default `claude.ai,claude.com`                 |
 | `OAUTH_REDIRECT_PATHS` | the paths an https redirect may have on those hosts, `*` for any; default `/api/mcp/auth_callback` |
+| `REVALIDATE_URL`       | its origin is where the news-export tools call park.fan ([park.fan's own routes](#parkfans-own-routes)) |
+| `REVALIDATE_SECRET`    | their bearer; unset, `news_export_status` says it is not set up and `run_news_export` refuses       |
 
 ## Known limits
 

@@ -14,6 +14,7 @@ import {
   modelComparisonTool,
 } from "./model-comparison.tool";
 import { parkForecastTool } from "./park-forecast.tool";
+import { parkPurchasesTool } from "./park-purchases.tool";
 import { dataQualityTool } from "./data-quality.tool";
 import { displayConsistencyTool } from "./display-consistency.tool";
 import { duplicatesTool } from "./duplicates.tool";
@@ -87,6 +88,7 @@ import {
 } from "./retirement.tools";
 import { mergeAttractionsTool, mergeParksTool } from "./merge.tools";
 import { runJobTool, runMaintenanceTool } from "./jobs.tools";
+import { newsExportStatusTool, runNewsExportTool } from "./news-export.tools";
 import {
   apiKeysTool,
   createApiKeyTool,
@@ -121,6 +123,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   findParksTool,
   getParkTool,
   parkForecastTool,
+  parkPurchasesTool,
   findAttractionsTool,
   getAttractionTool,
   pageViewsTool,
@@ -132,6 +135,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   modelComparisonDayTool,
   dataQualityTool,
   displayConsistencyTool,
+  newsExportStatusTool,
   duplicatesTool,
   retirementCandidatesTool,
   auditLogTool,
@@ -198,6 +202,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   reviewMarkTool,
   runJobTool,
   runMaintenanceTool,
+  runNewsExportTool,
   setFeedbackStatusTool,
   deleteAssistantConversationTool,
   writeAssistantKnowledgeTool,
