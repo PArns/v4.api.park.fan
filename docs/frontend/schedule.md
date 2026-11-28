@@ -44,7 +44,11 @@ filled in, and which holiday fields this endpoint cannot be trusted for. Open it
   `pickDayStatusEntry` (`src/common/utils/schedule.util.ts`), `OPERATING` over `CLOSED` over `UNKNOWN`.
 - **A day without a row is missing, not closed.** Unlike the calendar, nothing fills the gap.
 - `openingTime` / `closingTime` are UTC instants; absent on a row without hours. `purchases` is what
-  the source sent (paid queue products and the like), absent when none.
+  the source sent (paid queue products and the like), absent when none. ThemeParks.wiki sends each
+  item as `{ id, name, type, price: { amount, currency, formatted }, available }`: `type` `PACKAGE`
+  (Lightning Lane Multi Pass, Premier Pass) or `ATTRACTION` (one ride's Lightning Lane), `amount`
+  in the currency's minor unit, `available` false when sold out. The admin MCP tool
+  `park_purchases` reads them per day ([admin MCP](../admin/mcp.md#paid-queue-products)).
 
 ## Reconstructed days
 

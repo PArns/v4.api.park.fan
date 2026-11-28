@@ -19,6 +19,14 @@ export function getRevalidateUrl(): string {
 }
 
 /**
+ * The frontend's origin as `REVALIDATE_URL` names it: the one host this API
+ * sends the shared secret to. Throws on a URL that does not parse.
+ */
+export function getRevalidateOrigin(): string {
+  return new URL(getRevalidateUrl()).origin;
+}
+
+/**
  * Shared secret sent with every revalidation request as
  * `Authorization: Bearer <secret>` (the scheme the frontend `/api/revalidate`
  * expects). Empty ⇒ the webhook is disabled.

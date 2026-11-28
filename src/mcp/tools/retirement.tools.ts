@@ -9,6 +9,11 @@ import {
   isOnParkPage,
   retiredKindOf,
 } from "../../attractions/services/attraction-retirement.service";
+import { reviewMarkProblem } from "../../attractions/services/attraction-review.service";
+import {
+  PAIR_REVIEW_MARK_KIND,
+  REVIEW_MARK_KINDS,
+} from "../../attractions/entities/attraction-review-mark.entity";
 import { isSeasonalRow } from "../../queues/processors/children-metadata.processor";
 import {
   formatInParkTimezone,
@@ -282,18 +287,18 @@ export const reviewMarkTool = defineMcpTool({
     "Answers a candidate with 'checked, not a case', as the admin's dismiss buttons do, so the " +
     "detector stops asking: not_retired for a retirement candidate that still runs, " +
     "not_a_duplicate for a duplicate or re-issue pair that are two rides (permanent), " +
-    "not_a_maze for a ride filed as a Halloween maze that is a scare zone. Give a not_retired " +
-    "mark a recheckAfter: a permanent one hides the ride's real retirement forever.",
+    "not_a_maze for a ride filed as a Halloween maze that is a scare zone, no_kind_fits for a " +
+    "ride on data_quality's list of rides without a kind when no kind fits it (a pool, a " +
+    "Christmas market); that mark takes it off the list. Give a not_retired mark a " +
+    "recheckAfter: a permanent one hides the ride's real retirement forever.",
   minRole: "editor",
   writes: "add",
   input: {
-    kind: z
-      .enum(["not_retired", "not_a_duplicate", "not_a_maze"])
-      .describe("Which question the mark answers"),
+    kind: z.enum(REVIEW_MARK_KINDS).describe("Which question the mark answers"),
     attractionId: uuidInput().describe("The candidate ride"),
     otherAttractionId: uuidInput()
       .optional()
-      .describe("not_a_duplicate only: the other ride of the pair"),
+      .describe(`${PAIR_REVIEW_MARK_KIND} only: the other ride of the pair`),
     reason: z
       .string()
       .trim()
@@ -310,22 +315,16 @@ export const reviewMarkTool = defineMcpTool({
     { kind, attractionId, otherAttractionId, reason, recheckAfter },
     ctx,
   ) {
-    if ((kind === "not_a_duplicate") !== Boolean(otherAttractionId)) {
-      throw new McpToolError(
-        "otherAttractionId belongs to not_a_duplicate, and only there",
-      );
-    }
-    const body = {
-      marks: [
-        {
-          kind,
-          attractionId: attractionId.toLowerCase(),
-          otherAttractionId: otherAttractionId?.toLowerCase() ?? null,
-          reason,
-          recheckAfter: recheckAfter ?? null,
-        },
-      ],
+    const mark = {
+      kind,
+      attractionId: attractionId.toLowerCase(),
+      otherAttractionId: otherAttractionId?.toLowerCase() ?? null,
+      reason,
+      recheckAfter: recheckAfter ?? null,
     };
+    const problem = reviewMarkProblem(mark);
+    if (problem) throw new McpToolError(problem);
+    const body = { marks: [mark] };
     return runAdminRoute(
       ctx,
       { method: "POST", path: "review-marks", body },

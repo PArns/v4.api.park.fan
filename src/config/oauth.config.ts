@@ -1,5 +1,5 @@
 import { withoutTrailingSlashes } from "../common/utils/url.util";
-import { getRevalidateUrl } from "./revalidation.config";
+import { getRevalidateOrigin } from "./revalidation.config";
 
 /**
  * Where the admin MCP's OAuth surface lives and whom it sends people to.
@@ -34,7 +34,7 @@ export function getApiPublicUrl(): string {
 export function getFrontendUrl(): string {
   const configured = process.env.FRONTEND_URL?.trim();
   if (configured) return withoutTrailingSlashes(configured);
-  return new URL(getRevalidateUrl()).origin;
+  return getRevalidateOrigin();
 }
 
 /** The protected resource: the MCP endpoint. Tokens are issued for it alone. */

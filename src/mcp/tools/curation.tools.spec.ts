@@ -8,6 +8,7 @@ import { AdminController } from "../../admin/admin.controller";
 import { McpToolError } from "../mcp-tool";
 import {
   correctParkLocationTool,
+  curateParkAttractionsTool,
   curateParkTool,
   curationFieldsTool,
   deleteRideProfileTool,
@@ -91,6 +92,135 @@ describe("curation tools", () => {
     expect(
       input.safeParse({ parkId: PARK, fields: {}, reason: "why" }).success,
     ).toBe(false);
+  });
+
+  describe("curate_park_attractions", () => {
+    const RIDE_A = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB";
+    const RIDE_B = "CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC";
+    const rows: Record<string, object> = {
+      [RIDE_A.toLowerCase()]: {
+        name: "Hall of Presidents",
+        curatedName: null,
+        attractionKind: null,
+        derivedAttractionKind: "SHOW",
+      },
+      [RIDE_B.toLowerCase()]: {
+        name: "Astro Orbiter",
+        curatedName: null,
+        attractionKind: null,
+        derivedAttractionKind: null,
+      },
+    };
+    const curation = {
+      findAttraction: async (id: string) => {
+        if (!rows[id]) throw new NotFoundException(`No attraction ${id}`);
+        return { id, ...rows[id] };
+      },
+    };
+    const call = (input: Record<string, unknown>) => {
+      const patchParkAttractions = jest.fn(async () => ({ changed: [] }));
+      const { ctx } = adminContext("editor", [
+        [AdminCurationService, curation],
+        [AdminContentController, { patchParkAttractions }],
+      ]);
+      const parsed = z.object(curateParkAttractionsTool.input).parse({
+        parkId: PARK,
+        reason: "Data quality",
+        ...input,
+      });
+      return {
+        patchParkAttractions,
+        answer: curateParkAttractionsTool.handler(parsed, ctx),
+      };
+    };
+
+    it("hands a kind and a cleared kind to the bulk write unchanged", async () => {
+      const { answer, patchParkAttractions } = call({
+        entries: [
+          { id: RIDE_A, fields: { attractionKind: "GAME" } },
+          { id: RIDE_B, fields: { attractionKind: null } },
+        ],
+      });
+      await answer;
+      expect(patchParkAttractions).toHaveBeenCalledWith(
+        park,
+        expect.objectContaining({
+          entries: [
+            { id: RIDE_A.toLowerCase(), fields: { attractionKind: "GAME" } },
+            { id: RIDE_B.toLowerCase(), fields: { attractionKind: null } },
+          ],
+        }),
+        expect.anything(),
+      );
+    });
+
+    it("makes a ride's derived kind the editor's beside the named entries", async () => {
+      const { answer, patchParkAttractions } = call({
+        entries: [{ id: RIDE_B, fields: { attractionKind: "RIDE" } }],
+        adoptDerivedKind: [RIDE_A, RIDE_A],
+      });
+      await answer;
+      expect(patchParkAttractions).toHaveBeenCalledWith(
+        park,
+        expect.objectContaining({
+          entries: [
+            { id: RIDE_B.toLowerCase(), fields: { attractionKind: "RIDE" } },
+            { id: RIDE_A.toLowerCase(), fields: { attractionKind: "SHOW" } },
+          ],
+        }),
+        expect.anything(),
+      );
+    });
+
+    it("refuses a ride with no derived kind, one sent twice, and an empty call", async () => {
+      const none = call({ adoptDerivedKind: [RIDE_B] });
+      await expect(none.answer).rejects.toEqual(
+        new McpToolError(
+          '"Astro Orbiter" has no derived kind to adopt; name its kind in entries',
+        ),
+      );
+      expect(none.patchParkAttractions).not.toHaveBeenCalled();
+      await expect(
+        call({
+          entries: [{ id: RIDE_A, fields: { attractionKind: "SHOW" } }],
+          adoptDerivedKind: [RIDE_A],
+        }).answer,
+      ).rejects.toBeInstanceOf(McpToolError);
+      await expect(call({}).answer).rejects.toEqual(
+        new McpToolError("Send entries, adoptDerivedKind or both"),
+      );
+    });
+
+    it("leaves an editor's kind alone", async () => {
+      const curated = {
+        findAttraction: async (id: string) => ({
+          id,
+          name: "Monorail",
+          curatedName: null,
+          attractionKind: "TRANSPORT",
+          derivedAttractionKind: "RIDE",
+        }),
+      };
+      const { ctx } = adminContext("editor", [
+        [AdminCurationService, curated],
+        [AdminContentController, { patchParkAttractions: jest.fn() }],
+      ]);
+      await expect(
+        curateParkAttractionsTool.handler(
+          {
+            parkId: PARK,
+            entries: [],
+            adoptDerivedKind: [RIDE_A],
+            reason: "x",
+          },
+          ctx,
+        ),
+      ).rejects.toEqual(
+        new McpToolError(
+          '"Monorail" already has an editor\'s kind (TRANSPORT); leave it out',
+        ),
+      );
+    });
   });
 
   it("curation_fields names a missing row instead of failing", async () => {

@@ -13,7 +13,8 @@ export const MAX_TOOL_RESULT_CHARS = 100_000;
 
 const INSTRUCTIONS =
   "park.fan's admin data: parks and rides with live status, waits and " +
-  "outages, page-view popularity, the site statistic and its SEO reports (analytics_*, " +
+  "outages, the paid queue products per day (park_purchases), page-view popularity, the app's " +
+  "news export (news_export_status), the site statistic and its SEO reports (analytics_*, " +
   "search_report, planner_report for the day planner, trip_planner_report for the trip " +
   "planner, seo_*), the trip planner's server metrics (trip_planner_ops), system and ML " +
   "health, job queues, data-quality findings, " +

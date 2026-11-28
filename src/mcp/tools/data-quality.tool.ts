@@ -10,7 +10,9 @@ export const dataQualityTool = defineMcpTool({
     "one park that all fell silent on the same day (a dropped feed or a seasonal closure — a " +
     "human decides), jobs that keep failing, rides retired for absence that nobody gave a season, " +
     "and retired rides with a younger live ride right beside them (possibly re-issued under a new " +
-    "name), parks with live rides that carry no kind (neither an editor's nor a derived one), " +
+    "name), parks with live rides that carry no kind (neither an editor's nor a derived one; " +
+    "each ride with id, name and slug, for curate_park_attractions to give it one, or for " +
+    "review_mark no_kind_fits where none of the kinds fits, which takes it off the list), " +
     "and how many mismatches and unreadable surfaces the last display-consistency run " +
     "found per park (display_consistency has them). Each list is cut to `limit` with its full " +
     "size in `total`.",
@@ -38,7 +40,18 @@ export const dataQualityTool = defineMcpTool({
       failingJobs: capped(report.failingJobs, limit),
       absenceRetiredUnreviewed: capped(report.absenceRetiredUnreviewed, limit),
       reissueCandidates: capped(report.reissueCandidates, limit),
-      attractionsWithoutKind: capped(report.attractionsWithoutKind, limit),
+      // The refs carry the names too, so the bare name list stays out.
+      attractionsWithoutKind: capped(
+        report.attractionsWithoutKind.map(
+          ({ parkId, parkName, attractions, withoutKindRefs }) => ({
+            parkId,
+            parkName,
+            attractions,
+            withoutKindRefs: capped(withoutKindRefs, limit),
+          }),
+        ),
+        limit,
+      ),
       // The last display-consistency run; display_consistency has the details.
       displayConsistency: report.displayConsistency && {
         checkedAt: report.displayConsistency.checkedAt,

@@ -105,5 +105,27 @@ describe("AdminContentController.listAttractions", () => {
     expect(attractions[0].hasSingleRider).toBeNull();
     expect(attractions[0].indoorOutdoor).toBeNull();
     expect(attractions[0].attractionKind).toBeNull();
+    expect(attractions[0].derivedAttractionKind).toBeNull();
+    expect(attractions[0].attractionKindSource).toBeNull();
+  });
+
+  it("carries the rule's kind beside the editor's, and which one is served", async () => {
+    const controller = build([
+      aRow({ id: "a", attractionKind: null, derivedAttractionKind: "SHOW" }),
+      aRow({ id: "b", attractionKind: "GAME", derivedAttractionKind: "SHOW" }),
+    ]);
+
+    const { attractions } = await controller.listAttractions("park-1");
+
+    expect(attractions[0]).toMatchObject({
+      attractionKind: null,
+      derivedAttractionKind: "SHOW",
+      attractionKindSource: "derived",
+    });
+    expect(attractions[1]).toMatchObject({
+      attractionKind: "GAME",
+      derivedAttractionKind: "SHOW",
+      attractionKindSource: "curated",
+    });
   });
 });

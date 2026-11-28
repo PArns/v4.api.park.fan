@@ -10,6 +10,18 @@ import {
 } from "typeorm";
 import { Attraction } from "./attraction.entity";
 
+/** Every question a review mark answers; `AttractionReviewMark.kind` says what each one means. */
+export const REVIEW_MARK_KINDS = [
+  "not_a_duplicate",
+  "not_retired",
+  "not_a_maze",
+  "no_kind_fits",
+] as const;
+export type ReviewMarkKind = (typeof REVIEW_MARK_KINDS)[number];
+
+/** The one kind about a pair of attractions; every other kind names one. */
+export const PAIR_REVIEW_MARK_KIND = "not_a_duplicate" satisfies ReviewMarkKind;
+
 /**
  * "A human already looked at this, and it is not a case."
  *
@@ -61,13 +73,17 @@ export class AttractionReviewMark {
    *   heading on the park's event page. Permanent for a scare zone, so
    *   `recheckAfter` is normally null; a maze rebuilt as a walk-through would
    *   be a new row with a new externalId rather than this one changing shape.
+   * - `no_kind_fits`: none of the attraction kinds fits this attraction (a
+   *   pool, a Christmas market), so the data-quality report stops listing it
+   *   among the rides without a kind. Permanent while the kinds stay as they
+   *   are; when a kind is added, these marks are the rows to look at again.
    *
    * The column is `text` rather than an enum on purpose: a mark kind is added
    * whenever a detector starts asking a question a human can answer once, and
    * that should not be a schema change.
    */
   @Column({ name: "kind", type: "text" })
-  kind: "not_a_duplicate" | "not_retired" | "not_a_maze";
+  kind: ReviewMarkKind;
 
   @ManyToOne(() => Attraction, { onDelete: "CASCADE" })
   @JoinColumn({ name: "attraction_id" })

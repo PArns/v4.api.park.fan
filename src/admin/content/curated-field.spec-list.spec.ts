@@ -118,6 +118,33 @@ describe("curated field views", () => {
       ).toEqual([...ATTRACTION_KIND_VALUES]);
     });
 
+    it("serves the rule's kind where no editor decided, and the editor's over it", () => {
+      const derived = byKey(
+        attractionFieldViews(anAttraction({ derivedAttractionKind: "SHOW" })),
+        "attractionKind",
+      );
+      expect(derived).toMatchObject({
+        curatedValue: null,
+        resolvedValue: "SHOW",
+        overridden: false,
+      });
+      expect(
+        byKey(
+          attractionFieldViews(
+            anAttraction({
+              attractionKind: "GAME",
+              derivedAttractionKind: "SHOW",
+            }),
+          ),
+          "attractionKind",
+        ),
+      ).toMatchObject({ curatedValue: "GAME", resolvedValue: "GAME" });
+      expect(
+        byKey(attractionFieldViews(anAttraction()), "attractionKind")
+          .resolvedValue,
+      ).toBeNull();
+    });
+
     it("was the first enum on an attraction, so the write path now has one", () => {
       // Every other enum descriptor belonged to a park until this one. The
       // list grows only by a deliberate entry: `indoorOutdoor` (PAR-424) has

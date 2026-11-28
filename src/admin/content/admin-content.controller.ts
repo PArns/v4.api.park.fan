@@ -21,6 +21,7 @@ import {
   boundSeasonOf,
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
+import { resolveAttractionKind } from "../../attractions/utils/attraction-kind-rule";
 import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import {
   CURATED_PARK_DB_COLUMNS,
@@ -547,6 +548,12 @@ export class AdminContentController {
           // Raw too: null is "nobody decided", never RIDE, and the select
           // needs that to tell an unchecked row from an unchanged one.
           attractionKind: attraction.attractionKind ?? null,
+          // The rule's kind beside it, and which of the two the public
+          // payload serves, so the editor can show a derived kind without
+          // writing it into the editor's column.
+          derivedAttractionKind: attraction.derivedAttractionKind ?? null,
+          attractionKindSource:
+            resolveAttractionKind(attraction).attractionKindSource,
           hasRideProfile: withProfile.has(attraction.id),
           curatedFieldCount: attractionFieldViews(attraction).filter(
             (f) => f.overridden,
