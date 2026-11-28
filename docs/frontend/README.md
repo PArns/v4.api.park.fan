@@ -32,7 +32,7 @@ page for the field or endpoint you are reading or changing.
 | [schedule](./schedule.md)                                         | `/schedule`: a park's opening-hours range                                                                                |
 | [yearly-predictions](./yearly-predictions.md)                     | `/predictions/yearly`: crowd outlook per day of the year                                                                 |
 | [park-seasons](./park-seasons.md)                                 | `/seasons`: a park's named seasons and events                                                                            |
-| [facilities](./facilities.md)                                     | `/facilities`: toilets, drinking water and other facilities from OpenStreetMap, the ODbL duties                          |
+| [facilities](./facilities.md)                                     | `/facilities`: toilets, drinking water and sights from OpenStreetMap, the ODbL duties                                    |
 | [shows](./shows.md)                                               | shows on the park payload: status, today's showtimes, season                                                             |
 | [restaurants](./restaurants.md)                                   | restaurants on the park payload: `cuisineType`, `requiresReservation` (unknown is absent)                                |
 | [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`, `/weather/hourly`                                                   |

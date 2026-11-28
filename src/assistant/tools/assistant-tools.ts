@@ -92,6 +92,7 @@ import { FacilitiesService } from "../../facilities/facilities.service";
 import {
   FACILITY_TYPES,
   OSM_ATTRIBUTION,
+  type FacilityType,
 } from "../../facilities/facility.types";
 import { FavoritesService } from "../../favorites/favorites.service";
 import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
@@ -2068,6 +2069,23 @@ const NEARBY_KINDS = [
   ...FACILITY_TYPES,
 ] as const;
 
+/** How the ODbL credit names the layers a result holds, so it is not read as the map's credit. */
+const OSM_CREDIT_LABELS: Record<FacilityType, string> = {
+  toilets: "toilets",
+  drinking_water: "drinking water",
+  sight: "sights",
+};
+
+/** "Toilets and drinking water: © OpenStreetMap contributors", for the types asked. */
+export function osmCreditLine(types: readonly FacilityType[]): string {
+  const labels = types.map((type) => OSM_CREDIT_LABELS[type]);
+  const list =
+    labels.length > 1
+      ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`
+      : (labels[0] ?? "data");
+  return `${list[0].toUpperCase()}${list.slice(1)}: ${OSM_ATTRIBUTION.text}`;
+}
+
 /** Measure from the user's shared position instead of a place. */
 const fromMeFlag = z
   .boolean()
@@ -2887,10 +2905,12 @@ export const ASSISTANT_TOOLS = [
     status: "parks",
     description:
       "What is around a place inside one park, or around the user (fromMe): the nearest rides " +
-      "(status and standby wait now), shows, restaurants, toilets and drinking water, each " +
+      "(status and standby wait now), shows, restaurants, toilets, drinking water and sights " +
+      "(named statues, artworks and figure bins such as Efteling's Holle Bolle Gijs), each " +
       'with metres and walkMinutes. For "what is near Talocan", "the nearest toilet", "where ' +
-      'can I fill my bottle", "a ride close to me with a short wait". Toilets and drinking ' +
-      "water come from OpenStreetMap: name the credit the result gives when you use them. " +
+      'can I fill my bottle", "a ride close to me with a short wait", "something to see ' +
+      'nearby". Toilets, drinking water and sights come from OpenStreetMap: name the credit ' +
+      "the result gives when you use them. " +
       "Food with a cuisine or name: find_restaurants with near or fromMe.",
     input: z.object({
       park: parkRef,
@@ -2960,13 +2980,13 @@ export const ASSISTANT_TOOLS = [
           (p) => p,
         ).map(({ item, walk }) => ({ id: item.id, name: item.name, ...walk }));
       }
-      if (wanted.has("toilets") || wanted.has("drinking_water")) {
+      const facilityTypes = FACILITY_TYPES.filter((type) => wanted.has(type));
+      if (facilityTypes.length > 0) {
         const facilities = await ctx
           .get(FacilitiesService)
           .publicFor(park.id)
           .catch(() => null);
-        for (const type of FACILITY_TYPES) {
-          if (!wanted.has(type)) continue;
+        for (const type of facilityTypes) {
           if (!facilities?.available) {
             result[type] = {
               notKnown: true,
@@ -2992,7 +3012,7 @@ export const ASSISTANT_TOOLS = [
         }
         if (facilities?.available) {
           result.credit = {
-            say: "Toilets and drinking water: © OpenStreetMap contributors",
+            say: osmCreditLine(facilityTypes),
             url: OSM_ATTRIBUTION.url,
           };
         }
@@ -5338,8 +5358,8 @@ export const ASSISTANT_TOOLS = [
       "a park's shows with their times on a day (kind shows), its restaurants and food " +
       "stands, optionally matching query or nearest to a place (kind restaurants, near), " +
       "the way to one place inside the park, as an arrow from the user's position and a " +
-      "walking route in Google Maps (kind navigate, to: a ride, show, restaurant, or a toilet's " +
-      "or drinking water's id from find_nearby), " +
+      "walking route in Google Maps (kind navigate, to: a ride, show, restaurant, or the id " +
+      "of a toilet, drinking water or sight from find_nearby), " +
       "park.fan's own guides and news with cover and teaser (kind posts: query, or the slugs of posts you already have; with " +
       "question the result also holds the first post's text, as search_posts does), or " +
       "glossary terms with their definition (kind glossary, query the word), or one of the " +
@@ -5368,7 +5388,7 @@ export const ASSISTANT_TOOLS = [
       to: placeRef
         .optional()
         .describe(
-          "For kind navigate: the ride, show or restaurant by name or id, or a toilet's or drinking water's id from find_nearby; give park too (a toilet's or water's park follows from its id)",
+          "For kind navigate: the ride, show or restaurant by name or id, or the id of a toilet, drinking water or sight from find_nearby; give park too (such an id's park follows from it)",
         ),
       idea: z
         .number()

@@ -56,13 +56,13 @@ chat runs around them (the answer loop, the limits, the cards' shapes, the promp
 
 ### Places inside a park and the way there
 
-| Tool                   | Answers                                                                                  | Added                |
-| ---------------------- | ---------------------------------------------------------------------------------------- | -------------------- |
-| `find_parks_nearby`    | parks near the user, or the rides around them inside one                                 | 2026-10-31, PAR-1187 |
-| `request_location`     | asks the user, in the chat, to share their position                                      | 2026-10-31, PAR-1187 |
-| `get_directions`       | a Google Maps link to a park's entrance                                                  | 2026-10-31, PAR-1187 |
-| `get_walking_distance` | metres and walking minutes from a place or the user to up to eight others in the park    | 2026-11-26, PAR-1437 |
-| `find_nearby`          | the nearest rides, shows, restaurants, toilets and drinking water to a place or the user | 2026-11-26, PAR-1437 |
+| Tool                   | Answers                                                                                          | Added                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| `find_parks_nearby`    | parks near the user, or the rides around them inside one                                         | 2026-10-31, PAR-1187                              |
+| `request_location`     | asks the user, in the chat, to share their position                                              | 2026-10-31, PAR-1187                              |
+| `get_directions`       | a Google Maps link to a park's entrance                                                          | 2026-10-31, PAR-1187                              |
+| `get_walking_distance` | metres and walking minutes from a place or the user to up to eight others in the park            | 2026-11-26, PAR-1437                              |
+| `find_nearby`          | the nearest rides, shows, restaurants, toilets, drinking water and sights to a place or the user | 2026-11-26, PAR-1437; sights 2026-11-28, PAR-1459 |
 
 The way to one place is a card, `show_card` kind `navigate` (2026-11-26, PAR-1437), described
 [below](#the-way-there).
@@ -145,9 +145,9 @@ Lists run nearest first. `find_restaurants` and its card give at most eight with
 (else 25 and 12, unsorted); a restaurant without a position comes last, without a walk, and the
 anchor itself is left out. The card's rows stay as they are: the walk goes to the model only.
 `find_nearby` gives, per kind, the `limit` nearest with a position (default 3, at most 5): `rides`
-with status and standby wait now, `shows`, `restaurants` with cuisine, and `toilets` and
-`drinking_water` from [OpenStreetMap](./facilities.md) with `wheelchair`, `changingTable` and `fee`
-where OSM says. `get_walking_distance` measures from one anchor to up to eight places; a name it
+with status and standby wait now, `shows`, `restaurants` with cuisine, and `toilets`,
+`drinking_water` and `sight` from [OpenStreetMap](./facilities.md), toilets and water with
+`wheelchair`, `changingTable` and `fee` where OSM says, a sight with its name. `get_walking_distance` measures from one anchor to up to eight places; a name it
 cannot place comes back with `asked` and the reason, so the others still answer.
 
 `metres` is the straight line rounded to 10 m. `walkMinutes` is the day planner's ceiling for a
@@ -157,10 +157,11 @@ them; 0/0 counts as no position. The case that asked for it: on 26 November a vi
 restaurant "under Talocan" at Phantasialand, and `query` found none, since Restaurante Cocorico's
 name says nothing about the ride 20 m away.
 
-**Toilets and drinking water** come from `FacilitiesService.publicFor`: nothing while
+**Toilets, drinking water and sights** come from `FacilitiesService.publicFor`: nothing while
 `FACILITIES_ENABLED` is off or the park's import is not approved, and then each asked type reads
 `notKnown: true` ("not mapped for this park yet"), never "there is none". A result with facilities
-carries `credit`; the prompt has Parky end an answer that names one with it as a link, once, in
+carries `credit`, whose `say` names the layers asked for (`osmCreditLine`: "Toilets and drinking
+water: © OpenStreetMap contributors", "Sights: …"); the prompt has Parky end an answer that names one with it as a link, once, in
 the answer's language. That is the ODbL credit [facilities](./facilities.md#the-credit-a-client-owes)
 asks for in a line of text, on the same screen.
 
@@ -182,9 +183,9 @@ needs a new share.
 
 ### The way there
 
-`show_card` kind `navigate` with `park` and `to` (a ride, show or restaurant by name or id, or a
-toilet's or drinking water's id from `find_nearby`) draws a card with the target's own position.
-`park` may be left out (PAR-1438): a toilet's or a water point's id names its park, and for any
+`show_card` kind `navigate` with `park` and `to` (a ride, show or restaurant by name or id, or the
+id of a toilet, drinking water or sight from `find_nearby`) draws a card with the target's own
+position. `park` may be left out (PAR-1438): such an id names its park, and for any
 other target the park the visitor stands in is taken from the shared position. With neither, the
 tool answers an error that says to pass `park`. The card:
 
@@ -192,13 +193,13 @@ tool answers an error that says to pass `park`. The card:
 {
   "kind": "navigate",
   "name": "Taron",
-  "place": "ride", // ride | show | restaurant | toilets | drinking_water
+  "place": "ride", // ride | show | restaurant | toilets | drinking_water | sight
   "park": "Phantasialand",
   "latitude": 50.7996591,
   "longitude": 6.8829768,
   "mapsUrl": "https://www.google.com/maps/dir/?api=1&destination=50.7996591,6.8829768&travelmode=walking",
   "url": "/parks/europe/germany/bruehl/phantasialand/taron", // the ride's page, null for others
-  "credit": { "text": "© OpenStreetMap contributors", "url": "…" }, // toilets and water only
+  "credit": { "text": "© OpenStreetMap contributors", "url": "…" }, // OSM points only
 }
 ```
 

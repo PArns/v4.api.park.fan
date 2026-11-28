@@ -28,6 +28,7 @@ const stored = (
   parkId: "park",
   fetchedAt: new Date("2026-01-01T00:00:00Z"),
   hidden,
+  awaitingReview: false,
 });
 
 describe("planFacilityMerge", () => {

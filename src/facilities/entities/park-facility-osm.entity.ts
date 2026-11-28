@@ -78,4 +78,13 @@ export class ParkFacilityOsm {
   /** Set in the admin, kept across imports. A hidden row is never served. */
   @Column({ type: "boolean", default: false })
   hidden: boolean;
+
+  /**
+   * New, or changed in something a client shows, since the park was last
+   * approved: not served until the next approval clears it. The rest of an
+   * approved park keeps being served meanwhile. Rows from before this column
+   * existed take the default, served as they were.
+   */
+  @Column({ name: "awaiting_review", type: "boolean", default: false })
+  awaitingReview: boolean;
 }

@@ -85,12 +85,138 @@ describe("parseFacilities", () => {
     expect(parseFacilities([node(1, { [key]: value })])).toEqual([]);
   });
 
+  describe("sights", () => {
+    // Efteling's figure bins and statues, tagged as OpenStreetMap has them.
+    it("reads a named figure bin and a named artwork as sights", () => {
+      const result = parseFacilities([
+        node(7170488297, {
+          amenity: "waste_basket",
+          name: "Opa Gijs",
+          "subject:wikidata": "Q2650179",
+        }),
+        node(10166286245, {
+          tourism: "artwork",
+          artwork_type: "statue",
+          name: "Sindbad de Zeeman",
+        }),
+      ]);
+      expect(result.map((f) => [f.type, f.name])).toEqual([
+        ["sight", "Opa Gijs"],
+        ["sight", "Sindbad de Zeeman"],
+      ]);
+      expect(result[0]).toMatchObject({
+        wheelchair: null,
+        changingTable: null,
+        fee: null,
+      });
+    });
+
+    // Europa-Park, Efteling, Universal Studios Japan and Bellewaerde, as OSM has them.
+    it.each([
+      ["a fountain", { amenity: "fountain", name: "Europabrunnen" }],
+      ["a castle", { historic: "castle", name: "Schloss Balthasar" }],
+      ["a vintage car", { historic: "vehicle", name: "1956 Ford Thunderbird" }],
+      ["a tomb", { historic: "tomb", building: "yes", name: "Mausoleum" }],
+      ["a viewpoint", { tourism: "viewpoint", name: "Leeuwen" }],
+    ])("reads %s as a sight", (_what, tags) => {
+      expect(parseFacilities([node(1, tags)])).toEqual([
+        expect.objectContaining({ type: "sight", name: tags.name }),
+      ]);
+    });
+
+    it("leaves an unnamed bin, artwork, fountain or viewpoint out", () => {
+      expect(
+        parseFacilities([
+          node(1, { amenity: "waste_basket", material: "metal" }),
+          node(2, { amenity: "waste_basket", name: "  " }),
+          node(3, { tourism: "artwork", artwork_type: "statue" }),
+          node(4, { amenity: "fountain" }),
+          node(5, { tourism: "viewpoint" }),
+          node(6, { historic: "memorial" }),
+        ]),
+      ).toEqual([]);
+    });
+
+    it("never takes a ride for a sight", () => {
+      expect(
+        parseFacilities([
+          node(1, {
+            historic: "yes",
+            attraction: "carousel",
+            name: "Stoomcarrousel",
+          }),
+          node(2, {
+            amenity: "fountain",
+            attraction: "water_ride",
+            name: "Splash",
+          }),
+          node(3, { historic: "no", name: "Nieuwbouw" }),
+        ]),
+      ).toEqual([]);
+    });
+
+    it("keeps a drinking fountain shaped as a statue as drinking water", () => {
+      const [drink] = parseFacilities([
+        node(6804096856, {
+          amenity: "drinking_water",
+          tourism: "artwork",
+          artwork_type: "statue",
+          name: "Drinkebroer",
+        }),
+      ]);
+      expect(drink).toMatchObject({
+        type: "drinking_water",
+        name: "Drinkebroer",
+      });
+    });
+
+    it("keeps two different statues side by side", () => {
+      expect(
+        parseFacilities([
+          node(7056788150, { tourism: "artwork", name: "Reiziger" }),
+          node(
+            7056788149,
+            { tourism: "artwork", name: "Reizigster" },
+            50.80003,
+          ),
+        ]),
+      ).toHaveLength(2);
+    });
+
+    it("keeps one of a sight mapped twice under the same name", () => {
+      const result = parseFacilities([
+        {
+          type: "way",
+          id: 60,
+          center: { lat: 50.80004, lon: 6.88 },
+          tags: { tourism: "artwork", name: "Pardoesbeeld" },
+          ...meta,
+        },
+        node(61, { tourism: "artwork", name: "Pardoesbeeld" }),
+      ]);
+      expect(result.map((f) => f.osmId)).toEqual(["61"]);
+    });
+
+    it.each(["private", "no", "staff"])(
+      "drops a sight with access=%s",
+      (access) => {
+        expect(
+          parseFacilities([
+            node(1, { tourism: "artwork", name: "Grimm", access }),
+          ]),
+        ).toEqual([]);
+      },
+    );
+  });
+
   it("drops what is not one of our types", () => {
     expect(
       parseFacilities([
         node(1, { amenity: "restaurant", toilets: "yes" }),
         node(2, { amenity: "water_point" }),
         node(3, {}),
+        // A fairy tale or a ride tagged as an attraction is not a sight (yet).
+        node(4, { tourism: "attraction", name: "Roodkapje" }),
       ]),
     ).toEqual([]);
   });
@@ -256,6 +382,13 @@ describe("the queries", () => {
     expect(ql).toContain(
       'nwr["amenity"~"^(toilets|drinking_water)$"](area.a);',
     );
+    expect(ql).toContain(
+      'nwr["amenity"~"^(waste_basket|fountain)$"]["name"](area.a);',
+    );
+    expect(ql).toContain(
+      'nwr["tourism"~"^(artwork|viewpoint)$"]["name"](area.a);',
+    );
+    expect(ql).toContain('nwr["historic"]["name"](area.a);');
     expect(ql).toContain("out meta center;");
     expect(buildFacilitiesQuery({ type: "relation", id: "7" })).toContain(
       "rel(7)->.b;",
