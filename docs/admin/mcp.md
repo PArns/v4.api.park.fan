@@ -433,12 +433,16 @@ and `run_news_export` refuses.
   workflow `publish-media.yml` in the website's repository (about 20 minutes). Editor, `writes:
 add`, a dry run unless `dryRun: false`: the dry run answers what would start and where, and
   calls nothing. The website answers `{ started: true, workflowUrl }`, or `{ started: false,
-reason }` with a status other than 2xx, and the model reads that reason. A 2xx that does not
-  say `started: true`, no answer in time and a lost connection are errors that send the model to
-  the workflow's runs before another call, since the run may have started. Every call past the
-  dry run that the site did not refuse is an audit row (`news-export.run`, entity `system`):
-  `after` is `{ outcome: "started", workflowUrl }` (the link null when it failed the check) or
-  `{ outcome: "unknown", why }`. A refused run leaves none.
+reason }` with a status other than 2xx, and the model reads that reason. When GitHub's dispatch
+  call timed out or failed after the request went out, the site answers 504 with
+  `{ started: false, maybeStarted: true, reason }`: GitHub may have started the run all the same.
+  A 504, with or without that body, any answer with `maybeStarted: true`, a 2xx that does not say
+  `started: true`, no answer in time and a lost connection are errors that send the model to the
+  workflow's runs on GitHub before another call, since the run may have started; the site's
+  reason is part of the error. Every call past the dry run that the site did not refuse is an
+  audit row (`news-export.run`, entity `system`): `after` is `{ outcome: "started", workflowUrl }`
+  (the link null when it failed the check) or `{ outcome: "unknown", why }`. A refused run leaves
+  none.
 
 ## Writing
 

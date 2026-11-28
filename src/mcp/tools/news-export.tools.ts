@@ -138,16 +138,23 @@ export const newsExportStatusTool = defineMcpTool({
 });
 
 /**
+ * The site's answer when GitHub's dispatch call timed out or failed after the
+ * request went out: GitHub may have started the run all the same.
+ */
+const GATEWAY_TIMEOUT = 504;
+
+/**
  * What the website answers a run: `{ started: true, workflowUrl }`, or
- * `{ started: false, reason }` with a status other than 2xx. Each field is
- * read on its own, so a page link that fails the check never hides that a
- * run started.
+ * `{ started: false, reason }` with a status other than 2xx, and
+ * `maybeStarted: true` beside it with a 504. Each field is read on its own, so
+ * a page link that fails the check never hides that a run started.
  */
 function runAnswerOf(body: unknown) {
   const record =
     body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   return {
     started: record.started === true,
+    maybeStarted: record.maybeStarted === true,
     workflowUrl: workflowUrl.safeParse(record.workflowUrl).data ?? null,
     reason: z.string().max(500).safeParse(record.reason).data ?? null,
   };
@@ -208,6 +215,12 @@ export const runNewsExportTool = defineMcpTool({
     if (accepted && !run.started) {
       throw await unclear(
         `park.fan answered HTTP ${answer.status} without saying ${WORKFLOW} started`,
+      );
+    }
+    if (!accepted && (run.maybeStarted || answer.status === GATEWAY_TIMEOUT)) {
+      throw await unclear(
+        `park.fan could not confirm that ${WORKFLOW} started (HTTP ${answer.status})` +
+          (run.reason ? `: ${run.reason}` : ""),
       );
     }
     if (!accepted) {

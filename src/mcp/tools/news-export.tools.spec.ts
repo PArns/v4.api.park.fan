@@ -263,6 +263,55 @@ describe("news export tools", () => {
       ]);
     });
 
+    it("records a run the site cannot confirm after GitHub's call failed, on a 504 or maybeStarted", async () => {
+      const { ctx, audit } = adminContext("editor", []);
+      const why =
+        "park.fan could not confirm that publish-media.yml started (HTTP 504): " +
+        "GitHub did not answer within 10 s";
+
+      fetchMock.mockResolvedValueOnce(
+        json(
+          {
+            started: false,
+            maybeStarted: true,
+            reason: "GitHub did not answer within 10 s",
+          },
+          504,
+        ),
+      );
+      await expect(
+        runNewsExportTool.handler({ dryRun: false }, ctx),
+      ).rejects.toEqual(
+        new McpToolError(
+          `${why}; publish-media.yml may have started: look at its runs on GitHub before starting another`,
+        ),
+      );
+      expect(audit).toEqual([
+        expect.objectContaining({
+          action: "news-export.run",
+          after: { outcome: "unknown", why },
+        }),
+      ]);
+
+      // A gateway's own 504 carries no JSON, and the site's flag counts
+      // whatever status it comes with.
+      fetchMock.mockResolvedValueOnce(
+        new Response("Gateway Timeout", { status: 504 }),
+      );
+      await expect(
+        runNewsExportTool.handler({ dryRun: false }, ctx),
+      ).rejects.toThrow(/may have started/);
+      fetchMock.mockResolvedValueOnce(
+        json({ started: false, maybeStarted: true }, 502),
+      );
+      await expect(
+        runNewsExportTool.handler({ dryRun: false }, ctx),
+      ).rejects.toThrow(/may have started/);
+      expect(audit).toHaveLength(3);
+      expect(audit[1]).toMatchObject({ after: { outcome: "unknown" } });
+      expect(audit[2]).toMatchObject({ after: { outcome: "unknown" } });
+    });
+
     it("is refused below editor and without the secret", async () => {
       expect(
         (await callAs(runNewsExportTool, "viewer", { dryRun: true })).isError,
