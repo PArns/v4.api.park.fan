@@ -1,4 +1,8 @@
+import { BadRequestException } from "@nestjs/common";
 import { AttractionReviewService } from "./attraction-review.service";
+
+const RIDE_A = "00000000-0000-4000-8000-00000000000a";
+const RIDE_B = "00000000-0000-4000-8000-00000000000b";
 
 /**
  * Both detectors are behavioural: they describe what the feed is doing, not
@@ -26,8 +30,8 @@ describe("AttractionReviewService", () => {
       await service.record([
         {
           kind: "not_a_duplicate",
-          attractionId: "bbb",
-          otherAttractionId: "aaa",
+          attractionId: RIDE_B,
+          otherAttractionId: RIDE_A,
           reason: "different rides",
         },
       ]);
@@ -36,7 +40,7 @@ describe("AttractionReviewService", () => {
         /INSERT/.test(sql as string),
       );
       expect(insert?.[1]).toEqual(
-        expect.arrayContaining(["not_a_duplicate", "aaa", "bbb"]),
+        expect.arrayContaining(["not_a_duplicate", RIDE_A, RIDE_B]),
       );
     });
 
@@ -47,7 +51,11 @@ describe("AttractionReviewService", () => {
       const { service, query } = build();
 
       await service.record([
-        { kind: "not_retired", attractionId: "a1", reason: "still operating" },
+        {
+          kind: "not_retired",
+          attractionId: RIDE_A,
+          reason: "still operating",
+        },
       ]);
 
       const [deleteSql] = query.mock.calls[0] as [string];
@@ -59,13 +67,119 @@ describe("AttractionReviewService", () => {
       const { service, query } = build();
 
       await service.record([
-        { kind: "not_retired", attractionId: "a1", reason: "still operating" },
+        {
+          kind: "not_retired",
+          attractionId: RIDE_A,
+          reason: "still operating",
+        },
       ]);
 
       const insert = query.mock.calls.find(([sql]) =>
         /INSERT/.test(sql as string),
       );
       expect((insert?.[1] as unknown[])[2]).toBeNull();
+    });
+
+    it("stores no_kind_fits as a mark on one ride", async () => {
+      const { service, query } = build();
+
+      await expect(
+        service.record([
+          {
+            kind: "no_kind_fits",
+            attractionId: RIDE_A,
+            reason: "A wave pool; none of the kinds fits",
+          },
+        ]),
+      ).resolves.toBe(1);
+
+      const insert = query.mock.calls.find(([sql]) =>
+        /INSERT/.test(sql as string),
+      );
+      expect(insert?.[1]).toEqual([
+        "no_kind_fits",
+        RIDE_A,
+        null,
+        "A wave pool; none of the kinds fits",
+        null,
+      ]);
+    });
+
+    it.each([
+      [
+        "an unknown kind",
+        { kind: "no_kind", attractionId: RIDE_A, reason: "a pool" },
+        /kind "no_kind" is not one of .*no_kind_fits/,
+      ],
+      [
+        "an id that is not a uuid",
+        { kind: "no_kind_fits", attractionId: "a1", reason: "a pool" },
+        /attractionId must be a lowercase uuid/,
+      ],
+      [
+        "a second ride on a single-ride mark",
+        {
+          kind: "no_kind_fits",
+          attractionId: RIDE_A,
+          otherAttractionId: RIDE_B,
+          reason: "a pool",
+        },
+        /otherAttractionId belongs to not_a_duplicate only/,
+      ],
+      [
+        "a pair mark without its second ride",
+        { kind: "not_a_duplicate", attractionId: RIDE_A, reason: "two rides" },
+        /not_a_duplicate needs otherAttractionId/,
+      ],
+      [
+        "a pair mark naming one ride twice",
+        {
+          kind: "not_a_duplicate",
+          attractionId: RIDE_A,
+          otherAttractionId: RIDE_A,
+          reason: "two rides",
+        },
+        /not_a_duplicate needs otherAttractionId/,
+      ],
+      [
+        "a blank reason",
+        { kind: "no_kind_fits", attractionId: RIDE_A, reason: "  " },
+        /reason is required/,
+      ],
+      [
+        "a recheck date that is not a day",
+        {
+          kind: "not_retired",
+          attractionId: RIDE_A,
+          reason: "still runs",
+          recheckAfter: "2027-02-31",
+        },
+        /recheckAfter must be a date/,
+      ],
+    ])(
+      "refuses %s with a 400 and writes no mark of the list",
+      async (_case, bad, message) => {
+        const { service, query } = build();
+
+        const recorded = service.record([
+          { kind: "not_retired", attractionId: RIDE_B, reason: "still runs" },
+          bad as never,
+        ]);
+
+        await expect(recorded).rejects.toBeInstanceOf(BadRequestException);
+        await expect(recorded).rejects.toThrow(message);
+        await expect(recorded).rejects.toThrow(/^marks\[1\]: /);
+        expect(query).not.toHaveBeenCalled();
+      },
+    );
+
+    it("refuses a body whose marks are not a list", async () => {
+      const { service, query } = build();
+
+      await expect(
+        service.record({ kind: "no_kind_fits" } as never),
+      ).rejects.toThrow("marks must be a list");
+      expect(query).not.toHaveBeenCalled();
     });
   });
 

@@ -13,6 +13,7 @@ Where a human verdict lives (`AttractionReviewMark`, `src/attractions/entities/a
 | `not_a_duplicate` | permanent | Cedar Creek is a lazy river beside Cedar Creek Mine Ride, a coaster |
 | `not_retired` | optional `recheck_after` | Shock Wave has stood unused since March 2026 with no announcement |
 | `not_a_maze` | permanent | Fear Acres is a scare zone on Six Flags Fiesta Texas' own event page |
+| `no_kind_fits` | permanent while the kinds stay as they are | a wave pool or a Christmas market is none of `RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`, `MAZE`, `GAME` |
 
 Set `recheck_after` whenever the answer can change: a permanent mark on Shock Wave would hide its
 eventual retirement forever; on Marvel Cave, a landmark that plainly operates, it is right. Pairs are
@@ -23,6 +24,17 @@ once counted 63 rows for 53 pairs. `kind` is text, not an enum
 **Who reads them.** `detect-seasonal` and reverse reconciliation do not: they describe the feed, and
 `is_seasonal` is a statement about it. The [maze rule](maze-rule.md) does, because `attraction_kind`
 is a judgement about the thing, and its blank-only write cannot otherwise hold "somebody decided no".
+The data-quality report's rides without a kind (`attractionsWithoutKind`) leave out a ride with a
+standing `no_kind_fits` mark: a pool would otherwise sit on that list for good, since no value of
+`attraction_kind` says "none of these". The kind rule does not read the mark, and the ride's kind
+stays null. When a kind is added, the `no_kind_fits` marks are the rows to look at again.
+
+**Writing one.** `POST /v1/admin/review-marks` with
+`{ marks: [{ kind, attractionId, otherAttractionId?, reason, recheckAfter? }] }`, or the MCP tool
+`review_mark`. `reviewMarkProblem` (`attraction-review.service.ts`) checks every mark before any is
+written and answers 400 for the first that fails, `marks[<index>]: <why>`: a kind from
+`REVIEW_MARK_KINDS`, a lowercase uuid, a second ride for `not_a_duplicate` and for no other kind, a
+reason that is not blank, a `recheckAfter` that is a real `YYYY-MM-DD` or null.
 
 ## What research is worth
 

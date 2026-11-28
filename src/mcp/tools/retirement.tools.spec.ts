@@ -214,4 +214,46 @@ describe("retirement tools", () => {
     ).rejects.toBeInstanceOf(McpToolError);
     expect((await callAs(reviewMarkTool, "author", {})).isError).toBe(true);
   });
+
+  it("review_mark sends no_kind_fits for one ride and refuses it a second", async () => {
+    const recordReviewMarks = jest.fn(async () => ({ recorded: 1 }));
+    const { ctx } = adminContext("editor", [
+      [AdminController, { recordReviewMarks }],
+    ]);
+    await reviewMarkTool.handler(
+      {
+        kind: "no_kind_fits",
+        attractionId: RIDE(2),
+        reason: "A wave pool; none of the kinds fits",
+      },
+      ctx,
+    );
+    expect(recordReviewMarks).toHaveBeenCalledWith({
+      marks: [
+        {
+          kind: "no_kind_fits",
+          attractionId: RIDE(2),
+          otherAttractionId: null,
+          reason: "A wave pool; none of the kinds fits",
+          recheckAfter: null,
+        },
+      ],
+    });
+    await expect(
+      reviewMarkTool.handler(
+        {
+          kind: "no_kind_fits",
+          attractionId: RIDE(2),
+          otherAttractionId: RIDE(3),
+          reason: "A wave pool; none of the kinds fits",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(
+      new McpToolError(
+        "otherAttractionId belongs to not_a_duplicate only; no_kind_fits names one ride",
+      ),
+    );
+    expect(recordReviewMarks).toHaveBeenCalledTimes(1);
+  });
 });

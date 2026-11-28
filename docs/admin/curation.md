@@ -43,6 +43,9 @@ across ~7,400 rows) against a closed set we decide (`RIDE`, `TRANSPORT`, `SHOW`,
 `GAME`). The one job allowed to write it, into a blank only, is the [maze rule](../architecture/attraction-status/maze-rule.md).
 Beside it, `derived_attraction_kind` is the rule's guess for every row, rewritten nightly and never
 counted as curated; the API serves the editor's value first ([attraction kind](../frontend/attraction-kind.md#derived-where-nobody-decided)).
+A row that none of the kinds fits (a pool, a Christmas market) gets no kind but a `no_kind_fits`
+[review mark](../architecture/attraction-status/review-marks.md), which takes it off the data-quality
+report's rides without a kind; the column stays null.
 
 **`has_virtual_line`** means "this ride works by return time or boarding group at all", which the `queues`
 array cannot say (a virtual line handing out nothing right now publishes no queue, so Efteling's Danse

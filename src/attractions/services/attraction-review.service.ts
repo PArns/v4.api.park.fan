@@ -1,20 +1,59 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import {
   attractionIsOutOfSeason,
   attractionIsSeasonBound,
 } from "../../common/utils/season-window.sql";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, DataSource } from "typeorm";
-import { AttractionReviewMark } from "../entities/attraction-review-mark.entity";
+import {
+  AttractionReviewMark,
+  PAIR_REVIEW_MARK_KIND,
+  REVIEW_MARK_KINDS,
+  type ReviewMarkKind,
+} from "../entities/attraction-review-mark.entity";
+import { isRealIsoDate } from "../../common/utils/date.util";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 
 export interface ReviewMarkRequest {
-  kind: "not_a_duplicate" | "not_retired" | "not_a_maze";
+  kind: ReviewMarkKind;
   attractionId: string;
   /** Only for pair marks; order does not matter, it is canonicalised here. */
   otherAttractionId?: string | null;
   reason: string;
   /** ISO date; omit for a permanent mark. */
   recheckAfter?: string | null;
+}
+
+/**
+ * Why a mark cannot be written, or null when it can. The route takes its body
+ * unchecked, so this is what stands between a typo and a row: an unknown kind
+ * would be stored and read by nobody, and an id that is not a uuid fails the
+ * write with a 500.
+ */
+export function reviewMarkProblem(mark: ReviewMarkRequest): string | null {
+  if (!mark || typeof mark !== "object") return "a mark must be an object";
+  if (!(REVIEW_MARK_KINDS as readonly unknown[]).includes(mark.kind)) {
+    return `kind "${String(mark.kind)}" is not one of ${REVIEW_MARK_KINDS.join(", ")}`;
+  }
+  if (!isCanonicalUuid(mark.attractionId)) {
+    return "attractionId must be a lowercase uuid";
+  }
+  const other = mark.otherAttractionId ?? null;
+  if (mark.kind === PAIR_REVIEW_MARK_KIND) {
+    if (!isCanonicalUuid(other) || other === mark.attractionId) {
+      return `${PAIR_REVIEW_MARK_KIND} needs otherAttractionId, the uuid of the other ride`;
+    }
+  } else if (other !== null) {
+    return `otherAttractionId belongs to ${PAIR_REVIEW_MARK_KIND} only; ${mark.kind} names one ride`;
+  }
+  if (typeof mark.reason !== "string" || !mark.reason.trim()) {
+    return "reason is required: the next person asked reads it";
+  }
+  const recheckAfter = mark.recheckAfter ?? null;
+  if (recheckAfter !== null && !isRealIsoDate(recheckAfter)) {
+    return "recheckAfter must be a date, YYYY-MM-DD";
+  }
+  return null;
 }
 
 export interface RetirementCandidate {
@@ -43,6 +82,15 @@ export class AttractionReviewService {
   ) {}
 
   async record(requests: ReviewMarkRequest[]): Promise<number> {
+    // Every mark is checked before any is written, so a bad one halfway down
+    // the list does not leave the marks above it written and the rest not.
+    if (!Array.isArray(requests)) {
+      throw new BadRequestException("marks must be a list");
+    }
+    for (const [index, request] of requests.entries()) {
+      const problem = reviewMarkProblem(request);
+      if (problem) throw new BadRequestException(`marks[${index}]: ${problem}`);
+    }
     let written = 0;
 
     for (const request of requests) {

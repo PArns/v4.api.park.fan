@@ -11,7 +11,8 @@ export const dataQualityTool = defineMcpTool({
     "human decides), jobs that keep failing, rides retired for absence that nobody gave a season, " +
     "and retired rides with a younger live ride right beside them (possibly re-issued under a new " +
     "name), parks with live rides that carry no kind (neither an editor's nor a derived one; " +
-    "each ride with id, name and slug, for curate_park_attractions to give it one), " +
+    "each ride with id, name and slug, for curate_park_attractions to give it one, or for " +
+    "review_mark no_kind_fits where none of the kinds fits, which takes it off the list), " +
     "and how many mismatches and unreadable surfaces the last display-consistency run " +
     "found per park (display_consistency has them). Each list is cut to `limit` with its full " +
     "size in `total`.",

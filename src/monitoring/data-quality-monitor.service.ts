@@ -110,14 +110,15 @@ export interface AbsenceRetiredUnreviewed {
  * Live attractions per park that carry no kind at all: no editor's
  * `attraction_kind` and nothing the rule could derive (PAR-1453). A ride
  * profile with its type tags, a minimum height or a kind typed in the admin
- * takes a row off the list.
+ * takes a row off the list, and so does a `no_kind_fits` review mark, which
+ * says that none of the kinds fits the row.
  */
 export interface AttractionsWithoutKind {
   parkId: string;
   parkName: string;
   /** Live attractions of the park. */
   attractions: number;
-  /** Resolved names of the ones without a kind, by name. */
+  /** Resolved names of the ones without a kind and without that mark, by name. */
   withoutKind: string[];
   /**
    * The same rows in the same order with id and slug, so a client acts on a
@@ -344,8 +345,9 @@ export class DataQualityMonitorService {
 
   /**
    * Parks with live attractions that neither an editor nor the kind rule has
-   * filed, most first. Retired rows are left out: nobody reads their kind.
-   * A park whose every row has a kind is not listed.
+   * filed and nobody has marked `no_kind_fits`, most first. Retired rows are
+   * left out: nobody reads their kind. A park whose every row has a kind or
+   * that mark is not listed; `attractions` still counts every live row.
    */
   async findAttractionsWithoutKind(): Promise<AttractionsWithoutKind[]> {
     const rows: Array<{
@@ -362,17 +364,27 @@ export class DataQualityMonitorService {
                         'name', COALESCE(NULLIF(btrim(a.curated_name), ''), a.name),
                         'slug', a.slug)
                       ORDER BY COALESCE(NULLIF(btrim(a.curated_name), ''), a.name), a.id)
-               FILTER (WHERE a.attraction_kind IS NULL
-                         AND a.derived_attraction_kind IS NULL) AS without_kind
+               FILTER (WHERE k.unfiled) AS without_kind
         FROM attractions a
         JOIN parks p ON p.id = a."parkId"
+        CROSS JOIN LATERAL (
+          SELECT a.attraction_kind IS NULL
+                 AND a.derived_attraction_kind IS NULL
+                 -- Somebody looked and none of the kinds fits, with the
+                 -- verdict still standing. NOT EXISTS, since two marks on one
+                 -- row are allowed and a join would count the row twice.
+                 AND NOT EXISTS (
+                   SELECT 1 FROM attraction_review_marks m
+                    WHERE m.kind = 'no_kind_fits'
+                      AND m.attraction_id = a.id
+                      AND (m.recheck_after IS NULL OR m.recheck_after > CURRENT_DATE)
+                 ) AS unfiled
+        ) k
        WHERE a.retired_at IS NULL
          AND p.retired_at IS NULL
        GROUP BY p.id, p.name
-      HAVING count(*) FILTER (WHERE a.attraction_kind IS NULL
-                                AND a.derived_attraction_kind IS NULL) > 0
-       ORDER BY count(*) FILTER (WHERE a.attraction_kind IS NULL
-                                   AND a.derived_attraction_kind IS NULL) DESC,
+      HAVING count(*) FILTER (WHERE k.unfiled) > 0
+       ORDER BY count(*) FILTER (WHERE k.unfiled) DESC,
                 p.name
     `);
     return rows.map((r) => ({

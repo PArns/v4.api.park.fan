@@ -107,6 +107,22 @@ describe("DataQualityMonitorService", () => {
       expect(sql).toContain("a.derived_attraction_kind IS NULL");
       expect(sql).toContain("a.retired_at IS NULL");
     });
+
+    it("leaves out rows marked no_kind_fits, from the list and the park's count alike", async () => {
+      // A pool or a Christmas market fits none of the kinds; once somebody
+      // has said so, the row would otherwise sit on the list for good.
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAttractionsWithoutKind();
+
+      const sql = query.mock.calls[0][0] as string;
+      expect(sql).toMatch(
+        /NOT EXISTS \(\s*SELECT 1 FROM attraction_review_marks m\s+WHERE m\.kind = 'no_kind_fits'\s+AND m\.attraction_id = a\.id\s+AND \(m\.recheck_after IS NULL OR m\.recheck_after > CURRENT_DATE\)/,
+      );
+      // The list, the HAVING and the ORDER BY read one condition, so a marked
+      // row cannot drop off the list and still count for its park.
+      expect(sql.match(/FILTER \(WHERE k\.unfiled\)/g)).toHaveLength(3);
+      expect(sql).not.toMatch(/FILTER \(WHERE a\.attraction_kind/);
+    });
   });
 
   describe("findSilencedClusters", () => {

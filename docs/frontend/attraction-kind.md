@@ -46,7 +46,9 @@ Presidents, the Laugh Floor and Country Bear post 10–15 minute waits and Swiss
 Treehouse 5 (payload of 2026-11-27), so "it posts a wait" cannot tell a ride from a
 show. The rule never derives `MAZE`. What it cannot settle stays `null`, and the admin's
 data-quality report lists those rows per park (`attractionsWithoutKind`); a ride profile
-with type tags, a minimum height or an editor's kind takes a row off it.
+with type tags, a minimum height or an editor's kind takes a row off it. So does a
+`no_kind_fits` [review mark](../architecture/attraction-status/review-marks.md) for a row
+that none of the kinds fits, such as a pool or a Christmas market; its kind stays `null`.
 
 Measured on the payloads of 2026-11-27: Phantasialand 40 rides → 32 `RIDE` (21 by tag,
 11 by height), 1 `WALKTHROUGH`, 7 unknown; Magic Kingdom 38 → 18 `RIDE`, 3 `SHOW`,
@@ -67,10 +69,30 @@ value landing in the editor's column:
 - **The data-quality report** lists per park the rows with neither (`attractionsWithoutKind`):
   `withoutKind`, their names, and `withoutKindRefs`, the same rows in the same order as
   `{ id, name, slug }`, so a client acts on a row without matching it by name. The names stay
-  for clients that read only them.
+  for clients that read only them. A row marked `no_kind_fits` is in neither list and does not
+  count toward the park's place in the report, so a park whose rows all have a kind or the mark
+  is not listed; `attractions` still counts every live row. The mark goes through the
+  review-mark route:
+
+  ```jsonc
+  // POST /v1/admin/review-marks (editor)
+  {
+    "marks": [
+      {
+        "kind": "no_kind_fits",
+        "attractionId": "<uuid>",
+        "reason": "A wave pool",
+      },
+    ],
+  }
+  ```
+
+  It answers `{ "recorded": 1 }`, or 400 with `marks[0]: <why>` for a mark that fails the
+  check (an unknown kind, an id that is not a lowercase uuid, an `otherAttractionId`, a blank
+  reason). The row leaves the report on its next read.
 
 ([curation](../admin/curation.md), and the MCP tools `curate_attraction`,
-`curate_park_attractions` with `adoptDerivedKind`, and `data_quality`:
+`curate_park_attractions` with `adoptDerivedKind`, `data_quality` and `review_mark`:
 [admin MCP](../admin/mcp.md).)
 
 ## Null is not `RIDE`
